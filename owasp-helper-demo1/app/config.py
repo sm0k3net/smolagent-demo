@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class Settings(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions"
+    deepseek_api_base: str | None = os.getenv("DEEPSEEK_API_BASE")  # e.g. https://api.deepseek.com/v1
     model: str = "deepseek-chat"
     searxng_base_url: str | None = os.getenv("SEARXNG_BASE_URL")  # e.g. https://searxng.example.org
     searxng_headers: dict[str, str] = {}
