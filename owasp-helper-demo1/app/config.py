@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from dotenv import load_dotenv  # type: ignore
 from functools import lru_cache
 from pydantic import BaseModel
 
@@ -16,6 +17,8 @@ class Settings(BaseModel):
 
 @lru_cache
 def get_settings() -> Settings:
+    # load .env lazily (only first call)
+    load_dotenv(override=False)
     return Settings(
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
