@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-requests"]
+browser = ["playwright"]
 
 [build-system]
 requires = ["setuptools", "wheel"]

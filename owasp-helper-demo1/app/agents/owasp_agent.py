@@ -4,6 +4,8 @@ from app.tools.searxng_tool import searxng_search
 from app.tools.owasp_lookup import list_owasp_top10, get_owasp_item
 from app.tools.classify import classify_vulnerability
 from app.tools.scenarios import generate_test_scenarios
+from app.tools.playwright_tool import fetch_page_title
+from app.tools.nmap_tool import nmap_scan
 from app.config import get_settings
 
 OWASP_SYSTEM_PROMPT = (
@@ -24,13 +26,16 @@ def build_owasp_agent() -> CodeAgent:
         model_id=settings.model,
         api_base=api_base,
         api_key=settings.deepseek_api_key,
+        flatten_messages_as_text=True,
     )
     tools = [
         searxng_search,
         list_owasp_top10,
         get_owasp_item,
         classify_vulnerability,
-        generate_test_scenarios,
+    generate_test_scenarios,
+    fetch_page_title,
+    nmap_scan,
     ]
     # Provide instructions to be inserted in the system prompt
     agent = CodeAgent(tools=tools, model=model, instructions=OWASP_SYSTEM_PROMPT)
