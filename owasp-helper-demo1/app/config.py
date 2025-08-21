@@ -1,0 +1,21 @@
+from __future__ import annotations
+import os
+from functools import lru_cache
+from pydantic import BaseModel
+
+class Settings(BaseModel):
+    deepseek_api_key: str | None = None
+    deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions"
+    model: str = "deepseek-chat"
+    searxng_base_url: str | None = os.getenv("SEARXNG_BASE_URL")  # e.g. https://searxng.example.org
+    searxng_headers: dict[str, str] = {}
+    environment: str = os.getenv("ENV", "dev")
+
+    class Config:
+        arbitrary_types_allowed = True
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings(
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+    )

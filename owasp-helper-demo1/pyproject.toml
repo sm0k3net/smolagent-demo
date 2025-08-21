@@ -1,0 +1,26 @@
+[project]
+name = "owasp-smolagent"
+version = "0.1.0"
+description = "SmolAgent powered OWASP helper (Top10 classification, testing scenarios, standards guidance, search)."
+authors = [ { name = "Your Name" } ]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "smolagents",
+  "httpx",
+  "pydantic",
+  "python-dotenv",
+  "jinja2",
+  "websockets",
+  "orjson",
+  "rich"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-requests"]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
