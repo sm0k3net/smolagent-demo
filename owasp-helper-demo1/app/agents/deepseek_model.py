@@ -1,12 +1,16 @@
 from __future__ import annotations
 import os
 import httpx
-from typing import List
-from smolagents.models import BaseModel
 from app.config import get_settings
 
-class DeepSeekChatModel(BaseModel):
-    """Minimal wrapper for DeepSeek chat completions compatible with smolagents BaseModel."""
+class DeepSeekChatModel:
+    """Minimal DeepSeek chat model wrapper.
+
+    Designed to satisfy smolagents CodeAgent expectations:
+    - expose generate_response(prompt: str, **kwargs) -> str
+    - optionally callable (__call__) for convenience
+    - model_name property for logging / introspection
+    """
     def __init__(self, model: str | None = None):
         settings = get_settings()
         self.model = model or settings.model
@@ -16,7 +20,7 @@ class DeepSeekChatModel(BaseModel):
             raise ValueError("DEEPSEEK_API_KEY not provided")
 
     def __call__(self, prompt: str, **kwargs) -> str:  # fallback single-turn
-        return self.generate(prompt)
+        return self.generate(prompt, **kwargs)
 
     def generate(self, prompt: str, messages: list[dict] | None = None, max_tokens: int = 1024, temperature: float = 0.2) -> str:
         payload = {
@@ -30,8 +34,11 @@ class DeepSeekChatModel(BaseModel):
             r = client.post(self.api_url, json=payload, headers=headers)
             r.raise_for_status()
             data = r.json()
-            # DeepSeek format assumed similar to OpenAI
-            return data["choices"][0]["message"]["content"].strip()
+            # Attempt to extract content (DeepSeek assumed OpenAI-like)
+            try:
+                return data["choices"][0]["message"]["content"].strip()
+            except Exception:  # pragma: no cover
+                return str(data)
 
     # smolagents expects generate_response sometimes
     def generate_response(self, prompt: str, **kwargs) -> str:
