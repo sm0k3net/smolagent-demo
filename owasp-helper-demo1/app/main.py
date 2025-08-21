@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from app.agents.owasp_agent import build_owasp_agent
+from app.agents.owasp_agent import build_owasp_agent, format_owasp_query
 import asyncio
 
 app = FastAPI(title="OWASP SmolAgent")
@@ -64,7 +64,8 @@ async def ws_endpoint(ws: WebSocket):
             msg = await ws.receive_text()
             # run agent synchronously in thread to avoid blocking
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, agent.run, msg)
+            prompt = format_owasp_query(msg)
+            response = await loop.run_in_executor(None, agent.run, prompt)
             await ws.send_text(response)
     except WebSocketDisconnect:
         return
