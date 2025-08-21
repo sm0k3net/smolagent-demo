@@ -13,7 +13,14 @@ def list_owasp_top10() -> str:
 
 @tool
 def get_owasp_item(identifier_or_name: str) -> str:
-    """Get detailed description for an OWASP Top 10 2021 item by id (e.g. A01:2021) or name."""
+    """Get detailed description for an OWASP Top 10 2021 item.
+
+    Args:
+        identifier_or_name: Either the OWASP identifier (e.g. "A01:2021") or the category name
+            (case-insensitive, e.g. "Broken Access Control").
+    Returns:
+        A string containing: `<id> - <name>: <description>` or a not-found message with guidance.
+    """
     key = identifier_or_name.lower().strip()
     item = _INDEX.get(key)
     if not item:
