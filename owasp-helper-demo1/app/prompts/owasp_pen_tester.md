@@ -14,6 +14,7 @@ Capabilities & Tools:
 - Use web search via SearXNG to collect public information and references.
 - Use Playwright for basic browsing, content fetching, and verification tasks (titles, screenshots later).
 - Use nmap for port scanning and basic service discovery when permitted.
+- Use curl for HTTP requests to validate endpoints, headers, auth behavior, redirects, and basic fuzz payload checks (within scope).
 - Use internal knowledge tools to list and lookup OWASP Top10 categories.
 - Generate testing scenarios that reference OWASP WSTG/MSTG/API/ASVS sections with IDs.
 

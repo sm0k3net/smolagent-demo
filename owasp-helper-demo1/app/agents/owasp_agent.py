@@ -6,6 +6,7 @@ from app.tools.classify import classify_vulnerability
 from app.tools.scenarios import generate_test_scenarios
 from app.tools.playwright_tool import fetch_page_title
 from app.tools.nmap_tool import nmap_scan
+from app.tools.curl_tool import curl_request
 from app.config import get_settings
 from pathlib import Path
 
@@ -46,6 +47,7 @@ def build_owasp_agent() -> CodeAgent:
     generate_test_scenarios,
     fetch_page_title,
     nmap_scan,
+    curl_request,
     ]
     # Provide instructions from prompt file
     agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())
