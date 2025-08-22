@@ -15,9 +15,12 @@ DEFAULT_PROMPT = (
 )
 
 def load_prompt_text() -> str:
-    candidates = [
-        Path(__file__).resolve().parent.parent / "prompts" / "owasp_pen_tester.md",
-    ]
+    settings = get_settings()
+    # If PROMPT_PATH set, try that first
+    candidates = []
+    if settings.prompt_path:
+        candidates.append(Path(settings.prompt_path))
+    candidates.append(Path(__file__).resolve().parent.parent / "prompts" / "owasp_pen_tester.md")
     for p in candidates:
         try:
             if p.exists():

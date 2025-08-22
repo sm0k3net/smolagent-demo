@@ -12,6 +12,7 @@ class Settings(BaseModel):
     searxng_base_url: str | None = os.getenv("SEARXNG_BASE_URL")  # e.g. https://searxng.example.org
     searxng_headers: dict[str, str] = {}
     environment: str = os.getenv("ENV", "dev")
+    prompt_path: str | None = os.getenv("PROMPT_PATH")  # optional path to override prompt file
 
     class Config:
         arbitrary_types_allowed = True
