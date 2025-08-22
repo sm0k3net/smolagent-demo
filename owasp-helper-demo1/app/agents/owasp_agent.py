@@ -7,13 +7,23 @@ from app.tools.scenarios import generate_test_scenarios
 from app.tools.playwright_tool import fetch_page_title
 from app.tools.nmap_tool import nmap_scan
 from app.config import get_settings
+from pathlib import Path
 
-OWASP_SYSTEM_PROMPT = (
-    "You are an OWASP security assistant. You classify vulnerabilities into OWASP Top 10 categories, "
-    "explain reasoning, and generate testing scenarios referencing OWASP WSTG / MSTG / API Security Top 10 / ASVS. "
-    "When using external search results, cite source URLs if available. Provide actionable, concise answers. "
-    "When listing test scenarios, structure them as: Scenario, Objective, Steps, Expected Result, References."
+DEFAULT_PROMPT = (
+    "You are an OWASP security assistant. Provide concise, actionable guidance aligned with OWASP standards."
 )
+
+def load_prompt_text() -> str:
+    candidates = [
+        Path(__file__).resolve().parent.parent / "prompts" / "owasp_pen_tester.md",
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+    return DEFAULT_PROMPT
 
 def build_owasp_agent() -> CodeAgent:
     settings = get_settings()
@@ -37,6 +47,6 @@ def build_owasp_agent() -> CodeAgent:
     fetch_page_title,
     nmap_scan,
     ]
-    # Provide instructions to be inserted in the system prompt
-    agent = CodeAgent(tools=tools, model=model, instructions=OWASP_SYSTEM_PROMPT)
+    # Provide instructions from prompt file
+    agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())
     return agent
