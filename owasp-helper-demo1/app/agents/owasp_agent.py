@@ -11,8 +11,15 @@ from app.tools.defectdojo_tool import (
     defectdojo_health,
     defectdojo_list_products,
     defectdojo_list_engagements,
+    defectdojo_ensure_product,
+    defectdojo_create_engagement,
     defectdojo_import_scan,
     defectdojo_list_findings,
+    defectdojo_create_finding,
+    defectdojo_ensure_product_and_create_engagement,
+    defectdojo_get_current_context,
+    defectdojo_set_current_context,
+    defectdojo_record_finding,
 )
 from app.config import get_settings
 from pathlib import Path
@@ -61,8 +68,15 @@ def build_owasp_agent() -> CodeAgent:
     defectdojo_health,
     defectdojo_list_products,
     defectdojo_list_engagements,
+    defectdojo_ensure_product,
+    defectdojo_create_engagement,
     defectdojo_import_scan,
     defectdojo_list_findings,
+    defectdojo_create_finding,
+    defectdojo_ensure_product_and_create_engagement,
+    defectdojo_get_current_context,
+    defectdojo_set_current_context,
+    defectdojo_record_finding,
     ]
     # Provide instructions from prompt file
     agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())

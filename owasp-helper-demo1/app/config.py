@@ -17,6 +17,9 @@ class Settings(BaseModel):
     defectdojo_base_url: str | None = os.getenv("DEFECTDOJO_BASE_URL")
     defectdojo_api_key: str | None = os.getenv("DEFECTDOJO_API_KEY")
     defectdojo_verify_ssl: bool | str | None = os.getenv("DEFECTDOJO_VERIFY_SSL", "true")
+    defectdojo_default_product_type_id: int | None = (
+        int(os.getenv("DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID")) if os.getenv("DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID") else None
+    )
 
     class Config:
         arbitrary_types_allowed = True
