@@ -7,6 +7,13 @@ from app.tools.scenarios import generate_test_scenarios
 from app.tools.playwright_tool import fetch_page_title
 from app.tools.nmap_tool import nmap_scan
 from app.tools.curl_tool import curl_request
+from app.tools.defectdojo_tool import (
+    defectdojo_health,
+    defectdojo_list_products,
+    defectdojo_list_engagements,
+    defectdojo_import_scan,
+    defectdojo_list_findings,
+)
 from app.config import get_settings
 from pathlib import Path
 
@@ -51,6 +58,11 @@ def build_owasp_agent() -> CodeAgent:
     fetch_page_title,
     nmap_scan,
     curl_request,
+    defectdojo_health,
+    defectdojo_list_products,
+    defectdojo_list_engagements,
+    defectdojo_import_scan,
+    defectdojo_list_findings,
     ]
     # Provide instructions from prompt file
     agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())

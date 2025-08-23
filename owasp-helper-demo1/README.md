@@ -8,6 +8,7 @@ Early prototype of an OWASP helper agent powered by smolagents. Features:
 - OWASP Top 10 2021 knowledge + lookup tools
 - Structured instructions for classification & testing scenarios referencing OWASP WSTG / MSTG / API / ASVS
 - Optional tools: Playwright page fetch and Nmap port scanning
+- DefectDojo API v2 integration: list products/engagements/findings, import scan results
 
 ## Quick start
 
@@ -21,6 +22,9 @@ python -m playwright install --with-deps
 $env:DEEPSEEK_API_KEY = "sk-..."
 $env:DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 $env:SEARXNG_BASE_URL = "https://searxng.example.org"
+$env:DEFECTDOJO_BASE_URL = "https://dojo.example.com"
+$env:DEFECTDOJO_API_KEY = "token-from-dojo"
+$env:DEFECTDOJO_VERIFY_SSL = "true"
 uvicorn app.main:app --reload
 ```
 Navigate to http://127.0.0.1:8000
@@ -38,6 +42,7 @@ Navigate to http://127.0.0.1:8000
 - SearXNG 429: set your own instance in `SEARXNG_BASE_URL`; the tool sets a UA and trims slashes.
 - Playwright: run `python -m playwright install --with-deps` inside venv; WSL may need extra packages.
 - nmap: install in WSL with `sudo apt-get update && sudo apt-get install -y nmap`.
+- DefectDojo: set `DEFECTDOJO_BASE_URL` (e.g. https://dojo.example.com) and `DEFECTDOJO_API_KEY` (Authorization: Token <key>). If using self-signed certs, set `DEFECTDOJO_VERIFY_SSL=false`.
 
 ## Disclaimer
 Not an official OWASP project. Validate results manually.
