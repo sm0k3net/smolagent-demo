@@ -7,21 +7,27 @@ from app.tools.scenarios import generate_test_scenarios
 from app.tools.playwright_tool import fetch_page_title
 from app.tools.nmap_tool import nmap_scan
 from app.tools.curl_tool import curl_request
-from app.tools.defectdojo_tool import (
-    defectdojo_health,
-    defectdojo_list_products,
-    defectdojo_list_engagements,
-    defectdojo_ensure_product,
-    defectdojo_create_engagement,
-    defectdojo_import_scan,
-    defectdojo_list_findings,
-    defectdojo_create_finding,
-    defectdojo_ensure_product_and_create_engagement,
-    defectdojo_get_current_context,
-    defectdojo_set_current_context,
-    defectdojo_record_finding,
-)
 from app.config import get_settings
+
+# DefectDojo tools are optional; import only if base URL is configured
+try:
+    from app.tools.defectdojo_tool import (
+        defectdojo_health,
+        defectdojo_list_products,
+        defectdojo_list_engagements,
+        defectdojo_ensure_product,
+        defectdojo_create_engagement,
+        defectdojo_import_scan,
+        defectdojo_list_findings,
+        defectdojo_create_finding,
+        defectdojo_ensure_product_and_create_engagement,
+        defectdojo_get_current_context,
+        defectdojo_set_current_context,
+        defectdojo_record_finding,
+    )
+    DEFECTDOJO_AVAILABLE = True
+except ImportError:
+    DEFECTDOJO_AVAILABLE = False
 from pathlib import Path
 
 DEFAULT_PROMPT = (
@@ -61,23 +67,27 @@ def build_owasp_agent() -> CodeAgent:
         list_owasp_top10,
         get_owasp_item,
         classify_vulnerability,
-    generate_test_scenarios,
-    fetch_page_title,
-    nmap_scan,
-    curl_request,
-    defectdojo_health,
-    defectdojo_list_products,
-    defectdojo_list_engagements,
-    defectdojo_ensure_product,
-    defectdojo_create_engagement,
-    defectdojo_import_scan,
-    defectdojo_list_findings,
-    defectdojo_create_finding,
-    defectdojo_ensure_product_and_create_engagement,
-    defectdojo_get_current_context,
-    defectdojo_set_current_context,
-    defectdojo_record_finding,
+        generate_test_scenarios,
+        fetch_page_title,
+        nmap_scan,
+        curl_request,
     ]
+    # Add DefectDojo tools only if configured
+    if DEFECTDOJO_AVAILABLE and settings.defectdojo_base_url:
+        tools.extend([
+            defectdojo_health,
+            defectdojo_list_products,
+            defectdojo_list_engagements,
+            defectdojo_ensure_product,
+            defectdojo_create_engagement,
+            defectdojo_import_scan,
+            defectdojo_list_findings,
+            defectdojo_create_finding,
+            defectdojo_ensure_product_and_create_engagement,
+            defectdojo_get_current_context,
+            defectdojo_set_current_context,
+            defectdojo_record_finding,
+        ])
     # Provide instructions from prompt file
     agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())
     return agent
