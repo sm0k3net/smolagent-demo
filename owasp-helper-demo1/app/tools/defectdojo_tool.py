@@ -410,6 +410,17 @@ def defectdojo_record_finding(
 ) -> str:
     """Create a finding using the current engagement context.
 
+    Args:
+        title: Finding title.
+        description: Detailed description of the issue.
+        severity: Severity (Info/Low/Medium/High/Critical, default Medium).
+        owasp_top10: Optional OWASP Top 10 classification.
+        tool: Optional tool name used to identify it.
+        repro_steps: How to reproduce the issue step-by-step.
+        poc: Proof-of-concept details.
+        remediation: Remediation recommendation.
+    Returns: "finding_id=<id> created" or an error message.
+    
     Requires current engagement to be set via ensure+create or set_current_context.
     """
     global _CURRENT_ENGAGEMENT_ID
