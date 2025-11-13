@@ -371,6 +371,14 @@ def defectdojo_ensure_product_and_create_engagement(
 ) -> str:
     """Ensure product exists and create a new engagement for the current pentest.
 
+    Args:
+        product_name: Name of the product to ensure/create.
+        engagement_name: Name for the new engagement.
+        start_date: Target start date (YYYY-MM-DD).
+        end_date: Target end date (YYYY-MM-DD).
+        product_description: Optional product description.
+        product_type_id: Product type id (defaults to DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID or 1).
+        engagement_description: Optional engagement description.
     Returns: "product_id=<id>; engagement_id=<id>"
     """
     prod_res = defectdojo_ensure_product(product_name, product_description, product_type_id)
