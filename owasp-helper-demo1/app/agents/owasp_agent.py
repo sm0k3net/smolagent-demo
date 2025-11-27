@@ -47,6 +47,11 @@ from app.tools.pentest_tools import (
     searchsploit_cve,
     searchsploit_exact,
     searchsploit_nmap,
+    list_available_tools,
+    sqlmap_scan,
+    sqlmap_dump,
+    ffuf_scan,
+    ffuf_vhost,
 )
 from app.tools.report_tools import (
     enable_report_mode,
@@ -175,6 +180,11 @@ def build_owasp_agent() -> CodeAgent:
         searchsploit_cve,
         searchsploit_exact,
         searchsploit_nmap,
+        list_available_tools,
+        sqlmap_scan,
+        sqlmap_dump,
+        ffuf_scan,
+        ffuf_vhost,
     ])
     
     # Report generation tools
