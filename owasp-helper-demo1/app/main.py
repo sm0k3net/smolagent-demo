@@ -11,6 +11,8 @@ from app.tools.report_tools import (
 import asyncio
 import json
 import base64
+import queue
+import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -970,11 +972,7 @@ function addActivity(type, title, content, details = null) {
   activityLog.appendChild(item);
   activityLog.scrollTop = activityLog.scrollHeight;
   
-  // Update stats
-  if (type === 'step') stepCount++;
-  if (type === 'tool' || type === 'tool-result') toolCount++;
-  document.getElementById('stat-steps').textContent = stepCount;
-  document.getElementById('stat-tools').textContent = toolCount;
+  // Note: Counts are now updated from server data in ws.onmessage
 }
 
 function escapeHtml(text) {
@@ -1137,15 +1135,24 @@ ws.onmessage = (event) => {
       addMessage('progress', data.content);
     }
   } else if (data.type === 'activity') {
-    // Activity log update from agent steps
+    // Activity log update from agent steps - use server-provided counts
     addActivity(data.activity_type, data.title || '', data.content, data.details);
+    
+    // Update counters from server if provided
+    if (typeof data.tool_count === 'number') {
+      toolCount = data.tool_count;
+      document.getElementById('stat-tools').textContent = toolCount;
+    }
+    if (typeof data.step_count === 'number') {
+      stepCount = data.step_count;
+      document.getElementById('stat-steps').textContent = stepCount;
+    }
   } else if (data.type === 'final') {
     stopTimer();
     // Remove progress message if exists
     const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
     if (progressMsg) progressMsg.remove();
     addMessage('agent', data.content);
-    addActivity('tool-result', '✅ Task Completed', 'Agent has finished processing your request');
   } else if (data.type === 'report') {
     addMessage('report', data.content, { html: data.html, markdown: data.markdown });
     addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
@@ -1338,8 +1345,8 @@ After completing your security assessment, you MUST generate a professional repo
 5. Finally call generate_html_report() to produce the final HTML report
 The report should be comprehensive and professional, suitable for executive stakeholders."""
             
-            # Stream progress updates
-            async def run_with_progress():
+            # Stream real agent execution with proper step callbacks
+            async def run_with_real_streaming():
                 # Send initial progress
                 await ws.send_text(json.dumps({
                     "type": "activity",
@@ -1353,114 +1360,234 @@ The report should be comprehensive and professional, suitable for executive stak
                     "content": "🔄 Agent analyzing your request..."
                 }))
                 
-                await ws.send_text(json.dumps({
-                    "type": "activity",
-                    "activity_type": "thinking",
-                    "title": "🧠 Planning Approach",
-                    "content": "Analyzing request and planning security assessment strategy..."
-                }))
+                # Queue for thread-safe communication between agent thread and async handler
+                event_queue = queue.Queue()
                 
+                def run_agent_with_streaming():
+                    """Run agent in thread and put events in queue."""
+                    try:
+                        # Use streaming mode for real-time updates
+                        final_result = None
+                        step_count = 0
+                        tool_count = 0
+                        
+                        for event in agent.run(full_message, stream=True):
+                            step_count += 1
+                            event_type = type(event).__name__
+                            
+                            # Extract meaningful info from different event types
+                            if hasattr(event, 'tool_calls') and event.tool_calls:
+                                for tool_call in event.tool_calls:
+                                    tool_count += 1
+                                    tool_name = getattr(tool_call, 'name', str(tool_call))
+                                    tool_args = getattr(tool_call, 'arguments', {})
+                                    
+                                    # Map tool names to activity types
+                                    activity_type = "tool"
+                                    icon = "🔧"
+                                    
+                                    # Categorize tools for better display
+                                    if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
+                                        icon = "🔍"
+                                        activity_msg = f"Running security scan: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
+                                        icon = "🌐"
+                                        activity_msg = f"OSINT lookup: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
+                                        icon = "🌍"
+                                        activity_msg = f"Browser automation: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
+                                        icon = "📡"
+                                        activity_msg = f"HTTP request: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
+                                        icon = "📋"
+                                        activity_msg = f"Report generation: {tool_name}"
+                                        activity_type = "tool-result"
+                                    elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
+                                        icon = "📚"
+                                        activity_msg = f"OWASP analysis: {tool_name}"
+                                    else:
+                                        activity_msg = f"Executing: {tool_name}"
+                                    
+                                    # Get target/args info
+                                    target_info = ""
+                                    if isinstance(tool_args, dict):
+                                        for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
+                                            if key in tool_args:
+                                                target_info = f" → {tool_args[key][:60]}"
+                                                break
+                                    
+                                    event_queue.put({
+                                        "type": "activity",
+                                        "activity_type": activity_type,
+                                        "title": f"{icon} {activity_msg}",
+                                        "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                        "tool_count": tool_count,
+                                        "step_count": step_count
+                                    })
+                            
+                            # Check for observations/results
+                            if hasattr(event, 'observations') and event.observations:
+                                obs = str(event.observations)[:200]
+                                event_queue.put({
+                                    "type": "activity",
+                                    "activity_type": "tool-result",
+                                    "title": "📊 Tool Result",
+                                    "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
+                                    "tool_count": tool_count,
+                                    "step_count": step_count
+                                })
+                            
+                            # Check for planning steps
+                            if hasattr(event, 'plan') and event.plan:
+                                plan = str(event.plan)[:300]
+                                event_queue.put({
+                                    "type": "activity",
+                                    "activity_type": "thinking",
+                                    "title": "🧠 Agent Planning",
+                                    "content": plan,
+                                    "tool_count": tool_count,
+                                    "step_count": step_count
+                                })
+                            
+                            # Capture final result
+                            if hasattr(event, 'output') and event.output is not None:
+                                final_result = event.output
+                        
+                        # Signal completion
+                        event_queue.put({
+                            "type": "complete",
+                            "result": final_result if final_result else "Task completed",
+                            "tool_count": tool_count,
+                            "step_count": step_count
+                        })
+                        
+                    except Exception as e:
+                        event_queue.put({
+                            "type": "error",
+                            "error": str(e)
+                        })
+                
+                # Start agent in thread
                 loop = asyncio.get_event_loop()
+                agent_thread = threading.Thread(target=run_agent_with_streaming, daemon=True)
+                agent_thread.start()
                 
-                # Progress messages for long-running tasks
-                progress_updates = [
-                    ("🔍 Gathering intelligence...", "Collecting information from various sources"),
-                    ("🔧 Running security tools...", "Executing scanning and enumeration tools"),
-                    ("📊 Analyzing results...", "Processing tool outputs and identifying findings"),
-                    ("📝 Documenting findings...", "Recording vulnerabilities and evidence"),
-                    ("🎯 Finalizing assessment...", "Preparing final analysis and recommendations"),
-                ]
+                # Process events from queue
+                final_response = None
+                last_tool_count = 0
+                last_step_count = 0
                 
-                progress_idx = [0]
-                stop_progress = [False]
-                
-                async def send_periodic_updates():
-                    while not stop_progress[0]:
-                        await asyncio.sleep(8)
-                        if stop_progress[0]:
+                while True:
+                    try:
+                        # Non-blocking check with timeout
+                        await asyncio.sleep(0.1)
+                        
+                        while not event_queue.empty():
+                            event = event_queue.get_nowait()
+                            
+                            if event["type"] == "activity":
+                                # Update counts from event
+                                last_tool_count = event.get("tool_count", last_tool_count)
+                                last_step_count = event.get("step_count", last_step_count)
+                                
+                                # Send activity update with counts
+                                await ws.send_text(json.dumps({
+                                    "type": "activity",
+                                    "activity_type": event["activity_type"],
+                                    "title": event["title"],
+                                    "content": event["content"],
+                                    "tool_count": last_tool_count,
+                                    "step_count": last_step_count
+                                }))
+                                
+                                # Also send progress update for chat
+                                await ws.send_text(json.dumps({
+                                    "type": "progress",
+                                    "content": event["title"]
+                                }))
+                            
+                            elif event["type"] == "complete":
+                                final_response = event["result"]
+                                last_tool_count = event.get("tool_count", last_tool_count)
+                                last_step_count = event.get("step_count", last_step_count)
+                                
+                                await ws.send_text(json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "tool-result",
+                                    "title": "✅ Task Completed",
+                                    "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
+                                    "tool_count": last_tool_count,
+                                    "step_count": last_step_count
+                                }))
+                                break
+                            
+                            elif event["type"] == "error":
+                                await ws.send_text(json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "error",
+                                    "title": "❌ Error Occurred",
+                                    "content": event["error"]
+                                }))
+                                await ws.send_text(json.dumps({
+                                    "type": "final",
+                                    "content": f"Error: {event['error']}"
+                                }))
+                                return
+                        
+                        # Check if we got final response
+                        if final_response is not None:
                             break
-                        if progress_idx[0] < len(progress_updates):
-                            msg, detail = progress_updates[progress_idx[0]]
-                            await ws.send_text(json.dumps({
-                                "type": "progress",
-                                "content": msg
-                            }))
-                            await ws.send_text(json.dumps({
-                                "type": "activity",
-                                "activity_type": "step",
-                                "title": msg,
-                                "content": detail
-                            }))
-                            progress_idx[0] += 1
-                
-                progress_task = asyncio.create_task(send_periodic_updates())
-                
-                def agent_run_wrapper(user_msg):
-                    return agent.run(user_msg)
-                
-                try:
-                    response = await loop.run_in_executor(executor, agent_run_wrapper, full_message)
-                    stop_progress[0] = True
-                    progress_task.cancel()
-                    
-                    await ws.send_text(json.dumps({
-                        "type": "activity",
-                        "activity_type": "tool-result",
-                        "title": "✅ Analysis Complete",
-                        "content": "Agent has completed processing your request"
-                    }))
-                    
-                    # Check if we need to auto-generate report
-                    if report_mode_enabled and is_report_mode_enabled():
-                        if '<!DOCTYPE html>' not in str(response) and '<html' not in str(response):
-                            # Report was enabled but no HTML report in response - generate one
-                            await ws.send_text(json.dumps({
-                                "type": "activity",
-                                "activity_type": "tool",
-                                "title": "📋 Generating Report",
-                                "content": "Creating professional HTML security report..."
-                            }))
+                        
+                        # Check if thread died
+                        if not agent_thread.is_alive() and event_queue.empty():
+                            break
                             
-                            html_report = generate_html_report()
-                            md_report = generate_markdown_report()
-                            
-                            # Send the text response first
-                            await ws.send_text(json.dumps({
-                                "type": "final",
-                                "content": response
-                            }))
-                            
-                            # Then send the report
-                            await ws.send_text(json.dumps({
-                                "type": "report",
-                                "content": "📋 Professional security report has been generated.",
-                                "html": html_report,
-                                "markdown": md_report
-                            }))
-                            return
-                    
-                    # Send final response
-                    await ws.send_text(json.dumps({
-                        "type": "final",
-                        "content": response
-                    }))
-                    
-                except Exception as e:
-                    stop_progress[0] = True
-                    progress_task.cancel()
-                    
-                    await ws.send_text(json.dumps({
-                        "type": "activity",
-                        "activity_type": "error",
-                        "title": "❌ Error Occurred",
-                        "content": str(e)
-                    }))
-                    await ws.send_text(json.dumps({
-                        "type": "final",
-                        "content": f"Error: {e}"
-                    }))
+                    except Exception as e:
+                        await ws.send_text(json.dumps({
+                            "type": "activity",
+                            "activity_type": "error", 
+                            "title": "❌ Error",
+                            "content": str(e)
+                        }))
+                        break
+                
+                # Wait for thread to finish
+                agent_thread.join(timeout=5)
+                
+                # Handle report mode
+                if final_response and report_mode_enabled and is_report_mode_enabled():
+                    if '<!DOCTYPE html>' not in str(final_response) and '<html' not in str(final_response):
+                        await ws.send_text(json.dumps({
+                            "type": "activity",
+                            "activity_type": "tool",
+                            "title": "📋 Generating Report",
+                            "content": "Creating professional security report..."
+                        }))
+                        
+                        html_report = generate_html_report()
+                        md_report = generate_markdown_report()
+                        
+                        await ws.send_text(json.dumps({
+                            "type": "final",
+                            "content": str(final_response)
+                        }))
+                        
+                        await ws.send_text(json.dumps({
+                            "type": "report",
+                            "content": "📋 Professional security report has been generated.",
+                            "html": html_report,
+                            "markdown": md_report
+                        }))
+                        return
+                
+                # Send final response
+                await ws.send_text(json.dumps({
+                    "type": "final",
+                    "content": str(final_response) if final_response else "Task completed"
+                }))
             
-            await run_with_progress()
+            await run_with_real_streaming()
             
     except WebSocketDisconnect:
         return
