@@ -13,6 +13,7 @@ class Settings(BaseModel):
     searxng_headers: dict[str, str] = {}
     environment: str = os.getenv("ENV", "dev")
     prompt_path: str | None = os.getenv("PROMPT_PATH")  # optional path to override prompt file
+    
     # DefectDojo
     defectdojo_base_url: str | None = os.getenv("DEFECTDOJO_BASE_URL")
     defectdojo_api_key: str | None = os.getenv("DEFECTDOJO_API_KEY")
@@ -20,6 +21,15 @@ class Settings(BaseModel):
     defectdojo_default_product_type_id: int | None = (
         int(os.getenv("DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID")) if os.getenv("DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID") else None
     )
+    
+    # OSINT API Keys (all optional - tools will indicate when key is missing)
+    virustotal_api_key: str | None = os.getenv("VIRUSTOTAL_API_KEY")
+    shodan_api_key: str | None = os.getenv("SHODAN_API_KEY")
+    hunter_api_key: str | None = os.getenv("HUNTER_API_KEY")
+    securitytrails_api_key: str | None = os.getenv("SECURITYTRAILS_API_KEY")
+    whoisxml_api_key: str | None = os.getenv("WHOISXML_API_KEY")
+    hibp_api_key: str | None = os.getenv("HIBP_API_KEY")
+    wpscan_api_token: str | None = os.getenv("WPSCAN_API_TOKEN")
 
     class Config:
         arbitrary_types_allowed = True

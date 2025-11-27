@@ -1,12 +1,60 @@
 from __future__ import annotations
+from pathlib import Path
 from smolagents import CodeAgent, OpenAIServerModel
 from app.tools.searxng_tool import searxng_search
 from app.tools.owasp_lookup import list_owasp_top10, get_owasp_item
 from app.tools.classify import classify_vulnerability
 from app.tools.scenarios import generate_test_scenarios
-from app.tools.playwright_tool import fetch_page_title
+from app.tools.playwright_tool import (
+    fetch_page_title,
+    browse_page,
+    take_screenshot,
+    click_and_extract,
+    fill_form,
+    get_page_links,
+    get_page_forms,
+    intercept_requests,
+    check_console_errors,
+)
 from app.tools.nmap_tool import nmap_scan
 from app.tools.curl_tool import curl_request
+from app.tools.osint_tools import (
+    virustotal_domain_report,
+    virustotal_ip_report,
+    shodan_host_info,
+    shodan_search,
+    hunter_domain_search,
+    dns_lookup,
+    whois_lookup,
+    crt_sh_search,
+    securitytrails_domain_info,
+    haveibeenpwned_domain,
+)
+from app.tools.pentest_tools import (
+    dnsrecon_scan,
+    dirb_scan,
+    nikto_scan,
+    zap_baseline_scan,
+    gobuster_scan,
+    whatweb_scan,
+    sslyze_scan,
+    testssl_scan,
+    wpscan_scan,
+    subfinder_scan,
+    httpx_probe,
+    nuclei_scan,
+)
+from app.tools.report_tools import (
+    enable_report_mode,
+    disable_report_mode,
+    get_report_status,
+    add_finding_to_report,
+    add_scope_item,
+    set_executive_summary,
+    set_conclusion,
+    generate_html_report,
+    generate_pdf_report,
+)
 from app.config import get_settings
 
 # DefectDojo tools are optional; import only if base URL is configured
@@ -28,7 +76,6 @@ try:
     DEFECTDOJO_AVAILABLE = True
 except ImportError:
     DEFECTDOJO_AVAILABLE = False
-from pathlib import Path
 
 DEFAULT_PROMPT = (
     "You are an OWASP security assistant. Provide concise, actionable guidance aligned with OWASP standards."
@@ -62,16 +109,78 @@ def build_owasp_agent() -> CodeAgent:
         api_key=settings.deepseek_api_key,
         flatten_messages_as_text=True,
     )
+    
+    # Core OWASP tools
     tools = [
         searxng_search,
         list_owasp_top10,
         get_owasp_item,
         classify_vulnerability,
         generate_test_scenarios,
+    ]
+    
+    # Playwright browser automation tools
+    tools.extend([
         fetch_page_title,
+        browse_page,
+        take_screenshot,
+        click_and_extract,
+        fill_form,
+        get_page_links,
+        get_page_forms,
+        intercept_requests,
+        check_console_errors,
+    ])
+    
+    # Network tools
+    tools.extend([
         nmap_scan,
         curl_request,
-    ]
+    ])
+    
+    # OSINT / Passive Recon tools
+    tools.extend([
+        virustotal_domain_report,
+        virustotal_ip_report,
+        shodan_host_info,
+        shodan_search,
+        hunter_domain_search,
+        dns_lookup,
+        whois_lookup,
+        crt_sh_search,
+        securitytrails_domain_info,
+        haveibeenpwned_domain,
+    ])
+    
+    # Pentest / Active Recon tools
+    tools.extend([
+        dnsrecon_scan,
+        dirb_scan,
+        nikto_scan,
+        zap_baseline_scan,
+        gobuster_scan,
+        whatweb_scan,
+        sslyze_scan,
+        testssl_scan,
+        wpscan_scan,
+        subfinder_scan,
+        httpx_probe,
+        nuclei_scan,
+    ])
+    
+    # Report generation tools
+    tools.extend([
+        enable_report_mode,
+        disable_report_mode,
+        get_report_status,
+        add_finding_to_report,
+        add_scope_item,
+        set_executive_summary,
+        set_conclusion,
+        generate_html_report,
+        generate_pdf_report,
+    ])
+    
     # Add DefectDojo tools only if configured
     if DEFECTDOJO_AVAILABLE and settings.defectdojo_base_url:
         tools.extend([
@@ -88,6 +197,7 @@ def build_owasp_agent() -> CodeAgent:
             defectdojo_set_current_context,
             defectdojo_record_finding,
         ])
+    
     # Provide instructions from prompt file
     agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())
     return agent

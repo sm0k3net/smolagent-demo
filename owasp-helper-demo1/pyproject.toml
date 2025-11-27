@@ -1,7 +1,7 @@
 [project]
 name = "owasp-smolagent"
-version = "0.1.0"
-description = "SmolAgent powered OWASP helper (Top10 classification, testing scenarios, standards guidance, search)."
+version = "0.2.0"
+description = "SmolAgent powered OWASP penetration testing assistant with OSINT, scanning tools, browser automation, and professional reporting."
 authors = [ { name = "Your Name" } ]
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,12 +16,14 @@ dependencies = [
   "websockets",
   "orjson",
   "rich",
-  "openai"
+  "openai",
+  "playwright"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-requests"]
 browser = ["playwright"]
+pdf = ["weasyprint"]
 
 [build-system]
 requires = ["setuptools", "wheel"]
