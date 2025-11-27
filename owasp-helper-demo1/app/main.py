@@ -143,6 +143,20 @@ async def update_task(task_id: str):
         return JSONResponse({"success": True, "task_id": task_id, "status": task.status.value})
     return JSONResponse({"error": "Task not found"}, status_code=404)
 
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    """Get a specific task with its full result."""
+    if task_id in task_store:
+        task = task_store[task_id].model_dump()
+        if task.get("created_at"):
+            task["created_at"] = task["created_at"].isoformat()
+        if task.get("started_at"):
+            task["started_at"] = task["started_at"].isoformat()
+        if task.get("completed_at"):
+            task["completed_at"] = task["completed_at"].isoformat()
+        return JSONResponse(task)
+    return JSONResponse({"error": "Task not found"}, status_code=404)
+
 @app.on_event("startup")
 async def startup():
     global agent
@@ -434,6 +448,13 @@ h1 {
   width: 400px;
   min-width: 400px;
 }
+/* Hide all content except toggle when collapsed */
+#sidebar:not(.expanded) .sidebar-tabs,
+#sidebar:not(.expanded) .tab-content,
+#sidebar:not(.expanded) .sidebar-header,
+#sidebar:not(.expanded) .sidebar-stats {
+  display: none !important;
+}
 .sidebar-toggle {
   padding: 1rem;
   background: transparent;
@@ -573,6 +594,84 @@ h1 {
 .task-item.cancelled, .task-item.failed {
   border-color: var(--danger);
   background: rgba(239, 68, 68, 0.1);
+}
+.task-result-preview {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--gray-300);
+  max-height: 60px;
+  overflow: hidden;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+}
+.task-result-preview:hover {
+  background: rgba(0,0,0,0.3);
+}
+.task-btn-view {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary-light);
+}
+.task-btn-view:hover {
+  background: var(--primary);
+  color: white;
+}
+/* Task result modal */
+.task-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.8);
+  z-index: 1000;
+  justify-content: center;
+  align-items: center;
+}
+.task-modal.active {
+  display: flex;
+}
+.task-modal-content {
+  background: var(--dark);
+  border-radius: 12px;
+  max-width: 80%;
+  max-height: 80%;
+  overflow: auto;
+  padding: 1.5rem;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: var(--shadow-xl);
+}
+.task-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.task-modal-title {
+  font-weight: 600;
+  color: var(--primary-light);
+}
+.task-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--gray-400);
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+.task-modal-close:hover {
+  color: var(--light);
+}
+.task-modal-body {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--gray-200);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .task-header {
   display: flex;
@@ -933,6 +1032,49 @@ main {
   font-size: 0.85rem;
   margin: 0.75rem 0;
   border: 1px solid rgba(255,255,255,0.1);
+}
+.msg-agent img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.75rem 0;
+  border: 1px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.msg-agent img:hover {
+  transform: scale(1.02);
+}
+/* Image modal for full-size view */
+.image-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.9);
+  z-index: 1000;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+}
+.image-modal.active {
+  display: flex;
+}
+.image-modal img {
+  max-width: 95%;
+  max-height: 95%;
+  object-fit: contain;
+}
+.screenshot-placeholder {
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px dashed var(--primary);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 0.75rem 0;
+  color: var(--primary-light);
+  font-size: 0.9rem;
 }
 .msg-system {
   background: rgba(245, 158, 11, 0.15);
@@ -1347,6 +1489,22 @@ main {
     </div>
   </div>
   
+  <!-- Task Result Modal -->
+  <div class="task-modal" id="task-modal">
+    <div class="task-modal-content">
+      <div class="task-modal-header">
+        <span class="task-modal-title" id="task-modal-title">Task Result</span>
+        <button class="task-modal-close" onclick="closeTaskModal()">&times;</button>
+      </div>
+      <div class="task-modal-body" id="task-modal-body"></div>
+    </div>
+  </div>
+  
+  <!-- Image Modal for full-size screenshots -->
+  <div class="image-modal" id="image-modal">
+    <img id="image-modal-img" src="" alt="Full size screenshot">
+  </div>
+  
   <main>
     <div id="chat-container">
       <div id="messages"></div>
@@ -1510,6 +1668,16 @@ function renderTasks() {
         </div>
         ` : ''}
         ${task.error ? `<div class="task-error" style="color: var(--danger); font-size: 0.75rem; margin-top: 0.5rem;">${escapeHtml(task.error)}</div>` : ''}
+        ${task.result ? `
+        <div class="task-result-preview" onclick="viewTaskResult('${task.id}')">
+          ${escapeHtml(task.result.substring(0, 150))}${task.result.length > 150 ? '...' : ''}
+        </div>
+        <div class="task-actions" style="margin-top: 0.5rem;">
+          <button class="task-btn task-btn-view" onclick="viewTaskResult('${task.id}')">
+            👁️ View Full Result
+          </button>
+        </div>
+        ` : ''}
       </div>
     `;
   }).join('');
@@ -1539,6 +1707,63 @@ async function cancelTask(taskId) {
     addMessage('system', `⚠️ Failed to cancel task: ${err.message}`);
   }
 }
+
+async function viewTaskResult(taskId) {
+  try {
+    // Fetch fresh task data with full result
+    const response = await fetch(`/api/tasks/${taskId}`);
+    const task = await response.json();
+    
+    if (!task || task.error === 'Task not found') {
+      alert('Task not found');
+      return;
+    }
+    
+    const modal = document.getElementById('task-modal');
+    const title = document.getElementById('task-modal-title');
+    const body = document.getElementById('task-modal-body');
+    
+    title.textContent = `Task Result: ${task.prompt.substring(0, 50)}${task.prompt.length > 50 ? '...' : ''}`;
+    
+    // Format result with markdown-like rendering
+    let resultHtml = task.result || 'No result available';
+    
+    // Check for base64 images and render them
+    const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
+    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px;">');
+    
+    body.innerHTML = `
+      <div style="margin-bottom: 1rem;">
+        <strong>Status:</strong> <span class="task-status ${task.status}">${task.status}</span><br>
+        <strong>Steps:</strong> ${task.step_count} | <strong>Tools Used:</strong> ${task.tool_count}<br>
+        ${task.error ? `<strong style="color: var(--danger);">Error:</strong> ${task.error}` : ''}
+      </div>
+      <hr style="border-color: rgba(255,255,255,0.1); margin: 1rem 0;">
+      <div style="white-space: pre-wrap; word-break: break-word;">${resultHtml}</div>
+    `;
+    
+    modal.classList.add('active');
+  } catch (err) {
+    alert('Failed to load task result: ' + err.message);
+  }
+}
+
+function closeTaskModal() {
+  document.getElementById('task-modal').classList.remove('active');
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeTaskModal();
+    document.getElementById('image-modal').classList.remove('active');
+  }
+});
+
+// Close modal on clicking outside
+document.getElementById('task-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'task-modal') closeTaskModal();
+});
 
 // API Key management functions
 async function loadApiKeys() {
@@ -1763,7 +1988,24 @@ function addMessage(type, content, meta = {}) {
       </div>
     `;
   } else {
-    msgDiv.innerHTML = formatContent(content);
+    // Check for base64 images in content and render them
+    let formattedContent = formatContent(content);
+    
+    // Handle base64 image data
+    const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
+    const matches = content.match(base64Pattern);
+    if (matches) {
+      matches.forEach(match => {
+        const imgHtml = `<img src="${match}" onclick="showImageModal(this.src)" alt="Screenshot" style="max-width: 600px;">`;
+        formattedContent = formattedContent.replace(escapeForRegex(match.substring(0, 100)), imgHtml);
+      });
+    }
+    
+    // Also handle markdown-style image references to local files
+    formattedContent = formattedContent.replace(/!\\[([^\\]]*?)\\]\\(([^)]+\\.png)\\)/g, 
+      '<div class="screenshot-placeholder">📷 Screenshot saved: $2</div>');
+    
+    msgDiv.innerHTML = formattedContent;
   }
   
   messagesDiv.appendChild(msgDiv);
@@ -1771,6 +2013,21 @@ function addMessage(type, content, meta = {}) {
   
   chatHistory.push({ type, content, timestamp: new Date().toISOString(), ...meta });
 }
+
+function escapeForRegex(string) {
+  return string.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+}
+
+function showImageModal(src) {
+  const modal = document.getElementById('image-modal');
+  const img = document.getElementById('image-modal-img');
+  img.src = src;
+  modal.classList.add('active');
+}
+
+document.getElementById('image-modal').addEventListener('click', () => {
+  document.getElementById('image-modal').classList.remove('active');
+});
 
 function formatContent(content) {
   // Basic markdown-like formatting
@@ -2115,6 +2372,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         step_count = 0
                         tool_count = 0
                         final_result = None
+                        all_outputs = []  # Collect all meaningful outputs
                         
                         for event in agent.run(full_message, stream=True):
                             # Check for cancellation
@@ -2122,21 +2380,38 @@ The report should be comprehensive and professional, suitable for executive stak
                                 return
                             
                             step_count += 1
+                            event_type = type(event).__name__
                             
+                            # Collect tool calls and their results
                             if hasattr(event, 'tool_calls') and event.tool_calls:
-                                for _ in event.tool_calls:
+                                for tc in event.tool_calls:
                                     tool_count += 1
+                                    if hasattr(tc, 'name'):
+                                        all_outputs.append(f"🔧 Tool: {tc.name}")
                             
+                            # Collect tool results
+                            if hasattr(event, 'tool_result') and event.tool_result:
+                                result_str = str(event.tool_result)[:2000]
+                                all_outputs.append(f"📤 Result: {result_str}")
+                            
+                            # Collect final output
                             if hasattr(event, 'output') and event.output is not None:
                                 final_result = event.output
                             
-                            # Update task
+                            # Update task counts
                             task_store[task_id].step_count = step_count
                             task_store[task_id].tool_count = tool_count
                         
+                        # Build comprehensive result
+                        result_parts = []
+                        if final_result:
+                            result_parts.append(str(final_result))
+                        if not result_parts and all_outputs:
+                            result_parts.append("\\n".join(all_outputs[-10:]))  # Last 10 outputs
+                        
                         task_store[task_id].status = TaskStatus.completed
                         task_store[task_id].completed_at = datetime.now()
-                        task_store[task_id].result = str(final_result) if final_result else "Task completed"
+                        task_store[task_id].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
                         
                     except Exception as e:
                         task_store[task_id].status = TaskStatus.failed

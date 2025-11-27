@@ -53,6 +53,10 @@ from app.tools.pentest_tools import (
     sqlmap_dump,
     ffuf_scan,
     ffuf_vhost,
+    install_python_package,
+    install_playwright_browsers,
+    install_system_tool,
+    check_and_install_dependencies,
 )
 from app.tools.report_tools import (
     enable_report_mode,
@@ -187,6 +191,10 @@ def build_owasp_agent() -> CodeAgent:
         sqlmap_dump,
         ffuf_scan,
         ffuf_vhost,
+        install_python_package,
+        install_playwright_browsers,
+        install_system_tool,
+        check_and_install_dependencies,
     ])
     
     # Report generation tools

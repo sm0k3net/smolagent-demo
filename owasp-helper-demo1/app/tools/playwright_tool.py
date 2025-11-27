@@ -3,11 +3,42 @@ from __future__ import annotations
 import base64
 import tempfile
 import os
+import subprocess
 from smolagents import tool
+
+
+def _check_playwright_installed() -> tuple[bool, str | None]:
+    """Check if Playwright is installed and browser is available."""
+    try:
+        from playwright.sync_api import sync_playwright
+        return True, None
+    except ImportError:
+        return False, "Playwright not installed. Install with: pip install playwright && playwright install chromium"
+
+
+def _ensure_browser_installed() -> str | None:
+    """Ensure Chromium browser is installed for Playwright."""
+    try:
+        # Try to run playwright install chromium
+        result = subprocess.run(
+            ["playwright", "install", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if result.returncode != 0:
+            return f"Failed to install Chromium: {result.stderr}"
+        return None
+    except Exception as e:
+        return f"Error installing browser: {e}"
 
 
 def _get_playwright():
     """Get Playwright sync API or return None with error."""
+    installed, error = _check_playwright_installed()
+    if not installed:
+        return None, error
+    
     try:
         from playwright.sync_api import sync_playwright
         return sync_playwright, None
@@ -82,37 +113,86 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
 
 
 @tool
-def take_screenshot(url: str, full_page: bool = False) -> str:
-    """Take a screenshot of a webpage.
+def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/screenshots") -> str:
+    """Take a screenshot of a webpage and return the image data.
 
     Args:
         url: The URL to screenshot.
         full_page: Whether to capture the full scrollable page (default False).
-    Returns: Base64-encoded PNG screenshot data or path to saved file.
+        output_dir: Directory to save screenshots (default /tmp/screenshots).
+    Returns: Screenshot information including base64 data for display and file path.
     """
     sync_playwright, err = _get_playwright()
     if err:
         return err
     
     try:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate unique filename
+        from datetime import datetime
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.replace(":", "_").replace(".", "_")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"screenshot_{domain}_{timestamp}.png"
+        screenshot_path = os.path.join(output_dir, filename)
+        
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1920, "height": 1080})
-            page.goto(url, wait_until="networkidle", timeout=30000)
             
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                screenshot_path = f.name
+            # Set user agent
+            page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(2000)  # Wait for any lazy-loaded content
             
             page.screenshot(path=screenshot_path, full_page=full_page)
+            title = page.title()
             browser.close()
             
-            # Read and encode
+            # Read and encode as base64 for display
             with open(screenshot_path, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
+                image_data = f.read()
+                base64_data = base64.b64encode(image_data).decode()
             
-            return f"Screenshot saved. Base64 data ({len(data)} chars): data:image/png;base64,{data[:100]}... (truncated for display). Full path: {screenshot_path}"
+            file_size = len(image_data) / 1024  # KB
+            
+            return f"""## Screenshot Captured Successfully
+
+**URL:** {url}
+**Page Title:** {title}
+**File:** {screenshot_path}
+**Size:** {file_size:.1f} KB
+**Full Page:** {'Yes' if full_page else 'No'}
+
+### Preview:
+![Screenshot]({screenshot_path})
+
+### Base64 Image Data:
+```
+data:image/png;base64,{base64_data}
+```
+
+The screenshot has been saved to `{screenshot_path}` and can be included in reports."""
     except Exception as e:
+        error_msg = str(e)
+        if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
+            return f"""Chromium browser not installed. Please run:
+
+```bash
+playwright install chromium
+```
+
+Or install all browsers:
+```bash
+playwright install
+```
+
+Original error: {error_msg}"""
         return f"Playwright error: {e}"
 
 
