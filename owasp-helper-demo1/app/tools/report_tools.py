@@ -499,6 +499,143 @@ def generate_html_report() -> str:
 
 
 @tool
+def generate_markdown_report() -> str:
+    """Generate the report in Markdown format for easy sharing and editing.
+
+    Returns: Complete Markdown report as a string.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
+        return "Report mode is not enabled or no data collected."
+    
+    data = _CURRENT_REPORT_DATA
+    
+    # Count severities
+    severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
+    for f in data.get("findings", []):
+        sev = f.get("severity", "Info")
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+    
+    lines = []
+    
+    # Header
+    lines.append(f"# {data.get('title', 'Security Assessment Report')}")
+    lines.append(f"**{data.get('subtitle', 'Penetration Test Report')}**")
+    lines.append("")
+    lines.append(f"- **Target:** {data.get('target', 'N/A')}")
+    lines.append(f"- **Date:** {data.get('date', datetime.now().strftime('%Y-%m-%d'))}")
+    lines.append(f"- **Author:** {data.get('author', 'OWASP SmolAgent')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # Executive Summary
+    lines.append("## Executive Summary")
+    lines.append("")
+    lines.append(data.get("executive_summary", "This report presents findings from a security assessment."))
+    lines.append("")
+    lines.append("### Findings Overview")
+    lines.append("")
+    lines.append(f"| Severity | Count |")
+    lines.append(f"|----------|-------|")
+    lines.append(f"| 🔴 Critical | {severity_counts['Critical']} |")
+    lines.append(f"| 🟠 High | {severity_counts['High']} |")
+    lines.append(f"| 🟡 Medium | {severity_counts['Medium']} |")
+    lines.append(f"| 🟢 Low | {severity_counts['Low']} |")
+    lines.append(f"| 🔵 Info | {severity_counts['Info']} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # Scope
+    lines.append("## Scope & Methodology")
+    lines.append("")
+    lines.append("### Targets in Scope")
+    lines.append("")
+    for s in data.get("scope", []):
+        lines.append(f"- {s}")
+    lines.append("")
+    lines.append("### Methodology")
+    lines.append("")
+    lines.append(data.get("methodology", "Testing followed OWASP Testing Guide methodology."))
+    lines.append("")
+    lines.append("### Tools Used")
+    lines.append("")
+    for t in sorted(data.get("tools", set())):
+        lines.append(f"- {t}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # Findings
+    lines.append("## Detailed Findings")
+    lines.append("")
+    
+    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
+    sorted_findings = sorted(
+        data.get("findings", []),
+        key=lambda x: severity_order.index(x.get("severity", "Info")) if x.get("severity", "Info") in severity_order else 5
+    )
+    
+    for f in sorted_findings:
+        sev_emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(f.get("severity"), "⚪")
+        lines.append(f"### {sev_emoji} {f['id']}. {f['title']}")
+        lines.append("")
+        lines.append(f"**Severity:** {f.get('severity', 'N/A')} | **OWASP:** {f.get('owasp_category', 'N/A')} | **CVSS:** {f.get('cvss_score', 'N/A')}")
+        lines.append("")
+        lines.append("#### Description")
+        lines.append(f.get("description", ""))
+        lines.append("")
+        lines.append("#### Affected Component")
+        lines.append(f.get("affected_component", "N/A"))
+        lines.append("")
+        lines.append("#### Impact")
+        lines.append(f.get("impact", ""))
+        lines.append("")
+        if f.get("evidence"):
+            lines.append("#### Evidence / PoC")
+            lines.append("```")
+            lines.append(f.get("evidence", ""))
+            lines.append("```")
+            lines.append("")
+        if f.get("steps_to_reproduce"):
+            lines.append("#### Steps to Reproduce")
+            lines.append(f.get("steps_to_reproduce", ""))
+            lines.append("")
+        lines.append("#### Remediation")
+        lines.append(f.get("remediation", ""))
+        lines.append("")
+        lines.append(f"*Tool Used: {f.get('tool_used', 'Manual Testing')}*")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+    
+    # Conclusion
+    lines.append("## Conclusion & Recommendations")
+    lines.append("")
+    lines.append(data.get("conclusion", "Implement the recommended remediations to improve security posture."))
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # References
+    lines.append("## References")
+    lines.append("")
+    lines.append("- [OWASP Top 10](https://owasp.org/Top10/)")
+    lines.append("- [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)")
+    lines.append("- [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/)")
+    lines.append("- [CWE - Common Weakness Enumeration](https://cwe.mitre.org/)")
+    lines.append("- [NIST NVD](https://nvd.nist.gov/)")
+    lines.append("")
+    lines.append("---")
+    lines.append(f"*Report generated by OWASP SmolAgent on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+    
+    return "\n".join(lines)
+
+
+@tool
 def generate_pdf_report(output_path: str | None = None) -> str:
     """Generate a PDF report from the HTML report using browser printing.
 
@@ -550,3 +687,15 @@ Or install Playwright: pip install playwright && playwright install chromium"""
     
     except Exception as e:
         return f"Error generating PDF: {e}"
+
+
+def is_report_mode_enabled() -> bool:
+    """Check if report mode is enabled (non-tool function for internal use)."""
+    global _REPORT_MODE_ENABLED
+    return _REPORT_MODE_ENABLED
+
+
+def get_report_data() -> dict:
+    """Get current report data (non-tool function for internal use)."""
+    global _CURRENT_REPORT_DATA
+    return _CURRENT_REPORT_DATA.copy() if _CURRENT_REPORT_DATA else {}

@@ -1,16 +1,32 @@
 from __future__ import annotations
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 from app.agents.owasp_agent import build_owasp_agent
-from app.tools.report_tools import enable_report_mode, disable_report_mode, get_report_status
+from app.tools.report_tools import (
+    enable_report_mode, disable_report_mode, get_report_status,
+    generate_html_report, generate_markdown_report,
+    is_report_mode_enabled, get_report_data
+)
 import asyncio
 import json
+import base64
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 app = FastAPI(title="OWASP SmolAgent")
 agent = None
 startup_lock = asyncio.Lock()
 executor = ThreadPoolExecutor(max_workers=4)
+
+# File storage for sessions
+file_store: dict[str, list[dict]] = {}
+
+class FileUpload(BaseModel):
+    session_id: str
+    filename: str
+    content: str  # Base64 encoded content
 
 @app.on_event("startup")
 async def startup():
@@ -19,96 +35,259 @@ async def startup():
         if agent is None:
             agent = build_owasp_agent()
 
+# File upload endpoint
+@app.post("/upload")
+async def upload_file(upload: FileUpload):
+    """Handle file uploads via JSON with base64 content."""
+    try:
+        content = base64.b64decode(upload.content).decode('utf-8')
+        is_text = True
+    except Exception:
+        try:
+            content = base64.b64decode(upload.content)
+            content = f"[Binary file: {len(content)} bytes]"
+            is_text = False
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to decode file: {str(e)}")
+    
+    file_info = {
+        "filename": upload.filename,
+        "content": content,
+        "is_text": is_text,
+    }
+    
+    if upload.session_id not in file_store:
+        file_store[upload.session_id] = []
+    file_store[upload.session_id].append(file_info)
+    
+    return JSONResponse({"success": True, "filename": upload.filename, "is_text": is_text})
+
+# Report download endpoint
+@app.get("/api/report/{format}")
+async def get_report(format: str):
+    """Get report in specified format."""
+    if not is_report_mode_enabled():
+        return JSONResponse({"error": "Report mode not enabled"}, status_code=400)
+    
+    if format == "html":
+        return JSONResponse({"content": generate_html_report(), "format": "html"})
+    elif format == "markdown":
+        return JSONResponse({"content": generate_markdown_report(), "format": "markdown"})
+    else:
+        return JSONResponse({"error": "Invalid format"}, status_code=400)
+
 HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OWASP SmolAgent - Security Testing Assistant</title>
+<title>OWASP SmolAgent - Professional Security Testing Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+:root {
+  --primary: #6366f1;
+  --primary-dark: #4f46e5;
+  --primary-light: #818cf8;
+  --secondary: #0ea5e9;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --dark: #1e293b;
+  --darker: #0f172a;
+  --light: #f8fafc;
+  --gray-100: #f1f5f9;
+  --gray-200: #e2e8f0;
+  --gray-300: #cbd5e1;
+  --gray-400: #94a3b8;
+  --gray-500: #64748b;
+  --gray-600: #475569;
+  --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+  --gradient-dark: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);
+  --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--darker);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  color: #333;
+  color: var(--light);
 }
 header {
-  background: rgba(255,255,255,0.95);
-  padding: 1.5rem 2rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  background: var(--gradient-dark);
+  padding: 1rem 2rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 1rem;
-  z-index: 10;
+  z-index: 100;
+  backdrop-filter: blur(10px);
 }
-h1 {
-  font-size: 1.75rem;
-  color: #667eea;
+.logo-section {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 1rem;
 }
-h1::before { content: '🛡️'; }
+.logo-icon {
+  width: 48px;
+  height: 48px;
+  background: var(--gradient-primary);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  box-shadow: var(--shadow-lg);
+}
+h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.header-subtitle {
+  font-size: 0.8rem;
+  color: var(--gray-400);
+  font-weight: 400;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-left: 1rem;
+}
+.status-badge.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.status-badge.disconnected {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+.status-badge.connected .status-dot { background: var(--success); }
+.status-badge.disconnected .status-dot { background: var(--danger); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 .header-actions {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 .btn {
   padding: 0.6rem 1.2rem;
   border: none;
-  border-radius: 6px;
-  font-size: 0.9rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   font-weight: 500;
-}
-.btn-primary {
-  background: #667eea;
-  color: white;
-}
-.btn-primary:hover {
-  background: #5568d3;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(102,126,234,0.3);
-}
-.btn-secondary {
-  background: #f0f0f0;
-  color: #333;
-}
-.btn-secondary:hover {
-  background: #e0e0e0;
-}
-
-/* Report Mode Toggle */
-.report-toggle {
-  display: flex;
+  font-family: inherit;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+.btn-primary {
+  background: var(--gradient-primary);
+  color: white;
+  box-shadow: var(--shadow-md);
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg), 0 0 20px rgba(99, 102, 241, 0.4);
+}
+.btn-secondary {
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-200);
+  border: 1px solid rgba(255,255,255,0.15);
+}
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.25);
+}
+.btn-success {
+  background: var(--success);
+  color: white;
+}
+.btn-success:hover {
+  background: #059669;
+}
+
+/* Report Mode Toggle - Switch Style */
+.toggle-switch-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   padding: 0.5rem 1rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  border: 2px solid #e0e0e0;
+  background: rgba(255,255,255,0.05);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
 }
-.report-toggle.active {
-  background: #d4edda;
-  border-color: #28a745;
+.toggle-switch {
+  position: relative;
+  width: 48px;
+  height: 26px;
 }
-.report-toggle label {
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
   cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--gray-600);
+  border-radius: 26px;
+  transition: 0.3s;
+}
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.3s;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--success);
+}
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(22px);
+}
+.toggle-label {
+  color: var(--gray-300);
+  font-size: 0.85rem;
   font-weight: 500;
-  color: #333;
 }
-.report-toggle input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
+.toggle-switch-wrapper.active .toggle-label {
+  color: var(--success);
 }
 
 /* Main layout with sidebar */
@@ -121,41 +300,50 @@ h1::before { content: '🛡️'; }
 
 /* Sidebar */
 #sidebar {
-  width: 60px;
-  min-width: 60px;
-  background: rgba(255,255,255,0.98);
-  border-right: 1px solid #e0e0e0;
+  width: 56px;
+  min-width: 56px;
+  background: var(--dark);
+  border-right: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  transition: all 0.3s ease;
-  box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 #sidebar.expanded {
-  width: 380px;
-  min-width: 380px;
+  width: 400px;
+  min-width: 400px;
 }
 .sidebar-toggle {
   padding: 1rem;
-  background: #667eea;
-  color: white;
+  background: transparent;
+  color: var(--gray-400);
   border: none;
   cursor: pointer;
-  font-size: 1.2rem;
-  transition: background 0.2s;
+  font-size: 1.25rem;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .sidebar-toggle:hover {
-  background: #5568d3;
+  color: var(--primary-light);
+  background: rgba(99, 102, 241, 0.1);
 }
 .sidebar-header {
-  padding: 1rem;
-  background: #f8f9fa;
-  border-bottom: 1px solid #e0e0e0;
+  padding: 1rem 1.25rem;
+  background: rgba(99, 102, 241, 0.1);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
   font-weight: 600;
-  color: #667eea;
+  color: var(--primary-light);
   display: none;
+  font-size: 0.9rem;
 }
 #sidebar.expanded .sidebar-header {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.header-icon {
+  font-size: 1.1rem;
 }
 #activity-log {
   flex: 1;
@@ -167,53 +355,123 @@ h1::before { content: '🛡️'; }
   display: block;
   padding: 1rem;
 }
+#activity-log::-webkit-scrollbar {
+  width: 6px;
+}
+#activity-log::-webkit-scrollbar-track {
+  background: transparent;
+}
+#activity-log::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
 .activity-item {
-  padding: 0.75rem;
+  padding: 0.875rem 1rem;
   margin-bottom: 0.5rem;
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 0.85rem;
   animation: slideIn 0.3s ease;
+  position: relative;
+  overflow: hidden;
 }
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(-10px); }
   to { opacity: 1; transform: translateX(0); }
 }
 .activity-thinking {
-  background: #fff3cd;
-  border-left: 3px solid #ffc107;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.activity-thinking::before {
+  content: '🧠';
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  opacity: 0.5;
 }
 .activity-tool {
-  background: #d1ecf1;
-  border-left: 3px solid #17a2b8;
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(14, 165, 233, 0.3);
+}
+.activity-tool::before {
+  content: '🔧';
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  opacity: 0.5;
 }
 .activity-tool-result {
-  background: #d4edda;
-  border-left: 3px solid #28a745;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.activity-tool-result::before {
+  content: '✅';
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  opacity: 0.5;
 }
 .activity-error {
-  background: #f8d7da;
-  border-left: 3px solid #dc3545;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.activity-error::before {
+  content: '❌';
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  opacity: 0.5;
 }
 .activity-step {
-  background: #e2e3e5;
-  border-left: 3px solid #6c757d;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+.activity-step::before {
+  content: '📍';
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  opacity: 0.5;
+}
+.activity-title {
+  font-weight: 600;
+  color: var(--gray-200);
+  margin-bottom: 0.35rem;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .activity-time {
-  font-size: 0.75rem;
-  color: #666;
-  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  font-weight: 400;
 }
 .activity-content {
   word-break: break-word;
+  color: var(--gray-400);
+  line-height: 1.5;
 }
 .activity-content pre {
-  background: #282c34;
-  color: #abb2bf;
-  padding: 0.5rem;
-  border-radius: 4px;
-  font-size: 0.8rem;
+  background: var(--darker);
+  color: var(--gray-300);
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
   overflow-x: auto;
   margin-top: 0.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 /* Main content area */
@@ -221,18 +479,20 @@ main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 2rem;
-  gap: 1.5rem;
+  padding: 1.5rem;
+  gap: 1rem;
   overflow: hidden;
+  background: linear-gradient(180deg, var(--darker) 0%, #1a1f2e 100%);
 }
 #chat-container {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  background: var(--dark);
+  border-radius: 16px;
+  box-shadow: var(--shadow-xl);
   display: flex;
   flex-direction: column;
   flex: 1;
   overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 #messages {
   flex: 1;
@@ -242,145 +502,309 @@ main {
   flex-direction: column;
   gap: 1rem;
 }
+#messages::-webkit-scrollbar {
+  width: 8px;
+}
+#messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+#messages::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 4px;
+}
 .message {
   padding: 1rem 1.25rem;
-  border-radius: 8px;
+  border-radius: 12px;
   max-width: 85%;
   word-wrap: break-word;
-  animation: fadeIn 0.3s;
+  animation: messageIn 0.3s ease;
+  line-height: 1.6;
 }
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(15px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .msg-user {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient-primary);
   color: white;
   align-self: flex-end;
   border-bottom-right-radius: 4px;
+  box-shadow: var(--shadow-md);
 }
 .msg-agent {
-  background: #f5f7fa;
-  color: #333;
+  background: rgba(255,255,255,0.05);
+  color: var(--gray-200);
   align-self: flex-start;
   border-bottom-left-radius: 4px;
-  border-left: 4px solid #667eea;
+  border-left: 3px solid var(--primary);
+}
+.msg-agent pre {
+  background: var(--darker);
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  margin: 0.75rem 0;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 .msg-system {
-  background: #fff3cd;
-  color: #856404;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
   align-self: center;
   max-width: 100%;
   text-align: center;
-  font-size: 0.9rem;
-  border-left: 4px solid #ffc107;
+  font-size: 0.85rem;
+  padding: 0.75rem 1.5rem;
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 .msg-progress {
-  background: #d1ecf1;
-  color: #0c5460;
+  background: rgba(14, 165, 233, 0.1);
+  color: var(--secondary);
   align-self: flex-start;
   max-width: 100%;
-  font-family: 'Courier New', monospace;
+  font-family: 'JetBrains Mono', monospace;
   font-size: 0.85rem;
-  border-left: 4px solid #17a2b8;
-}
-.html-preview-btn {
-  display: inline-block;
-  margin-top: 0.5rem;
-  padding: 0.4rem 0.8rem;
-  background: #28a745;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.html-preview-btn:hover {
-  background: #218838;
-}
-#input-area {
-  padding: 1.5rem;
-  background: #f8f9fa;
-  border-top: 1px solid #dee2e6;
+  border: 1px solid rgba(14, 165, 233, 0.3);
   display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.msg-progress .spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(14, 165, 233, 0.3);
+  border-top-color: var(--secondary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Report buttons */
+.report-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+.report-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.report-btn-html {
+  background: var(--success);
+  color: white;
+}
+.report-btn-html:hover {
+  background: #059669;
+  transform: translateY(-1px);
+}
+.report-btn-md {
+  background: var(--secondary);
+  color: white;
+}
+.report-btn-md:hover {
+  background: #0284c7;
+  transform: translateY(-1px);
+}
+.report-btn-preview {
+  background: var(--primary);
+  color: white;
+}
+.report-btn-preview:hover {
+  background: var(--primary-dark);
+  transform: translateY(-1px);
+}
+
+/* Input area */
+#input-area {
+  padding: 1.25rem;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
 }
-#message-input {
+.input-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+.input-wrapper {
   flex: 1;
-  padding: 1rem;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 1rem;
-  transition: border-color 0.2s;
+  position: relative;
+}
+#message-input {
+  width: 100%;
+  padding: 1rem 1.25rem;
+  padding-right: 50px;
+  border: 2px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  font-size: 0.95rem;
+  background: var(--dark);
+  color: var(--light);
+  transition: all 0.2s;
+  font-family: inherit;
+}
+#message-input::placeholder {
+  color: var(--gray-500);
 }
 #message-input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* File attachment */
+.file-attachment-area {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.file-input-wrapper {
+  position: relative;
+}
+.file-input-wrapper input[type="file"] {
+  position: absolute;
+  left: -9999px;
+}
+.file-input-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-300);
+  border: 1px dashed rgba(255,255,255,0.2);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+.file-input-btn:hover {
+  background: rgba(255,255,255,0.15);
+  border-color: var(--primary);
+  color: var(--primary-light);
+}
+#attached-files {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.attached-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary-light);
+  border-radius: 20px;
+  font-size: 0.8rem;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+.attached-file .remove-file {
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+.attached-file .remove-file:hover {
+  opacity: 1;
 }
 #send-btn {
   padding: 1rem 2rem;
-}
-.status-indicator {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-left: 0.5rem;
-}
-.status-connected { background: #28a745; }
-.status-disconnected { background: #dc3545; }
-pre { 
-  background: #282c34;
-  color: #abb2bf;
-  padding: 1rem;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 0.5rem 0;
-}
-code {
-  font-family: 'Courier New', monospace;
+  min-width: 100px;
 }
 
 /* Stats bar at bottom of sidebar */
 .sidebar-stats {
   padding: 1rem;
-  background: #f8f9fa;
-  border-top: 1px solid #e0e0e0;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.1);
   display: none;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 #sidebar.expanded .sidebar-stats {
   display: block;
 }
-.stat-row {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
 }
-.stat-label { color: #666; }
-.stat-value { font-weight: 600; color: #333; }
+.stat-item {
+  text-align: center;
+  padding: 0.5rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+}
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--primary-light);
+}
+.stat-label {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 
 /* Tool badges */
 .tool-badge {
   display: inline-block;
-  background: #667eea;
+  background: var(--primary);
   color: white;
-  padding: 0.15rem 0.5rem;
+  padding: 0.2rem 0.6rem;
   border-radius: 4px;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 500;
   margin-right: 0.25rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  header { padding: 1rem; }
+  .header-actions { width: 100%; justify-content: center; }
+  #sidebar.expanded { width: 100%; min-width: 100%; position: absolute; z-index: 50; height: 100%; }
+  main { padding: 1rem; }
 }
 </style>
 </head>
 <body>
 <header>
-  <h1>OWASP SmolAgent<span class="status-indicator status-disconnected" id="status"></span></h1>
-  <div class="header-actions">
-    <div class="report-toggle" id="report-toggle">
-      <input type="checkbox" id="report-mode-checkbox">
-      <label for="report-mode-checkbox">📋 Report Mode</label>
+  <div class="logo-section">
+    <div class="logo-icon">🛡️</div>
+    <div>
+      <h1>OWASP SmolAgent</h1>
+      <div class="header-subtitle">Professional Security Testing Assistant</div>
     </div>
-    <button class="btn btn-secondary" id="export-txt-btn">📥 Export Chat</button>
+    <span class="status-badge disconnected" id="status-badge">
+      <span class="status-dot"></span>
+      <span id="status-text">Disconnected</span>
+    </span>
+  </div>
+  <div class="header-actions">
+    <div class="toggle-switch-wrapper" id="report-toggle">
+      <label class="toggle-switch">
+        <input type="checkbox" id="report-mode-checkbox">
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="toggle-label">📋 Report Mode</span>
+    </div>
+    <button class="btn btn-secondary" id="export-txt-btn">📥 Export</button>
     <button class="btn btn-secondary" id="clear-btn">🗑️ Clear</button>
   </div>
 </header>
@@ -388,20 +812,22 @@ code {
   <!-- Expandable Sidebar for Agent Activity -->
   <div id="sidebar">
     <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Activity Log">📊</button>
-    <div class="sidebar-header">🔍 Agent Activity</div>
+    <div class="sidebar-header"><span class="header-icon">🔍</span> Agent Activity Monitor</div>
     <div id="activity-log"></div>
     <div class="sidebar-stats">
-      <div class="stat-row">
-        <span class="stat-label">Steps:</span>
-        <span class="stat-value" id="stat-steps">0</span>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label">Tools Used:</span>
-        <span class="stat-value" id="stat-tools">0</span>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label">Duration:</span>
-        <span class="stat-value" id="stat-duration">0s</span>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="stat-steps">0</div>
+          <div class="stat-label">Steps</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-tools">0</div>
+          <div class="stat-label">Tools</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-duration">0s</div>
+          <div class="stat-label">Duration</div>
+        </div>
       </div>
     </div>
   </div>
@@ -410,8 +836,22 @@ code {
     <div id="chat-container">
       <div id="messages"></div>
       <div id="input-area">
-        <input type="text" id="message-input" placeholder="Ask about OWASP standards, run pentests, classify vulnerabilities..." autocomplete="off">
-        <button class="btn btn-primary" id="send-btn">Send</button>
+        <div class="file-attachment-area">
+          <div class="file-input-wrapper">
+            <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini">
+            <label for="file-input" class="file-input-btn">📎 Attach Files</label>
+          </div>
+          <div id="attached-files"></div>
+        </div>
+        <div class="input-row">
+          <div class="input-wrapper">
+            <input type="text" id="message-input" placeholder="Ask about OWASP, run security scans, classify vulnerabilities..." autocomplete="off">
+          </div>
+          <button class="btn btn-primary" id="send-btn">
+            <span>Send</span>
+            <span>➤</span>
+          </button>
+        </div>
       </div>
     </div>
   </main>
@@ -420,7 +860,8 @@ code {
 const messagesDiv = document.getElementById('messages');
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
-const statusIndicator = document.getElementById('status');
+const statusBadge = document.getElementById('status-badge');
+const statusText = document.getElementById('status-text');
 const exportTxtBtn = document.getElementById('export-txt-btn');
 const clearBtn = document.getElementById('clear-btn');
 const sidebar = document.getElementById('sidebar');
@@ -428,6 +869,8 @@ const sidebarToggle = document.getElementById('sidebar-toggle');
 const activityLog = document.getElementById('activity-log');
 const reportToggle = document.getElementById('report-toggle');
 const reportCheckbox = document.getElementById('report-mode-checkbox');
+const fileInput = document.getElementById('file-input');
+const attachedFilesDiv = document.getElementById('attached-files');
 
 // Stats
 let stepCount = 0;
@@ -435,7 +878,12 @@ let toolCount = 0;
 let startTime = null;
 let durationInterval = null;
 
+// File attachments storage
+let attachedFiles = [];
+let sessionId = 'session_' + Date.now();
+
 let chatHistory = [];
+let currentReport = { html: null, markdown: null };
 const ws = new WebSocket(`ws://${location.host}/ws`);
 
 // Sidebar toggle
@@ -451,19 +899,71 @@ reportCheckbox.onchange = () => {
   
   // Send command to enable/disable report mode
   if (enabled) {
-    ws.send('__REPORT_MODE_ON__');
+    ws.send(JSON.stringify({ action: 'report_mode_on' }));
   } else {
-    ws.send('__REPORT_MODE_OFF__');
+    ws.send(JSON.stringify({ action: 'report_mode_off' }));
   }
 };
 
-function addActivity(type, content, details = null) {
+// File attachment handling
+fileInput.onchange = async (e) => {
+  const files = Array.from(e.target.files);
+  
+  for (const file of files) {
+    if (file.size > 5 * 1024 * 1024) { // 5MB limit
+      addMessage('system', `⚠️ File "${file.name}" is too large (max 5MB)`);
+      continue;
+    }
+    
+    try {
+      const content = await readFileAsText(file);
+      attachedFiles.push({
+        filename: file.name,
+        content: content,
+        size: file.size
+      });
+      renderAttachedFiles();
+    } catch (err) {
+      addMessage('system', `⚠️ Could not read file "${file.name}"`);
+    }
+  }
+  
+  fileInput.value = ''; // Reset file input
+};
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+function renderAttachedFiles() {
+  attachedFilesDiv.innerHTML = attachedFiles.map((file, index) => `
+    <span class="attached-file">
+      📄 ${file.filename}
+      <span class="remove-file" onclick="removeFile(${index})">✕</span>
+    </span>
+  `).join('');
+}
+
+function removeFile(index) {
+  attachedFiles.splice(index, 1);
+  renderAttachedFiles();
+}
+
+function addActivity(type, title, content, details = null) {
   const item = document.createElement('div');
   item.className = `activity-item activity-${type}`;
   
-  const time = new Date().toLocaleTimeString();
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
   item.innerHTML = `
-    <div class="activity-time">${time}</div>
+    <div class="activity-title">
+      ${title}
+      <span class="activity-time">${time}</span>
+    </div>
     <div class="activity-content">${content}${details ? '<pre>' + escapeHtml(details) + '</pre>' : ''}</div>
   `;
   
@@ -472,16 +972,17 @@ function addActivity(type, content, details = null) {
   
   // Update stats
   if (type === 'step') stepCount++;
-  if (type === 'tool') toolCount++;
+  if (type === 'tool' || type === 'tool-result') toolCount++;
   document.getElementById('stat-steps').textContent = stepCount;
   document.getElementById('stat-tools').textContent = toolCount;
 }
 
 function escapeHtml(text) {
   if (!text) return '';
+  const str = String(text);
   const div = document.createElement('div');
-  div.textContent = text.substring(0, 500);
-  return div.innerHTML + (text.length > 500 ? '... (truncated)' : '');
+  div.textContent = str.substring(0, 1000);
+  return div.innerHTML + (str.length > 1000 ? '\\n... (truncated)' : '');
 }
 
 function startTimer() {
@@ -493,7 +994,9 @@ function startTimer() {
   if (durationInterval) clearInterval(durationInterval);
   durationInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    document.getElementById('stat-duration').textContent = elapsed + 's';
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    document.getElementById('stat-duration').textContent = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   }, 1000);
 }
 
@@ -501,42 +1004,53 @@ function stopTimer() {
   if (durationInterval) clearInterval(durationInterval);
 }
 
-function addMessage(type, content, meta) {
+function addMessage(type, content, meta = {}) {
   const msgDiv = document.createElement('div');
   msgDiv.className = `message msg-${type}`;
   
+  if (type === 'progress') {
+    msgDiv.innerHTML = `<div class="spinner"></div><span>${content}</span>`;
+  }
   // Detect HTML content (full HTML document)
-  if (type === 'agent' && content.includes('<!DOCTYPE html>')) {
+  else if (type === 'agent' && content.includes('<!DOCTYPE html>')) {
     const htmlCode = content;
-    msgDiv.innerHTML = '<strong>📋 HTML Report Generated</strong><br><small>Click button to preview</small>';
-    
-    const previewBtn = document.createElement('button');
-    previewBtn.className = 'html-preview-btn';
-    previewBtn.textContent = '👁️ Preview HTML Report';
-    previewBtn.onclick = () => {
-      const newWindow = window.open();
-      newWindow.document.write(htmlCode);
-      newWindow.document.close();
-    };
-    msgDiv.appendChild(previewBtn);
+    msgDiv.innerHTML = `
+      <strong>📋 HTML Report Generated</strong><br>
+      <small>A professional security report has been created</small>
+      <div class="report-actions">
+        <button class="report-btn report-btn-preview" onclick="previewReport(this, 'html')">👁️ Preview</button>
+        <button class="report-btn report-btn-html" onclick="downloadReport('html')">📥 Download HTML</button>
+      </div>
+    `;
+    currentReport.html = htmlCode;
+  }
+  // Check for report type message
+  else if (type === 'report') {
+    msgDiv.innerHTML = `
+      <strong>📋 Security Report Ready</strong><br>
+      <small>${content}</small>
+      <div class="report-actions">
+        <button class="report-btn report-btn-preview" onclick="previewReport(this, 'html')">👁️ Preview HTML</button>
+        <button class="report-btn report-btn-html" onclick="downloadReport('html')">📥 HTML</button>
+        <button class="report-btn report-btn-md" onclick="downloadReport('markdown')">📥 Markdown</button>
+      </div>
+    `;
+    if (meta.html) currentReport.html = meta.html;
+    if (meta.markdown) currentReport.markdown = meta.markdown;
   }
   // Detect HTML code blocks
   else if (type === 'agent' && content.match(/```html\\n([\\s\\S]*?)\\n```/)) {
     const htmlMatch = content.match(/```html\\n([\\s\\S]*?)\\n```/);
-    const htmlCode = htmlMatch[1];
-    msgDiv.textContent = content;
-    
-    const previewBtn = document.createElement('button');
-    previewBtn.className = 'html-preview-btn';
-    previewBtn.textContent = '👁️ Preview HTML Report';
-    previewBtn.onclick = () => {
-      const newWindow = window.open();
-      newWindow.document.write(htmlCode);
-      newWindow.document.close();
-    };
-    msgDiv.appendChild(previewBtn);
+    currentReport.html = htmlMatch[1];
+    msgDiv.innerHTML = `
+      <div>${formatContent(content)}</div>
+      <div class="report-actions">
+        <button class="report-btn report-btn-preview" onclick="previewReport(this, 'html')">👁️ Preview</button>
+        <button class="report-btn report-btn-html" onclick="downloadReport('html')">📥 Download HTML</button>
+      </div>
+    `;
   } else {
-    msgDiv.textContent = content;
+    msgDiv.innerHTML = formatContent(content);
   }
   
   messagesDiv.appendChild(msgDiv);
@@ -545,28 +1059,96 @@ function addMessage(type, content, meta) {
   chatHistory.push({ type, content, timestamp: new Date().toISOString(), ...meta });
 }
 
+function formatContent(content) {
+  // Basic markdown-like formatting
+  return String(content)
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/```(\\w+)?\\n([\\s\\S]*?)```/g, '<pre><code>$2</code></pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+    .replace(/\\n/g, '<br>');
+}
+
+function previewReport(btn, type) {
+  const report = type === 'html' ? currentReport.html : currentReport.markdown;
+  if (!report) {
+    alert('No report available');
+    return;
+  }
+  
+  if (type === 'html') {
+    const newWindow = window.open();
+    newWindow.document.write(report);
+    newWindow.document.close();
+  } else {
+    const newWindow = window.open();
+    newWindow.document.write('<pre style="white-space: pre-wrap; font-family: monospace; padding: 2rem;">' + escapeHtml(report) + '</pre>');
+    newWindow.document.close();
+  }
+}
+
+function downloadReport(type) {
+  const report = type === 'html' ? currentReport.html : currentReport.markdown;
+  const ext = type === 'html' ? 'html' : 'md';
+  const mimeType = type === 'html' ? 'text/html' : 'text/markdown';
+  
+  if (!report) {
+    alert('No report available');
+    return;
+  }
+  
+  const blob = new Blob([report], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `security-report-${new Date().toISOString().split('T')[0]}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 ws.onopen = () => {
-  statusIndicator.className = 'status-indicator status-connected';
-  addMessage('system', '🟢 Connected to OWASP SmolAgent');
+  statusBadge.className = 'status-badge connected';
+  statusText.textContent = 'Connected';
+  addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
 };
 
 ws.onclose = () => {
-  statusIndicator.className = 'status-indicator status-disconnected';
-  addMessage('system', '🔴 Disconnected from server');
+  statusBadge.className = 'status-badge disconnected';
+  statusText.textContent = 'Disconnected';
+  addMessage('system', '🔴 Disconnected from server. Please refresh the page.');
 };
 
 ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
+  let data;
+  try {
+    data = JSON.parse(event.data);
+  } catch {
+    addMessage('agent', event.data);
+    return;
+  }
   
   if (data.type === 'progress') {
-    addMessage('progress', data.content);
+    // Update existing progress message or add new one
+    const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
+    if (existingProgress) {
+      existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
+    } else {
+      addMessage('progress', data.content);
+    }
   } else if (data.type === 'activity') {
     // Activity log update from agent steps
-    addActivity(data.activity_type, data.content, data.details);
+    addActivity(data.activity_type, data.title || '', data.content, data.details);
   } else if (data.type === 'final') {
     stopTimer();
+    // Remove progress message if exists
+    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+    if (progressMsg) progressMsg.remove();
     addMessage('agent', data.content);
-    addActivity('step', '✅ Task completed');
+    addActivity('tool-result', '✅ Task Completed', 'Agent has finished processing your request');
+  } else if (data.type === 'report') {
+    addMessage('report', data.content, { html: data.html, markdown: data.markdown });
+    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
   } else if (data.type === 'report_mode') {
     addMessage('system', data.content);
   } else {
@@ -574,15 +1156,62 @@ ws.onmessage = (event) => {
   }
 };
 
-function sendMessage() {
+async function sendMessage() {
   const content = messageInput.value.trim();
   if (!content) return;
   
-  addMessage('user', content);
+  // Build message with file names
+  let displayContent = content;
+  if (attachedFiles.length > 0) {
+    displayContent += '\\n📎 Attached: ' + attachedFiles.map(f => f.filename).join(', ');
+  }
+  addMessage('user', displayContent);
+  
   startTimer();
-  addActivity('step', '🚀 Starting task: ' + content.substring(0, 50) + '...');
-  ws.send(content);
+  addActivity('step', '🚀 Task Started', content.substring(0, 80) + (content.length > 80 ? '...' : ''));
+  
+  // Prepare message payload
+  const payload = {
+    content: content,
+    session_id: sessionId,
+    report_mode: reportCheckbox.checked,
+    files: attachedFiles.map(f => f.filename)
+  };
+  
+  // Upload files first if any
+  if (attachedFiles.length > 0) {
+    addActivity('tool', '📤 Uploading Files', `Uploading ${attachedFiles.length} file(s) for analysis`);
+    
+    for (const file of attachedFiles) {
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            filename: file.filename,
+            content: btoa(unescape(encodeURIComponent(file.content)))
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error('Upload failed');
+        }
+      } catch (err) {
+        addActivity('error', '❌ Upload Error', `Failed to upload ${file.filename}`);
+      }
+    }
+    
+    addActivity('tool-result', '✅ Files Uploaded', 'Files ready for analysis');
+  }
+  
+  // Send message via WebSocket
+  ws.send(JSON.stringify(payload));
+  
+  // Clear input and files
   messageInput.value = '';
+  attachedFiles = [];
+  renderAttachedFiles();
   
   // Auto-expand sidebar when task starts
   if (!sidebar.classList.contains('expanded')) {
@@ -593,7 +1222,10 @@ function sendMessage() {
 
 sendBtn.onclick = sendMessage;
 messageInput.onkeypress = (e) => {
-  if (e.key === 'Enter') sendMessage();
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
 };
 
 exportTxtBtn.onclick = () => {
@@ -611,18 +1243,26 @@ exportTxtBtn.onclick = () => {
 };
 
 clearBtn.onclick = () => {
-  if (confirm('Clear all chat history?')) {
+  if (confirm('Clear all chat history and attached files?')) {
     messagesDiv.innerHTML = '';
     chatHistory = [];
     activityLog.innerHTML = '';
     stepCount = 0;
     toolCount = 0;
+    attachedFiles = [];
+    renderAttachedFiles();
+    currentReport = { html: null, markdown: null };
     document.getElementById('stat-steps').textContent = '0';
     document.getElementById('stat-tools').textContent = '0';
     document.getElementById('stat-duration').textContent = '0s';
-    addMessage('system', 'Chat cleared');
+    addMessage('system', '🧹 Chat cleared - Ready for new session');
   }
 };
+
+// Expose functions globally for inline onclick handlers
+window.removeFile = removeFile;
+window.previewReport = previewReport;
+window.downloadReport = downloadReport;
 </script>
 </body>
 </html>
@@ -642,74 +1282,178 @@ async def ws_endpoint(ws: WebSocket):
     
     try:
         while True:
-            msg = await ws.receive_text()
+            raw_msg = await ws.receive_text()
+            
+            # Parse JSON message if possible
+            try:
+                msg_data = json.loads(raw_msg)
+            except json.JSONDecodeError:
+                msg_data = {"content": raw_msg}
+            
+            msg_content = msg_data.get("content", raw_msg)
+            session_id = msg_data.get("session_id", "default")
+            report_mode_enabled = msg_data.get("report_mode", False)
+            attached_files = msg_data.get("files", [])
             
             # Handle report mode toggle commands
-            if msg == "__REPORT_MODE_ON__":
-                result = enable_report_mode(
+            if msg_content == "__REPORT_MODE_ON__" or msg_data.get("action") == "report_mode_on":
+                enable_report_mode(
                     title="Security Assessment Report",
                     target="Target to be specified",
                     author="OWASP SmolAgent"
                 )
                 await ws.send_text(json.dumps({
                     "type": "report_mode",
-                    "content": "📋 Report Mode ENABLED - Findings will be collected for professional report generation."
+                    "content": "📋 Report Mode ENABLED - Professional report will be generated with findings."
                 }))
                 continue
             
-            if msg == "__REPORT_MODE_OFF__":
-                result = disable_report_mode()
+            if msg_content == "__REPORT_MODE_OFF__" or msg_data.get("action") == "report_mode_off":
+                disable_report_mode()
                 await ws.send_text(json.dumps({
                     "type": "report_mode", 
-                    "content": "📋 Report Mode DISABLED - Report data cleared."
+                    "content": "📋 Report Mode DISABLED"
                 }))
                 continue
+            
+            # Build message with file context
+            full_message = msg_content
+            if session_id in file_store and file_store[session_id]:
+                relevant_files = [f for f in file_store[session_id] if f["filename"] in attached_files]
+                if relevant_files:
+                    full_message += "\n\n--- ATTACHED FILES ---"
+                    for f in relevant_files:
+                        full_message += f"\n\n### File: {f['filename']}\n```\n{f['content'][:15000]}\n```"
+            
+            # Add report mode instruction
+            if report_mode_enabled:
+                full_message += """
+
+[IMPORTANT - REPORT MODE IS ENABLED]
+After completing your security assessment, you MUST generate a professional report:
+1. First call enable_report_mode() with proper title and target
+2. For each vulnerability found, call add_finding_to_report() with complete details
+3. Call set_executive_summary() with a management-level overview
+4. Call set_conclusion() with prioritized recommendations
+5. Finally call generate_html_report() to produce the final HTML report
+The report should be comprehensive and professional, suitable for executive stakeholders."""
             
             # Stream progress updates
             async def run_with_progress():
                 # Send initial progress
                 await ws.send_text(json.dumps({
+                    "type": "activity",
+                    "activity_type": "step",
+                    "title": "🚀 Task Started",
+                    "content": f"Processing: {msg_content[:100]}..."
+                }))
+                
+                await ws.send_text(json.dumps({
                     "type": "progress",
-                    "content": "🔄 Agent processing your request..."
+                    "content": "🔄 Agent analyzing your request..."
                 }))
                 
                 await ws.send_text(json.dumps({
                     "type": "activity",
                     "activity_type": "thinking",
-                    "content": "🧠 Analyzing request..."
+                    "title": "🧠 Planning Approach",
+                    "content": "Analyzing request and planning security assessment strategy..."
                 }))
                 
-                # Run agent in executor to avoid blocking
                 loop = asyncio.get_event_loop()
                 
-                step_counter = [0]
+                # Progress messages for long-running tasks
+                progress_updates = [
+                    ("🔍 Gathering intelligence...", "Collecting information from various sources"),
+                    ("🔧 Running security tools...", "Executing scanning and enumeration tools"),
+                    ("📊 Analyzing results...", "Processing tool outputs and identifying findings"),
+                    ("📝 Documenting findings...", "Recording vulnerabilities and evidence"),
+                    ("🎯 Finalizing assessment...", "Preparing final analysis and recommendations"),
+                ]
                 
-                # Custom step callback to stream activity
-                async def send_activity(activity_type, content, details=None):
-                    await ws.send_text(json.dumps({
-                        "type": "activity",
-                        "activity_type": activity_type,
-                        "content": content,
-                        "details": details
-                    }))
+                progress_idx = [0]
+                stop_progress = [False]
+                
+                async def send_periodic_updates():
+                    while not stop_progress[0]:
+                        await asyncio.sleep(8)
+                        if stop_progress[0]:
+                            break
+                        if progress_idx[0] < len(progress_updates):
+                            msg, detail = progress_updates[progress_idx[0]]
+                            await ws.send_text(json.dumps({
+                                "type": "progress",
+                                "content": msg
+                            }))
+                            await ws.send_text(json.dumps({
+                                "type": "activity",
+                                "activity_type": "step",
+                                "title": msg,
+                                "content": detail
+                            }))
+                            progress_idx[0] += 1
+                
+                progress_task = asyncio.create_task(send_periodic_updates())
                 
                 def agent_run_wrapper(user_msg):
-                    # Run the agent
                     return agent.run(user_msg)
                 
                 try:
-                    response = await loop.run_in_executor(executor, agent_run_wrapper, msg)
+                    response = await loop.run_in_executor(executor, agent_run_wrapper, full_message)
+                    stop_progress[0] = True
+                    progress_task.cancel()
+                    
+                    await ws.send_text(json.dumps({
+                        "type": "activity",
+                        "activity_type": "tool-result",
+                        "title": "✅ Analysis Complete",
+                        "content": "Agent has completed processing your request"
+                    }))
+                    
+                    # Check if we need to auto-generate report
+                    if report_mode_enabled and is_report_mode_enabled():
+                        if '<!DOCTYPE html>' not in str(response) and '<html' not in str(response):
+                            # Report was enabled but no HTML report in response - generate one
+                            await ws.send_text(json.dumps({
+                                "type": "activity",
+                                "activity_type": "tool",
+                                "title": "📋 Generating Report",
+                                "content": "Creating professional HTML security report..."
+                            }))
+                            
+                            html_report = generate_html_report()
+                            md_report = generate_markdown_report()
+                            
+                            # Send the text response first
+                            await ws.send_text(json.dumps({
+                                "type": "final",
+                                "content": response
+                            }))
+                            
+                            # Then send the report
+                            await ws.send_text(json.dumps({
+                                "type": "report",
+                                "content": "📋 Professional security report has been generated.",
+                                "html": html_report,
+                                "markdown": md_report
+                            }))
+                            return
                     
                     # Send final response
                     await ws.send_text(json.dumps({
                         "type": "final",
                         "content": response
                     }))
+                    
                 except Exception as e:
+                    stop_progress[0] = True
+                    progress_task.cancel()
+                    
                     await ws.send_text(json.dumps({
                         "type": "activity",
                         "activity_type": "error",
-                        "content": f"❌ Error: {str(e)}"
+                        "title": "❌ Error Occurred",
+                        "content": str(e)
                     }))
                     await ws.send_text(json.dumps({
                         "type": "final",
@@ -721,5 +1465,9 @@ async def ws_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         return
     except Exception as e:
-        await ws.send_text(json.dumps({"type": "final", "content": f"Error: {e}"}))
+        try:
+            await ws.send_text(json.dumps({"type": "final", "content": f"Error: {e}"}))
+        except:
+            pass
+
 """Run with: uvicorn app.main:app --reload"""

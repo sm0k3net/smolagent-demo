@@ -53,6 +53,7 @@ from app.tools.report_tools import (
     set_executive_summary,
     set_conclusion,
     generate_html_report,
+    generate_markdown_report,
     generate_pdf_report,
 )
 from app.config import get_settings
@@ -178,6 +179,7 @@ def build_owasp_agent() -> CodeAgent:
         set_executive_summary,
         set_conclusion,
         generate_html_report,
+        generate_markdown_report,
         generate_pdf_report,
     ])
     
