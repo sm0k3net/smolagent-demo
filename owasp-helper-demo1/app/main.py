@@ -6,8 +6,8 @@ from app.agents.owasp_agent import build_owasp_agent
 from app.tools.report_tools import (
     enable_report_mode, disable_report_mode, get_report_status,
     generate_html_report, generate_markdown_report,
-    is_report_mode_enabled, get_report_data, add_raw_data_to_report,
-    add_tool_usage, get_tools_used
+    is_report_mode_enabled, get_report_data, add_recon_data,
+    track_tool_usage, get_session_tools
 )
 import asyncio
 import json
