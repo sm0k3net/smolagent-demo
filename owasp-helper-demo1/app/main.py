@@ -2,6 +2,7 @@ from __future__ import annotations
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from enum import Enum
 from app.agents.owasp_agent import build_owasp_agent
 from app.tools.report_tools import (
     enable_report_mode, disable_report_mode, get_report_status,
@@ -20,6 +21,30 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
+
+# Task management enums and models
+class TaskStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    paused = "paused"
+    completed = "completed"
+    cancelled = "cancelled"
+    failed = "failed"
+
+
+class Task(BaseModel):
+    id: str
+    prompt: str
+    status: TaskStatus
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    result: Optional[str] = None
+    error: Optional[str] = None
+    tool_count: int = 0
+    step_count: int = 0
+
+
 app = FastAPI(title="OWASP SmolAgent")
 agent = None
 startup_lock = asyncio.Lock()
@@ -29,6 +54,7 @@ executor = ThreadPoolExecutor(max_workers=8)
 file_store: dict[str, list[dict]] = {}
 
 # Task management
+task_store: Dict[str, Task] = {}
 tasks_store: Dict[str, Dict[str, Any]] = {}
 task_queues: Dict[str, queue.Queue] = {}
 
@@ -85,37 +111,36 @@ async def update_api_key(update: APIKeyUpdate):
 # Task management endpoints
 @app.get("/api/tasks")
 async def get_tasks():
-    """Get all active tasks."""
-    return JSONResponse(list(tasks_store.values()))
+    """Get all tasks."""
+    tasks = [task.model_dump() for task in task_store.values()]
+    # Convert datetime to ISO strings for JSON serialization
+    for task in tasks:
+        if task.get("created_at"):
+            task["created_at"] = task["created_at"].isoformat()
+        if task.get("started_at"):
+            task["started_at"] = task["started_at"].isoformat()
+        if task.get("completed_at"):
+            task["completed_at"] = task["completed_at"].isoformat()
+    return JSONResponse(tasks)
 
-@app.post("/api/tasks/{task_id}/pause")
-async def pause_task(task_id: str):
-    """Pause a running task."""
-    if task_id in tasks_store:
-        tasks_store[task_id]["status"] = "paused"
-        if task_id in task_queues:
-            task_queues[task_id].put({"action": "pause"})
-        return JSONResponse({"success": True, "task_id": task_id, "status": "paused"})
-    return JSONResponse({"error": "Task not found"}, status_code=404)
-
-@app.post("/api/tasks/{task_id}/resume")
-async def resume_task(task_id: str):
-    """Resume a paused task."""
-    if task_id in tasks_store:
-        tasks_store[task_id]["status"] = "running"
-        if task_id in task_queues:
-            task_queues[task_id].put({"action": "resume"})
-        return JSONResponse({"success": True, "task_id": task_id, "status": "running"})
-    return JSONResponse({"error": "Task not found"}, status_code=404)
-
-@app.post("/api/tasks/{task_id}/cancel")
+@app.delete("/api/tasks/{task_id}")
 async def cancel_task(task_id: str):
     """Cancel a running task."""
-    if task_id in tasks_store:
-        tasks_store[task_id]["status"] = "cancelled"
-        if task_id in task_queues:
-            task_queues[task_id].put({"action": "cancel"})
+    if task_id in task_store:
+        task_store[task_id].status = TaskStatus.cancelled
         return JSONResponse({"success": True, "task_id": task_id, "status": "cancelled"})
+    return JSONResponse({"error": "Task not found"}, status_code=404)
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str):
+    """Pause/resume a task."""
+    if task_id in task_store:
+        task = task_store[task_id]
+        if task.status == TaskStatus.paused:
+            task.status = TaskStatus.running
+        elif task.status == TaskStatus.running:
+            task.status = TaskStatus.paused
+        return JSONResponse({"success": True, "task_id": task_id, "status": task.status.value})
     return JSONResponse({"error": "Task not found"}, status_code=404)
 
 @app.on_event("startup")
@@ -200,10 +225,13 @@ HTML = """
   --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--darker);
-  min-height: 100vh;
   display: flex;
   flex-direction: column;
   color: var(--light);
@@ -219,6 +247,7 @@ header {
   gap: 1rem;
   z-index: 100;
   backdrop-filter: blur(10px);
+  flex-shrink: 0;
 }
 .logo-section {
   display: flex;
@@ -651,6 +680,7 @@ h1 {
 }
 .api-key-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
@@ -660,19 +690,20 @@ h1 {
   border: 1px solid rgba(255,255,255,0.1);
 }
 .api-key-label {
-  min-width: 100px;
-  font-size: 0.8rem;
+  min-width: 80px;
+  font-size: 0.75rem;
   color: var(--gray-300);
   font-weight: 500;
 }
 .api-key-input {
   flex: 1;
-  padding: 0.5rem 0.75rem;
+  min-width: 100px;
+  padding: 0.4rem 0.6rem;
   background: var(--darker);
   border: 1px solid rgba(255,255,255,0.15);
   border-radius: 6px;
   color: var(--light);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-family: 'JetBrains Mono', monospace;
 }
 .api-key-input:focus {
@@ -680,13 +711,14 @@ h1 {
   border-color: var(--primary);
 }
 .api-key-btn {
-  padding: 0.5rem 0.75rem;
+  padding: 0.35rem 0.5rem;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   transition: all 0.2s;
   font-family: inherit;
+  flex-shrink: 0;
 }
 .api-key-btn-save {
   background: var(--success);
@@ -830,10 +862,11 @@ main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 1.5rem;
+  padding: 1rem;
   gap: 1rem;
   overflow: hidden;
   background: linear-gradient(180deg, var(--darker) 0%, #1a1f2e 100%);
+  min-height: 0;
 }
 #chat-container {
   background: var(--dark);
@@ -844,6 +877,7 @@ main {
   flex: 1;
   overflow: hidden;
   border: 1px solid rgba(255,255,255,0.1);
+  min-height: 0;
 }
 #messages {
   flex: 1;
@@ -852,6 +886,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 0;
 }
 #messages::-webkit-scrollbar {
   width: 8px;
@@ -980,12 +1015,20 @@ main {
 
 /* Input area */
 #input-area {
-  padding: 1.25rem;
+  padding: 1rem;
   background: rgba(0,0,0,0.2);
   border-top: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+.input-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 .input-row {
   display: flex;
@@ -998,11 +1041,10 @@ main {
 }
 #message-input {
   width: 100%;
-  padding: 1rem 1.25rem;
-  padding-right: 50px;
+  padding: 0.875rem 1rem;
   border: 2px solid rgba(255,255,255,0.1);
   border-radius: 12px;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   background: var(--dark);
   color: var(--light);
   transition: all 0.2s;
@@ -1015,6 +1057,52 @@ main {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* Background task checkbox */
+.background-task-toggle {
+  display: flex;
+  align-items: center;
+}
+.checkbox-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--gray-400);
+  user-select: none;
+}
+.checkbox-wrapper input[type="checkbox"] {
+  display: none;
+}
+.checkmark {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--gray-500);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.checkbox-wrapper input:checked + .checkmark {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.checkbox-wrapper input:checked + .checkmark::after {
+  content: '✓';
+  color: white;
+  font-size: 0.75rem;
+}
+.checkbox-wrapper:hover .checkmark {
+  border-color: var(--primary-light);
+}
+.checkbox-label {
+  transition: color 0.2s;
+}
+.checkbox-wrapper:hover .checkbox-label {
+  color: var(--gray-200);
 }
 
 /* File attachment */
@@ -1263,16 +1351,25 @@ main {
     <div id="chat-container">
       <div id="messages"></div>
       <div id="input-area">
-        <div class="file-attachment-area">
-          <div class="file-input-wrapper">
-            <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini">
-            <label for="file-input" class="file-input-btn">📎 Attach Files</label>
+        <div class="input-options">
+          <div class="file-attachment-area">
+            <div class="file-input-wrapper">
+              <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini">
+              <label for="file-input" class="file-input-btn">📎 Attach Files</label>
+            </div>
+            <div id="attached-files"></div>
           </div>
-          <div id="attached-files"></div>
+          <div class="background-task-toggle">
+            <label class="checkbox-wrapper">
+              <input type="checkbox" id="background-task-checkbox">
+              <span class="checkmark"></span>
+              <span class="checkbox-label">🔄 Run as Background Task</span>
+            </label>
+          </div>
         </div>
         <div class="input-row">
           <div class="input-wrapper">
-            <input type="text" id="message-input" placeholder="Ask about OWASP, run security scans, classify vulnerabilities..." autocomplete="off">
+            <input type="text" id="message-input" placeholder="Ask about OWASP, run security scans, use specific tools (e.g., 'run nmap against target.com')..." autocomplete="off">
           </div>
           <button class="btn btn-primary" id="send-btn">
             <span>Send</span>
@@ -1298,6 +1395,7 @@ const reportToggle = document.getElementById('report-toggle');
 const reportCheckbox = document.getElementById('report-mode-checkbox');
 const fileInput = document.getElementById('file-input');
 const attachedFilesDiv = document.getElementById('attached-files');
+const backgroundTaskCheckbox = document.getElementById('background-task-checkbox');
 
 // Stats
 let stepCount = 0;
@@ -1784,10 +1882,15 @@ async function sendMessage() {
   const content = messageInput.value.trim();
   if (!content) return;
   
+  const isBackgroundTask = backgroundTaskCheckbox.checked;
+  
   // Build message with file names
   let displayContent = content;
   if (attachedFiles.length > 0) {
     displayContent += '\\n📎 Attached: ' + attachedFiles.map(f => f.filename).join(', ');
+  }
+  if (isBackgroundTask) {
+    displayContent = '🔄 [Background Task] ' + displayContent;
   }
   addMessage('user', displayContent);
   
@@ -1799,6 +1902,7 @@ async function sendMessage() {
     content: content,
     session_id: sessionId,
     report_mode: reportCheckbox.checked,
+    background_task: isBackgroundTask,
     files: attachedFiles.map(f => f.filename)
   };
   
@@ -1836,6 +1940,17 @@ async function sendMessage() {
   messageInput.value = '';
   attachedFiles = [];
   renderAttachedFiles();
+  
+  // Reset background task checkbox
+  if (isBackgroundTask) {
+    backgroundTaskCheckbox.checked = false;
+    // Switch to Tasks tab to show the new task
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('.sidebar-tab[data-tab="tasks"]').classList.add('active');
+    document.getElementById('tab-tasks').classList.add('active');
+    startTaskPolling();
+  }
   
   // Auto-expand sidebar when task starts
   if (!sidebar.classList.contains('expanded')) {
@@ -1922,6 +2037,7 @@ async def ws_endpoint(ws: WebSocket):
             session_id = msg_data.get("session_id", "default")
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
+            background_task = msg_data.get("background_task", False)
             
             # Handle report mode toggle commands
             if msg_content == "__REPORT_MODE_ON__" or msg_data.get("action") == "report_mode_on":
@@ -1965,6 +2081,70 @@ After completing your security assessment, you MUST generate a professional repo
 4. Call set_conclusion() with prioritized recommendations
 5. Finally call generate_html_report() to produce the final HTML report
 The report should be comprehensive and professional, suitable for executive stakeholders."""
+            
+            # Handle background task
+            if background_task:
+                task_id = str(uuid.uuid4())
+                new_task = Task(
+                    id=task_id,
+                    prompt=msg_content[:200],
+                    status=TaskStatus.pending,
+                    created_at=datetime.now(),
+                    started_at=None,
+                    completed_at=None,
+                    result=None,
+                    error=None,
+                    tool_count=0,
+                    step_count=0
+                )
+                task_store[task_id] = new_task
+                
+                # Notify client that task was created
+                await ws.send_text(json.dumps({
+                    "type": "task_created",
+                    "task_id": task_id,
+                    "content": f"🔄 Background task created. Check the Tasks tab to monitor progress."
+                }))
+                
+                # Run task in background thread
+                def run_background_task():
+                    try:
+                        task_store[task_id].status = TaskStatus.running
+                        task_store[task_id].started_at = datetime.now()
+                        
+                        step_count = 0
+                        tool_count = 0
+                        final_result = None
+                        
+                        for event in agent.run(full_message, stream=True):
+                            # Check for cancellation
+                            if task_store[task_id].status == TaskStatus.cancelled:
+                                return
+                            
+                            step_count += 1
+                            
+                            if hasattr(event, 'tool_calls') and event.tool_calls:
+                                for _ in event.tool_calls:
+                                    tool_count += 1
+                            
+                            if hasattr(event, 'output') and event.output is not None:
+                                final_result = event.output
+                            
+                            # Update task
+                            task_store[task_id].step_count = step_count
+                            task_store[task_id].tool_count = tool_count
+                        
+                        task_store[task_id].status = TaskStatus.completed
+                        task_store[task_id].completed_at = datetime.now()
+                        task_store[task_id].result = str(final_result) if final_result else "Task completed"
+                        
+                    except Exception as e:
+                        task_store[task_id].status = TaskStatus.failed
+                        task_store[task_id].error = str(e)
+                        task_store[task_id].completed_at = datetime.now()
+                
+                threading.Thread(target=run_background_task, daemon=True).start()
+                continue  # Don't block, move to next message
             
             # Stream real agent execution with proper step callbacks
             async def run_with_real_streaming():

@@ -43,6 +43,10 @@ from app.tools.pentest_tools import (
     subfinder_scan,
     httpx_probe,
     nuclei_scan,
+    searchsploit_search,
+    searchsploit_cve,
+    searchsploit_exact,
+    searchsploit_nmap,
 )
 from app.tools.report_tools import (
     enable_report_mode,
@@ -167,6 +171,10 @@ def build_owasp_agent() -> CodeAgent:
         subfinder_scan,
         httpx_probe,
         nuclei_scan,
+        searchsploit_search,
+        searchsploit_cve,
+        searchsploit_exact,
+        searchsploit_nmap,
     ])
     
     # Report generation tools
