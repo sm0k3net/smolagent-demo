@@ -160,12 +160,10 @@ When the user asks to "list tools", "show available tools", "what tools do you h
 - `nuclei_scan` - Template-based vulnerability detection
 - `zap_baseline_scan` - OWASP ZAP automated scan
 - `sslyze_scan` / `testssl_scan` - SSL/TLS analysis
-- `wpscan_scan` - WordPress vulnerability scanning
+- `wpscan_scan` / `wpscan_full` / `wpscan_password_attack` - WordPress vulnerability scanning
 - `sqlmap_scan` / `sqlmap_dump` - SQL injection detection and exploitation
-- `searchsploit_search` / `searchsploit_cve` / `searchsploit_exact` - Exploit database search
-- `searchsploit_nmap` - Analyze nmap XML for exploits
-- `ffuf_scan` - Web fuzzing and content discovery
-- `ffuf_vhost` - Virtual host discovery
+- `searchsploit_search` / `searchsploit_examine` / `searchsploit_copy` - Exploit database search
+- `ffuf_scan` / `ffuf_vhost` - Web fuzzing and content discovery
 
 ## Browser Automation:
 - `browse_page` - Navigate and extract content
