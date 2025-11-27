@@ -6,29 +6,117 @@ from app.agents.owasp_agent import build_owasp_agent
 from app.tools.report_tools import (
     enable_report_mode, disable_report_mode, get_report_status,
     generate_html_report, generate_markdown_report,
-    is_report_mode_enabled, get_report_data
+    is_report_mode_enabled, get_report_data, add_raw_data_to_report,
+    add_tool_usage, get_tools_used
 )
 import asyncio
 import json
 import base64
 import queue
 import threading
+import uuid
+import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Optional, Dict, Any
 
 app = FastAPI(title="OWASP SmolAgent")
 agent = None
 startup_lock = asyncio.Lock()
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=8)
 
 # File storage for sessions
 file_store: dict[str, list[dict]] = {}
+
+# Task management
+tasks_store: Dict[str, Dict[str, Any]] = {}
+task_queues: Dict[str, queue.Queue] = {}
+
+# API Keys storage (in-memory, should be in secure storage in production)
+api_keys_store: Dict[str, str] = {}
 
 class FileUpload(BaseModel):
     session_id: str
     filename: str
     content: str  # Base64 encoded content
+
+class APIKeyUpdate(BaseModel):
+    service: str
+    api_key: str
+
+@app.on_event("startup")
+async def startup():
+    global agent, api_keys_store
+    async with startup_lock:
+        if agent is None:
+            # Load any existing API keys from environment
+            api_keys_store = {
+                "SHODAN_API_KEY": os.getenv("SHODAN_API_KEY", ""),
+                "VIRUSTOTAL_API_KEY": os.getenv("VIRUSTOTAL_API_KEY", ""),
+                "HUNTER_API_KEY": os.getenv("HUNTER_API_KEY", ""),
+                "SECURITYTRAILS_API_KEY": os.getenv("SECURITYTRAILS_API_KEY", ""),
+                "HIBP_API_KEY": os.getenv("HIBP_API_KEY", ""),
+            }
+            agent = build_owasp_agent()
+
+# API Keys management endpoints
+@app.get("/api/keys")
+async def get_api_keys():
+    """Get list of configured API keys (masked)."""
+    masked = {}
+    for key, value in api_keys_store.items():
+        if value:
+            masked[key] = value[:4] + "..." + value[-4:] if len(value) > 8 else "****"
+        else:
+            masked[key] = ""
+    return JSONResponse(masked)
+
+@app.post("/api/keys")
+async def update_api_key(update: APIKeyUpdate):
+    """Update an API key."""
+    global api_keys_store
+    if update.service in api_keys_store:
+        api_keys_store[update.service] = update.api_key
+        # Also update environment variable for tools to use
+        os.environ[update.service] = update.api_key
+        return JSONResponse({"success": True, "service": update.service})
+    return JSONResponse({"error": "Unknown service"}, status_code=400)
+
+# Task management endpoints
+@app.get("/api/tasks")
+async def get_tasks():
+    """Get all active tasks."""
+    return JSONResponse(list(tasks_store.values()))
+
+@app.post("/api/tasks/{task_id}/pause")
+async def pause_task(task_id: str):
+    """Pause a running task."""
+    if task_id in tasks_store:
+        tasks_store[task_id]["status"] = "paused"
+        if task_id in task_queues:
+            task_queues[task_id].put({"action": "pause"})
+        return JSONResponse({"success": True, "task_id": task_id, "status": "paused"})
+    return JSONResponse({"error": "Task not found"}, status_code=404)
+
+@app.post("/api/tasks/{task_id}/resume")
+async def resume_task(task_id: str):
+    """Resume a paused task."""
+    if task_id in tasks_store:
+        tasks_store[task_id]["status"] = "running"
+        if task_id in task_queues:
+            task_queues[task_id].put({"action": "resume"})
+        return JSONResponse({"success": True, "task_id": task_id, "status": "running"})
+    return JSONResponse({"error": "Task not found"}, status_code=404)
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cancel a running task."""
+    if task_id in tasks_store:
+        tasks_store[task_id]["status"] = "cancelled"
+        if task_id in task_queues:
+            task_queues[task_id].put({"action": "cancel"})
+        return JSONResponse({"success": True, "task_id": task_id, "status": "cancelled"})
+    return JSONResponse({"error": "Task not found"}, status_code=404)
 
 @app.on_event("startup")
 async def startup():
@@ -298,6 +386,7 @@ h1 {
   display: flex;
   max-width: 100%;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* Sidebar */
@@ -309,6 +398,8 @@ h1 {
   display: flex;
   flex-direction: column;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  height: 100%;
+  overflow: hidden;
 }
 #sidebar.expanded {
   width: 400px;
@@ -325,10 +416,45 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 .sidebar-toggle:hover {
   color: var(--primary-light);
   background: rgba(99, 102, 241, 0.1);
+}
+/* Sidebar Tabs */
+.sidebar-tabs {
+  display: none;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  flex-shrink: 0;
+}
+#sidebar.expanded .sidebar-tabs {
+  display: flex;
+}
+.sidebar-tab {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--gray-400);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-family: inherit;
+}
+.sidebar-tab:hover {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--gray-200);
+}
+.sidebar-tab.active {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--primary-light);
+  border-bottom: 2px solid var(--primary);
 }
 .sidebar-header {
   padding: 1rem 1.25rem;
@@ -338,6 +464,7 @@ h1 {
   color: var(--primary-light);
   display: none;
   font-size: 0.9rem;
+  flex-shrink: 0;
 }
 #sidebar.expanded .sidebar-header {
   display: flex;
@@ -347,14 +474,24 @@ h1 {
 .header-icon {
   font-size: 1.1rem;
 }
+/* Tab Content Areas */
+.tab-content {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.tab-content.active {
+  display: flex;
+  flex-direction: column;
+}
 #activity-log {
   flex: 1;
   overflow-y: auto;
   padding: 0;
-  display: none;
+  min-height: 0;
 }
 #sidebar.expanded #activity-log {
-  display: block;
   padding: 1rem;
 }
 #activity-log::-webkit-scrollbar {
@@ -366,6 +503,218 @@ h1 {
 #activity-log::-webkit-scrollbar-thumb {
   background: var(--gray-600);
   border-radius: 3px;
+}
+/* Tasks Tab */
+#tasks-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  min-height: 0;
+}
+#tasks-list::-webkit-scrollbar {
+  width: 6px;
+}
+#tasks-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+#tasks-list::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.task-item {
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  animation: slideIn 0.3s ease;
+}
+.task-item.running {
+  border-color: var(--secondary);
+  background: rgba(14, 165, 233, 0.1);
+}
+.task-item.completed {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+.task-item.paused {
+  border-color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+.task-item.cancelled, .task-item.failed {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.5rem;
+}
+.task-title {
+  font-weight: 600;
+  color: var(--gray-200);
+  font-size: 0.85rem;
+  flex: 1;
+  margin-right: 0.5rem;
+  word-break: break-word;
+}
+.task-status {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 500;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.task-status.running { background: var(--secondary); color: white; }
+.task-status.completed { background: var(--success); color: white; }
+.task-status.paused { background: var(--warning); color: white; }
+.task-status.cancelled, .task-status.failed { background: var(--danger); color: white; }
+.task-status.pending { background: var(--gray-600); color: white; }
+.task-meta {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  margin-bottom: 0.75rem;
+}
+.task-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.task-btn {
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.task-btn-pause {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning);
+}
+.task-btn-pause:hover {
+  background: var(--warning);
+  color: white;
+}
+.task-btn-cancel {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+.task-btn-cancel:hover {
+  background: var(--danger);
+  color: white;
+}
+.task-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.no-tasks {
+  text-align: center;
+  color: var(--gray-500);
+  padding: 2rem;
+  font-size: 0.9rem;
+}
+/* Settings Tab */
+#settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  min-height: 0;
+}
+#settings-content::-webkit-scrollbar {
+  width: 6px;
+}
+#settings-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+#settings-content::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.settings-section {
+  margin-bottom: 1.5rem;
+}
+.settings-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--gray-200);
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.api-key-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.api-key-label {
+  min-width: 100px;
+  font-size: 0.8rem;
+  color: var(--gray-300);
+  font-weight: 500;
+}
+.api-key-input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--darker);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.api-key-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.api-key-btn {
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.api-key-btn-save {
+  background: var(--success);
+  color: white;
+}
+.api-key-btn-save:hover {
+  background: #059669;
+}
+.api-key-btn-delete {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+.api-key-btn-delete:hover {
+  background: var(--danger);
+  color: white;
+}
+.api-key-status {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+.api-key-status.configured {
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--success);
+}
+.api-key-status.not-configured {
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--gray-400);
 }
 .activity-item {
   padding: 0.875rem 1rem;
@@ -734,11 +1083,8 @@ main {
   padding: 1rem;
   background: rgba(0,0,0,0.2);
   border-top: 1px solid rgba(255,255,255,0.1);
-  display: none;
   font-size: 0.8rem;
-}
-#sidebar.expanded .sidebar-stats {
-  display: block;
+  flex-shrink: 0;
 }
 .stats-grid {
   display: grid;
@@ -811,24 +1157,103 @@ main {
   </div>
 </header>
 <div class="main-wrapper">
-  <!-- Expandable Sidebar for Agent Activity -->
+  <!-- Expandable Sidebar with Tabs -->
   <div id="sidebar">
-    <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Activity Log">📊</button>
-    <div class="sidebar-header"><span class="header-icon">🔍</span> Agent Activity Monitor</div>
-    <div id="activity-log"></div>
-    <div class="sidebar-stats">
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="stat-value" id="stat-steps">0</div>
-          <div class="stat-label">Steps</div>
+    <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Sidebar">📊</button>
+    
+    <!-- Sidebar Tabs -->
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" data-tab="activity">🔍 Activity</button>
+      <button class="sidebar-tab" data-tab="tasks">📋 Tasks</button>
+      <button class="sidebar-tab" data-tab="settings">⚙️ Settings</button>
+    </div>
+    
+    <!-- Activity Tab Content -->
+    <div class="tab-content active" id="tab-activity">
+      <div class="sidebar-header"><span class="header-icon">🔍</span> Agent Activity Monitor</div>
+      <div id="activity-log"></div>
+      <div class="sidebar-stats">
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-value" id="stat-steps">0</div>
+            <div class="stat-label">Steps</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-tools">0</div>
+            <div class="stat-label">Tools</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-duration">0s</div>
+            <div class="stat-label">Duration</div>
+          </div>
         </div>
-        <div class="stat-item">
-          <div class="stat-value" id="stat-tools">0</div>
-          <div class="stat-label">Tools</div>
+      </div>
+    </div>
+    
+    <!-- Tasks Tab Content -->
+    <div class="tab-content" id="tab-tasks">
+      <div class="sidebar-header"><span class="header-icon">📋</span> Running Tasks</div>
+      <div id="tasks-list">
+        <div class="no-tasks">No active tasks</div>
+      </div>
+    </div>
+    
+    <!-- Settings Tab Content -->
+    <div class="tab-content" id="tab-settings">
+      <div class="sidebar-header"><span class="header-icon">⚙️</span> API Configuration</div>
+      <div id="settings-content">
+        <div class="settings-section">
+          <div class="settings-section-title">🔑 API Keys</div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">Shodan</span>
+            <input type="password" class="api-key-input" id="api-key-shodan" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('shodan')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('shodan')">🗑️</button>
+          </div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">VirusTotal</span>
+            <input type="password" class="api-key-input" id="api-key-virustotal" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('virustotal')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('virustotal')">🗑️</button>
+          </div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">Hunter.io</span>
+            <input type="password" class="api-key-input" id="api-key-hunter" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('hunter')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('hunter')">🗑️</button>
+          </div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">SecurityTrails</span>
+            <input type="password" class="api-key-input" id="api-key-securitytrails" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('securitytrails')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('securitytrails')">🗑️</button>
+          </div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">Censys</span>
+            <input type="password" class="api-key-input" id="api-key-censys" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('censys')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('censys')">🗑️</button>
+          </div>
+          
+          <div class="api-key-item">
+            <span class="api-key-label">AlienVault OTX</span>
+            <input type="password" class="api-key-input" id="api-key-alienvault" placeholder="Enter API key...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('alienvault')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('alienvault')">🗑️</button>
+          </div>
         </div>
-        <div class="stat-item">
-          <div class="stat-value" id="stat-duration">0s</div>
-          <div class="stat-label">Duration</div>
+        
+        <div class="settings-section">
+          <div class="settings-section-title">📝 Note</div>
+          <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
+            API keys are stored in memory and will be cleared when the server restarts. 
+            Configure these keys to enable advanced OSINT and security scanning features.
+          </p>
         </div>
       </div>
     </div>
@@ -888,11 +1313,203 @@ let chatHistory = [];
 let currentReport = { html: null, markdown: null };
 const ws = new WebSocket(`ws://${location.host}/ws`);
 
+// Task store for UI
+let taskStore = {};
+let taskRefreshInterval = null;
+
 // Sidebar toggle
 sidebarToggle.onclick = () => {
   sidebar.classList.toggle('expanded');
   sidebarToggle.textContent = sidebar.classList.contains('expanded') ? '◀' : '📊';
 };
+
+// Sidebar tabs
+document.querySelectorAll('.sidebar-tab').forEach(tab => {
+  tab.onclick = () => {
+    // Remove active from all tabs and content
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    
+    // Add active to clicked tab
+    tab.classList.add('active');
+    const tabId = tab.getAttribute('data-tab');
+    document.getElementById('tab-' + tabId).classList.add('active');
+    
+    // Start/stop task polling based on tab
+    if (tabId === 'tasks') {
+      startTaskPolling();
+    } else {
+      stopTaskPolling();
+    }
+    
+    // Load API keys when settings tab is opened
+    if (tabId === 'settings') {
+      loadApiKeys();
+    }
+  };
+});
+
+// Task management functions
+function startTaskPolling() {
+  if (taskRefreshInterval) return;
+  refreshTasks();
+  taskRefreshInterval = setInterval(refreshTasks, 2000);
+}
+
+function stopTaskPolling() {
+  if (taskRefreshInterval) {
+    clearInterval(taskRefreshInterval);
+    taskRefreshInterval = null;
+  }
+}
+
+async function refreshTasks() {
+  try {
+    const response = await fetch('/api/tasks');
+    const tasks = await response.json();
+    taskStore = {};
+    tasks.forEach(t => taskStore[t.id] = t);
+    renderTasks();
+  } catch (err) {
+    console.error('Failed to refresh tasks:', err);
+  }
+}
+
+function renderTasks() {
+  const tasksList = document.getElementById('tasks-list');
+  const tasks = Object.values(taskStore);
+  
+  if (tasks.length === 0) {
+    tasksList.innerHTML = '<div class="no-tasks">No active tasks</div>';
+    return;
+  }
+  
+  // Sort by created_at descending
+  tasks.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  
+  tasksList.innerHTML = tasks.map(task => {
+    const isActive = ['pending', 'running', 'paused'].includes(task.status);
+    const createdAt = new Date(task.created_at).toLocaleTimeString();
+    const truncatedPrompt = task.prompt.length > 50 ? task.prompt.substring(0, 50) + '...' : task.prompt;
+    
+    return `
+      <div class="task-item ${task.status}">
+        <div class="task-header">
+          <span class="task-title">${escapeHtml(truncatedPrompt)}</span>
+          <span class="task-status ${task.status}">${task.status}</span>
+        </div>
+        <div class="task-meta">
+          Created: ${createdAt} | Steps: ${task.step_count} | Tools: ${task.tool_count}
+        </div>
+        ${isActive ? `
+        <div class="task-actions">
+          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')" ${task.status === 'paused' ? 'disabled' : ''}>
+            ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
+          </button>
+          <button class="task-btn task-btn-cancel" onclick="cancelTask('${task.id}')">
+            ❌ Cancel
+          </button>
+        </div>
+        ` : ''}
+        ${task.error ? `<div class="task-error" style="color: var(--danger); font-size: 0.75rem; margin-top: 0.5rem;">${escapeHtml(task.error)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+async function pauseTask(taskId) {
+  try {
+    const task = taskStore[taskId];
+    const action = task?.status === 'paused' ? 'resume' : 'pause';
+    await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    refreshTasks();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to pause task: ${err.message}`);
+  }
+}
+
+async function cancelTask(taskId) {
+  if (!confirm('Are you sure you want to cancel this task?')) return;
+  try {
+    await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+    refreshTasks();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to cancel task: ${err.message}`);
+  }
+}
+
+// API Key management functions
+async function loadApiKeys() {
+  try {
+    const response = await fetch('/api/settings/keys');
+    const keys = await response.json();
+    
+    // Clear all inputs and show which are configured
+    document.querySelectorAll('.api-key-input').forEach(input => {
+      const service = input.id.replace('api-key-', '');
+      if (keys[service]) {
+        input.value = '••••••••••••••••';
+        input.setAttribute('data-configured', 'true');
+      } else {
+        input.value = '';
+        input.removeAttribute('data-configured');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to load API keys:', err);
+  }
+}
+
+async function saveApiKey(service) {
+  const input = document.getElementById('api-key-' + service);
+  const value = input.value.trim();
+  
+  if (!value || value === '••••••••••••••••') {
+    addMessage('system', `⚠️ Please enter a valid API key for ${service}`);
+    return;
+  }
+  
+  try {
+    await fetch('/api/settings/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, key: value })
+    });
+    input.value = '••••••••••••••••';
+    input.setAttribute('data-configured', 'true');
+    addMessage('system', `✅ ${service} API key saved successfully`);
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to save API key: ${err.message}`);
+  }
+}
+
+async function deleteApiKey(service) {
+  if (!confirm(`Are you sure you want to delete the ${service} API key?`)) return;
+  
+  try {
+    await fetch(`/api/settings/keys/${service}`, { method: 'DELETE' });
+    const input = document.getElementById('api-key-' + service);
+    input.value = '';
+    input.removeAttribute('data-configured');
+    addMessage('system', `🗑️ ${service} API key deleted`);
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to delete API key: ${err.message}`);
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 // Report mode toggle
 reportCheckbox.onchange = () => {
@@ -1270,6 +1887,10 @@ clearBtn.onclick = () => {
 window.removeFile = removeFile;
 window.previewReport = previewReport;
 window.downloadReport = downloadReport;
+window.pauseTask = pauseTask;
+window.cancelTask = cancelTask;
+window.saveApiKey = saveApiKey;
+window.deleteApiKey = deleteApiKey;
 </script>
 </body>
 </html>

@@ -9,6 +9,22 @@ from smolagents import tool
 # Global state for report mode
 _REPORT_MODE_ENABLED = False
 _CURRENT_REPORT_DATA: dict = {}
+# Track all tools used during the session (even outside report mode)
+_SESSION_TOOLS_USED: set = set()
+
+
+def track_tool_usage(tool_name: str):
+    """Track tool usage for the session (called by other tools)."""
+    global _SESSION_TOOLS_USED, _CURRENT_REPORT_DATA
+    _SESSION_TOOLS_USED.add(tool_name)
+    if _REPORT_MODE_ENABLED and _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["tools"].add(tool_name)
+
+
+def get_session_tools() -> set:
+    """Get all tools used in the current session."""
+    global _SESSION_TOOLS_USED
+    return _SESSION_TOOLS_USED.copy()
 
 
 def _get_report_template_html() -> str:
@@ -131,12 +147,63 @@ def _get_report_template_html() -> str:
             font-size: 0.8rem;
             margin: 0.25rem;
         }
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .tool-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .tool-card .tool-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .tool-card .tool-name { font-weight: 600; color: #495057; }
+        .recon-section { background: #e8f4fd; border-left: 4px solid #0d6efd; }
+        .recon-data-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        .recon-data-card {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .recon-data-header {
+            background: #0d6efd;
+            color: white;
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+        }
+        .recon-data-count { background: rgba(255,255,255,0.2); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+        .recon-data-list {
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+        .recon-data-list code {
+            display: block;
+            padding: 0.3rem 0.5rem;
+            font-size: 0.8rem;
+            border-bottom: 1px solid #eee;
+            word-break: break-all;
+        }
+        .recon-data-list code:last-child { border-bottom: none; }
         .methodology { background: #fff3cd; border-left: 4px solid #ffc107; }
         .conclusion { background: #d4edda; border-left: 4px solid #28a745; }
         @media print {
             .container { max-width: 100%; }
             .section { break-inside: avoid; }
             .finding { break-inside: avoid; }
+            .recon-data-list { max-height: none; }
         }
     </style>
 </head>
@@ -189,10 +256,9 @@ def _get_report_template_html() -> str:
             
             <h3>Testing Methodology</h3>
             <p>{{methodology}}</p>
-            
-            <h3>Tools Used</h3>
-            <div>{{tools_used}}</div>
         </div>
+        
+        {{recon_section}}
         
         <div class="section">
             <h2>🔍 Detailed Findings</h2>
@@ -202,6 +268,14 @@ def _get_report_template_html() -> str:
         <div class="section conclusion">
             <h2>📝 Conclusion & Recommendations</h2>
             <p>{{conclusion}}</p>
+        </div>
+        
+        <div class="section">
+            <h2>🛠️ Tools Used</h2>
+            <p>The following tools were used during this assessment:</p>
+            <div class="tools-grid">
+                {{tools_used}}
+            </div>
         </div>
         
         <div class="section">
@@ -403,12 +477,142 @@ def set_conclusion(conclusion: str) -> str:
 
 
 @tool
+def add_recon_data(
+    data_type: str,
+    items: str,
+    source_tool: str | None = None
+) -> str:
+    """Add reconnaissance data (subdomains, IPs, emails, etc.) to the report.
+    Use this to store COMPLETE raw data that should not be truncated in the report.
+
+    Args:
+        data_type: Type of data (subdomains, ip_addresses, emails, dns_records, ports, technologies, directories, endpoints).
+        items: Newline-separated list of items OR JSON array string.
+        source_tool: Tool that discovered this data (e.g., 'subfinder', 'nmap', 'whois').
+    Returns: Confirmation with count of items added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    # Parse items - support both newline-separated and JSON array
+    if items.strip().startswith('['):
+        try:
+            item_list = json.loads(items)
+        except:
+            item_list = [i.strip() for i in items.split('\n') if i.strip()]
+    else:
+        item_list = [i.strip() for i in items.split('\n') if i.strip()]
+    
+    # Initialize recon_data dict if not exists
+    if "recon_data" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["recon_data"] = {}
+    
+    # Add or extend the data type
+    if data_type not in _CURRENT_REPORT_DATA["recon_data"]:
+        _CURRENT_REPORT_DATA["recon_data"][data_type] = []
+    
+    # Add unique items
+    existing = set(_CURRENT_REPORT_DATA["recon_data"][data_type])
+    new_items = [i for i in item_list if i not in existing]
+    _CURRENT_REPORT_DATA["recon_data"][data_type].extend(new_items)
+    
+    # Track tool usage
+    if source_tool:
+        _CURRENT_REPORT_DATA["tools"].add(source_tool)
+    
+    total = len(_CURRENT_REPORT_DATA["recon_data"][data_type])
+    return f"✅ Added {len(new_items)} new {data_type} (total: {total}). Source: {source_tool or 'N/A'}"
+
+
+@tool
+def add_bulk_scope(items: str) -> str:
+    """Add multiple scope items at once (subdomains, IPs, URLs discovered during recon).
+
+    Args:
+        items: Newline-separated list of scope items OR JSON array string.
+    Returns: Confirmation with count of items added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled."
+    
+    # Parse items
+    if items.strip().startswith('['):
+        try:
+            item_list = json.loads(items)
+        except:
+            item_list = [i.strip() for i in items.split('\n') if i.strip()]
+    else:
+        item_list = [i.strip() for i in items.split('\n') if i.strip()]
+    
+    # Add unique items
+    existing = set(_CURRENT_REPORT_DATA.get("scope", []))
+    new_items = [i for i in item_list if i not in existing]
+    _CURRENT_REPORT_DATA["scope"].extend(new_items)
+    
+    return f"✅ Added {len(new_items)} scope items (total: {len(_CURRENT_REPORT_DATA['scope'])})"
+
+
+@tool
+def get_recon_summary() -> str:
+    """Get a summary of all collected reconnaissance data.
+
+    Returns: Summary of all recon data types and counts.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled."
+    
+    recon_data = _CURRENT_REPORT_DATA.get("recon_data", {})
+    if not recon_data:
+        return "No reconnaissance data collected yet. Use add_recon_data() to add data."
+    
+    lines = ["📊 Reconnaissance Data Summary:", ""]
+    for data_type, items in sorted(recon_data.items()):
+        lines.append(f"- {data_type}: {len(items)} items")
+    
+    lines.append("")
+    lines.append(f"Tools used: {', '.join(sorted(_CURRENT_REPORT_DATA.get('tools', set())))}")
+    
+    return "\n".join(lines)
+
+
+@tool
+def record_tool_used(tool_name: str, description: str | None = None) -> str:
+    """Record a tool that was used during the assessment.
+
+    Args:
+        tool_name: Name of the tool (e.g., 'nmap', 'burpsuite', 'subfinder').
+        description: Optional description of how the tool was used.
+    Returns: Confirmation.
+    """
+    global _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED
+    
+    _SESSION_TOOLS_USED.add(tool_name)
+    
+    if _REPORT_MODE_ENABLED and _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["tools"].add(tool_name)
+        
+        # Store tool details if provided
+        if description:
+            if "tool_details" not in _CURRENT_REPORT_DATA:
+                _CURRENT_REPORT_DATA["tool_details"] = {}
+            _CURRENT_REPORT_DATA["tool_details"][tool_name] = description
+    
+    return f"✅ Recorded tool: {tool_name}"
+
+
+@tool
 def generate_html_report() -> str:
     """Generate the final HTML report from collected findings.
 
     Returns: Complete HTML report as a string.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED
     
     if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
         return "Report mode is not enabled or no data collected. Use enable_report_mode() first."
@@ -423,11 +627,59 @@ def generate_html_report() -> str:
         if sev in severity_counts:
             severity_counts[sev] += 1
     
-    # Build scope HTML
-    scope_html = "".join([f"<li>{s}</li>" for s in data.get("scope", [])])
+    # Build scope HTML - include all items
+    scope_items = data.get("scope", [])
+    scope_html = "".join([f"<li>{s}</li>" for s in scope_items])
     
-    # Build tools HTML
-    tools_html = "".join([f'<span class="tool-badge">{t}</span>' for t in sorted(data.get("tools", set()))])
+    # Build tools HTML with cards for better presentation
+    all_tools = data.get("tools", set()) | _SESSION_TOOLS_USED
+    tool_details = data.get("tool_details", {})
+    
+    tool_icons = {
+        "nmap": "🔍", "nikto": "🔧", "sqlmap": "💉", "burpsuite": "🌐", 
+        "subfinder": "🔎", "amass": "🗺️", "dirsearch": "📂", "gobuster": "📁",
+        "nuclei": "⚛️", "wpscan": "📝", "curl": "🔗", "whois": "ℹ️",
+        "dig": "🌍", "nslookup": "📡", "masscan": "🚀", "ffuf": "🎯",
+        "hydra": "🔓", "john": "🔐", "hashcat": "🔢", "metasploit": "💀",
+        "playwright": "🎭", "wapiti": "🐺", "zaproxy": "⚡", "feroxbuster": "🦊"
+    }
+    
+    tools_html = ""
+    for t in sorted(all_tools):
+        icon = tool_icons.get(t.lower(), "🛠️")
+        tools_html += f'''
+        <div class="tool-card">
+            <div class="tool-icon">{icon}</div>
+            <div class="tool-name">{t}</div>
+        </div>
+        '''
+    
+    # Build recon data section
+    recon_data = data.get("recon_data", {})
+    recon_section = ""
+    if recon_data:
+        recon_cards = ""
+        for data_type, items in sorted(recon_data.items()):
+            items_html = "".join([f"<code>{item}</code>" for item in items])
+            recon_cards += f'''
+            <div class="recon-data-card">
+                <div class="recon-data-header">
+                    <span>{data_type.replace('_', ' ').title()}</span>
+                    <span class="recon-data-count">{len(items)} items</span>
+                </div>
+                <div class="recon-data-list">{items_html}</div>
+            </div>
+            '''
+        
+        recon_section = f'''
+        <div class="section recon-section">
+            <h2>📡 Reconnaissance Data</h2>
+            <p>The following data was collected during the reconnaissance phase:</p>
+            <div class="recon-data-grid">
+                {recon_cards}
+            </div>
+        </div>
+        '''
     
     # Build findings HTML
     findings_html = ""
@@ -488,9 +740,10 @@ def generate_html_report() -> str:
     html = html.replace("{{medium_count}}", str(severity_counts["Medium"]))
     html = html.replace("{{low_count}}", str(severity_counts["Low"]))
     html = html.replace("{{info_count}}", str(severity_counts["Info"]))
-    html = html.replace("{{scope_items}}", scope_html)
+    html = html.replace("{{scope_items}}", scope_html or "<li>Target scope not specified</li>")
     html = html.replace("{{methodology}}", data.get("methodology", ""))
-    html = html.replace("{{tools_used}}", tools_html or "Various security testing tools")
+    html = html.replace("{{recon_section}}", recon_section)
+    html = html.replace("{{tools_used}}", tools_html or '<div class="tool-card"><div class="tool-icon">🛠️</div><div class="tool-name">Manual Testing</div></div>')
     html = html.replace("{{findings_html}}", findings_html or "<p>No findings recorded.</p>")
     html = html.replace("{{conclusion}}", data.get("conclusion", "Based on the assessment, the recommendations above should be implemented to improve the security posture of the application."))
     html = html.replace("{{references}}", references_html)
@@ -504,7 +757,7 @@ def generate_markdown_report() -> str:
 
     Returns: Complete Markdown report as a string.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED
     
     if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
         return "Report mode is not enabled or no data collected."
@@ -517,6 +770,9 @@ def generate_markdown_report() -> str:
         sev = f.get("severity", "Info")
         if sev in severity_counts:
             severity_counts[sev] += 1
+    
+    # Combine all tools used
+    all_tools = data.get("tools", set()) | _SESSION_TOOLS_USED
     
     lines = []
     
@@ -554,20 +810,44 @@ def generate_markdown_report() -> str:
     lines.append("")
     lines.append("### Targets in Scope")
     lines.append("")
-    for s in data.get("scope", []):
-        lines.append(f"- {s}")
+    scope_items = data.get("scope", [])
+    if scope_items:
+        for s in scope_items:
+            lines.append(f"- {s}")
+    else:
+        lines.append("- (No scope items specified)")
     lines.append("")
     lines.append("### Methodology")
     lines.append("")
     lines.append(data.get("methodology", "Testing followed OWASP Testing Guide methodology."))
     lines.append("")
-    lines.append("### Tools Used")
-    lines.append("")
-    for t in sorted(data.get("tools", set())):
-        lines.append(f"- {t}")
-    lines.append("")
     lines.append("---")
     lines.append("")
+    
+    # Recon Data Section
+    recon_data = data.get("recon_data", {})
+    if recon_data:
+        lines.append("## 📡 Reconnaissance Data")
+        lines.append("")
+        lines.append("The following data was collected during the reconnaissance phase:")
+        lines.append("")
+        
+        for data_type, items in sorted(recon_data.items()):
+            lines.append(f"### {data_type.replace('_', ' ').title()} ({len(items)} items)")
+            lines.append("")
+            lines.append("<details>")
+            lines.append("<summary>Click to expand</summary>")
+            lines.append("")
+            lines.append("```")
+            for item in items:
+                lines.append(item)
+            lines.append("```")
+            lines.append("")
+            lines.append("</details>")
+            lines.append("")
+        
+        lines.append("---")
+        lines.append("")
     
     # Findings
     lines.append("## Detailed Findings")
@@ -616,6 +896,40 @@ def generate_markdown_report() -> str:
     lines.append("## Conclusion & Recommendations")
     lines.append("")
     lines.append(data.get("conclusion", "Implement the recommended remediations to improve security posture."))
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # Tools Used Section
+    lines.append("## 🛠️ Tools Used")
+    lines.append("")
+    lines.append("The following tools were used during this assessment:")
+    lines.append("")
+    lines.append("| Tool | Category |")
+    lines.append("|------|----------|")
+    
+    # Tool categories for better organization
+    tool_categories = {
+        "nmap": "Network Scanning", "masscan": "Network Scanning", "rustscan": "Network Scanning",
+        "nikto": "Web Scanning", "nuclei": "Web Scanning", "wapiti": "Web Scanning", "zaproxy": "Web Scanning",
+        "sqlmap": "Exploitation", "hydra": "Exploitation", "metasploit": "Exploitation",
+        "subfinder": "Reconnaissance", "amass": "Reconnaissance", "sublist3r": "Reconnaissance",
+        "dirsearch": "Content Discovery", "gobuster": "Content Discovery", "ffuf": "Content Discovery", "feroxbuster": "Content Discovery",
+        "curl": "HTTP Client", "httpx": "HTTP Client", "wget": "HTTP Client",
+        "whois": "OSINT", "dig": "OSINT", "nslookup": "OSINT", "theharvester": "OSINT",
+        "playwright": "Browser Automation", "selenium": "Browser Automation",
+        "burpsuite": "Proxy/Scanner", "mitmproxy": "Proxy/Scanner",
+        "john": "Password Cracking", "hashcat": "Password Cracking",
+        "wpscan": "CMS Scanner"
+    }
+    
+    for t in sorted(all_tools):
+        category = tool_categories.get(t.lower(), "Other")
+        lines.append(f"| {t} | {category} |")
+    
+    if not all_tools:
+        lines.append("| Manual Testing | Manual |")
+    
     lines.append("")
     lines.append("---")
     lines.append("")
