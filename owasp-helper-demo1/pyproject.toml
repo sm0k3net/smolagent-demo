@@ -8,14 +8,15 @@ requires-python = ">=3.10"
 dependencies = [
   "fastapi",
   "uvicorn[standard]",
-  "smolagents",
+  "smolagents[openai]",
   "httpx",
   "pydantic",
   "python-dotenv",
   "jinja2",
   "websockets",
   "orjson",
-  "rich"
+  "rich",
+  "openai"
 ]
 
 [project.optional-dependencies]
