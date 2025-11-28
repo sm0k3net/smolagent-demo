@@ -545,11 +545,18 @@ async def get_tasks():
     return JSONResponse(tasks)
 
 @app.delete("/api/tasks/{task_id}")
-async def cancel_task(task_id: str):
-    """Cancel a running task."""
+async def cancel_or_delete_task(task_id: str, remove: bool = False):
+    """Cancel a running task or remove a completed/cancelled/failed task."""
     if task_id in task_store:
-        task_store[task_id].status = TaskStatus.cancelled
-        return JSONResponse({"success": True, "task_id": task_id, "status": "cancelled"})
+        task = task_store[task_id]
+        # If task is not running, or remove flag is set, delete it
+        if remove or task.status in [TaskStatus.completed, TaskStatus.cancelled, TaskStatus.failed]:
+            del task_store[task_id]
+            return JSONResponse({"success": True, "task_id": task_id, "status": "deleted"})
+        else:
+            # Cancel running task
+            task_store[task_id].status = TaskStatus.cancelled
+            return JSONResponse({"success": True, "task_id": task_id, "status": "cancelled"})
     return JSONResponse({"error": "Task not found"}, status_code=404)
 
 @app.patch("/api/tasks/{task_id}")
@@ -999,6 +1006,32 @@ h1 {
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
   animation: slideIn 0.3s ease;
+  position: relative;
+}
+.task-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.task-delete-btn:hover {
+  opacity: 1;
+  background: var(--danger);
+  color: white;
+  transform: scale(1.1);
 }
 .task-item.running {
   border-color: var(--secondary);
@@ -1304,10 +1337,26 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.scheduled-result-preview {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
+  font-size: 0.7rem;
+  color: var(--gray-300);
+  max-height: 50px;
+  overflow: hidden;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+}
+.scheduled-result-preview:hover {
+  background: rgba(0,0,0,0.3);
+}
 .scheduled-item-actions {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.5rem;
+  flex-wrap: wrap;
 }
 /* Settings Tab */
 #settings-content {
@@ -2311,11 +2360,13 @@ function renderTasks() {
   
   tasksList.innerHTML = tasks.map(task => {
     const isActive = ['pending', 'running', 'paused'].includes(task.status);
+    const isFinished = ['completed', 'cancelled', 'failed'].includes(task.status);
     const createdAt = new Date(task.created_at).toLocaleTimeString();
     const truncatedPrompt = task.prompt.length > 50 ? task.prompt.substring(0, 50) + '...' : task.prompt;
     
     return `
-      <div class="task-item ${task.status}">
+      <div class="task-item ${task.status}" style="position: relative;">
+        ${isFinished ? `<button class="task-delete-btn" onclick="deleteTask('${task.id}')" title="Remove task">×</button>` : ''}
         <div class="task-header">
           <span class="task-title">${escapeHtml(truncatedPrompt)}</span>
           <span class="task-status ${task.status}">${task.status}</span>
@@ -2371,6 +2422,16 @@ async function cancelTask(taskId) {
     refreshTasks();
   } catch (err) {
     addMessage('system', `⚠️ Failed to cancel task: ${err.message}`);
+  }
+}
+
+async function deleteTask(taskId) {
+  try {
+    await fetch(`/api/tasks/${taskId}?remove=true`, { method: 'DELETE' });
+    delete taskStore[taskId];
+    renderTasks();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to delete task: ${err.message}`);
   }
 }
 
@@ -3236,19 +3297,52 @@ function renderScheduledTasks() {
     const isRecurring = task.recurring;
     const isPast = scheduleDate < new Date() && task.status !== 'completed';
     
+    // Determine execution status
+    let execStatus = 'not-started';
+    let execStatusIcon = '⏳';
+    let execStatusClass = 'pending';
+    if (task.last_run) {
+      if (task.last_result && task.last_result.startsWith('Error:')) {
+        execStatus = 'failed';
+        execStatusIcon = '❌';
+        execStatusClass = 'failed';
+      } else if (task.last_result) {
+        execStatus = 'completed';
+        execStatusIcon = '✅';
+        execStatusClass = 'completed';
+      }
+    }
+    
+    // Format last run time
+    const lastRunTime = task.last_run ? new Date(task.last_run).toLocaleString() : 'Never';
+    
     return `
       <div class="scheduled-item ${task.status}">
         <div class="scheduled-item-header">
           <span class="scheduled-item-name">${escapeHtml(task.name || task.prompt.substring(0, 30))}</span>
-          <span class="scheduled-item-status ${task.status}">${task.status}${isRecurring ? ' 🔄' : ''}</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span class="scheduled-item-status ${task.status}">${task.status === 'running' ? '🔄 Running' : task.status}${isRecurring ? ' 🔄' : ''}</span>
+          </div>
         </div>
         <div class="scheduled-item-time">
-          ⏰ ${scheduleDate.toLocaleString()}
+          ⏰ Next: ${scheduleDate.toLocaleString()}
           ${isRecurring ? ` (every ${task.interval_minutes}m)` : ''}
         </div>
+        <div class="scheduled-item-meta" style="font-size: 0.7rem; color: var(--gray-400); margin-top: 4px;">
+          ${execStatusIcon} Last execution: <span class="${execStatusClass}">${execStatus}</span> | 🕐 Last run: ${lastRunTime}
+        </div>
         <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
-        ${task.last_result ? `<div class="scheduled-item-prompt" style="color: var(--success); margin-top: 4px;">Last run: ${task.last_result.substring(0, 100)}...</div>` : ''}
+        ${task.last_result ? `
+        <div class="scheduled-result-preview" onclick="viewScheduledTaskResult('${task.id}')">
+          ${escapeHtml(task.last_result.substring(0, 100))}${task.last_result.length > 100 ? '...' : ''}
+        </div>
+        ` : ''}
         <div class="scheduled-item-actions">
+          ${task.last_result ? `
+          <button class="task-btn task-btn-view" onclick="viewScheduledTaskResult('${task.id}')">
+            👁️ View Result
+          </button>
+          ` : ''}
           <button class="task-btn" onclick="editScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
             ✏️ Edit
           </button>
@@ -3312,6 +3406,46 @@ function showScheduleModal(taskId = null) {
 
 function editScheduledTask(taskId) {
   showScheduleModal(taskId);
+}
+
+function viewScheduledTaskResult(taskId) {
+  const task = scheduledTasksStore[taskId];
+  if (!task || !task.last_result) {
+    alert('No results available for this task');
+    return;
+  }
+  
+  const modal = document.getElementById('task-modal');
+  const title = document.getElementById('task-modal-title');
+  const body = document.getElementById('task-modal-body');
+  
+  title.textContent = `📊 Scheduled Task Result: ${task.name || task.prompt.substring(0, 30)}`;
+  
+  let resultHtml = task.last_result;
+  
+  // Convert SCREENSHOT_IMAGE_DATA to actual images
+  resultHtml = resultHtml.replace(/SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g, 
+    '<img src="data:image/png;base64,$1" style="max-width:100%; margin: 10px 0; border-radius: 8px; border: 1px solid var(--gray-600);" />');
+  
+  // Escape remaining HTML but preserve our img tags
+  const tempDiv = document.createElement('div');
+  tempDiv.textContent = resultHtml;
+  let safeHtml = tempDiv.innerHTML;
+  
+  // Restore img tags (they were escaped)
+  safeHtml = safeHtml.replace(/&lt;img src="data:image\\/png;base64,([A-Za-z0-9+\\/=]+)" style="([^"]*)" \\/&gt;/g,
+    '<img src="data:image/png;base64,$1" style="$2" />');
+  
+  body.innerHTML = `
+    <div style="margin-bottom: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+      <strong>Task:</strong> ${escapeHtml(task.prompt)}<br>
+      <strong>Last Run:</strong> ${task.last_run ? new Date(task.last_run).toLocaleString() : 'Never'}<br>
+      <strong>Status:</strong> ${task.status}${task.recurring ? ' (Recurring)' : ''}
+    </div>
+    <div style="white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">${safeHtml}</div>
+  `;
+  
+  modal.classList.add('active');
 }
 
 function closeScheduleModal() {
@@ -3482,6 +3616,8 @@ window.createScheduledTask = createScheduledTask;
 window.toggleScheduledTask = toggleScheduledTask;
 window.deleteScheduledTask = deleteScheduledTask;
 window.editScheduledTask = editScheduledTask;
+window.viewScheduledTaskResult = viewScheduledTaskResult;
+window.deleteTask = deleteTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
 </script>
@@ -3592,46 +3728,47 @@ The report should be comprehensive and professional, suitable for executive stak
                     "content": f"🔄 Background task created. Check the Tasks tab to monitor progress."
                 }))
                 
-                # Run task in background thread
-                def run_background_task():
+                # Run task in background thread with captured task_id and separate agent
+                def run_background_task(tid, prompt):
                     try:
-                        task_store[task_id].status = TaskStatus.running
-                        task_store[task_id].started_at = datetime.now()
+                        task_store[tid].status = TaskStatus.running
+                        task_store[tid].started_at = datetime.now()
+                        
+                        # Create a dedicated agent for this background task (enables true concurrency)
+                        task_agent = build_owasp_agent()
                         
                         step_count = 0
                         tool_count = 0
                         final_result = None
                         all_outputs = []  # Collect all meaningful outputs
                         
-                        # Acquire lock for concurrent agent access
-                        with agent_lock:
-                            for event in agent.run(full_message, stream=True):
-                                # Check for cancellation
-                                if task_store[task_id].status == TaskStatus.cancelled:
-                                    return
-                                
-                                step_count += 1
-                                event_type = type(event).__name__
-                                
-                                # Collect tool calls and their results
-                                if hasattr(event, 'tool_calls') and event.tool_calls:
-                                    for tc in event.tool_calls:
-                                        tool_count += 1
-                                        if hasattr(tc, 'name'):
-                                            all_outputs.append(f"🔧 Tool: {tc.name}")
-                                
-                                # Collect tool results
-                                if hasattr(event, 'tool_result') and event.tool_result:
-                                    result_str = str(event.tool_result)[:2000]
-                                    all_outputs.append(f"📤 Result: {result_str}")
-                                
-                                # Collect final output
-                                if hasattr(event, 'output') and event.output is not None:
-                                    final_result = event.output
-                                
-                                # Update task counts
-                                task_store[task_id].step_count = step_count
-                                task_store[task_id].tool_count = tool_count
+                        for event in task_agent.run(prompt, stream=True):
+                            # Check for cancellation
+                            if task_store[tid].status == TaskStatus.cancelled:
+                                return
+                            
+                            step_count += 1
+                            event_type = type(event).__name__
+                            
+                            # Collect tool calls and their results
+                            if hasattr(event, 'tool_calls') and event.tool_calls:
+                                for tc in event.tool_calls:
+                                    tool_count += 1
+                                    if hasattr(tc, 'name'):
+                                        all_outputs.append(f"🔧 Tool: {tc.name}")
+                            
+                            # Collect tool results
+                            if hasattr(event, 'tool_result') and event.tool_result:
+                                result_str = str(event.tool_result)[:2000]
+                                all_outputs.append(f"📤 Result: {result_str}")
+                            
+                            # Collect final output
+                            if hasattr(event, 'output') and event.output is not None:
+                                final_result = event.output
+                            
+                            # Update task counts
+                            task_store[tid].step_count = step_count
+                            task_store[tid].tool_count = tool_count
                         
                         # Build comprehensive result
                         result_parts = []
@@ -3640,16 +3777,17 @@ The report should be comprehensive and professional, suitable for executive stak
                         if not result_parts and all_outputs:
                             result_parts.append("\\n".join(all_outputs[-10:]))  # Last 10 outputs
                         
-                        task_store[task_id].status = TaskStatus.completed
-                        task_store[task_id].completed_at = datetime.now()
-                        task_store[task_id].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
+                        task_store[tid].status = TaskStatus.completed
+                        task_store[tid].completed_at = datetime.now()
+                        task_store[tid].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
                         
                     except Exception as e:
-                        task_store[task_id].status = TaskStatus.failed
-                        task_store[task_id].error = str(e)
-                        task_store[task_id].completed_at = datetime.now()
+                        task_store[tid].status = TaskStatus.failed
+                        task_store[tid].error = str(e)
+                        task_store[tid].completed_at = datetime.now()
                 
-                threading.Thread(target=run_background_task, daemon=True).start()
+                # Pass task_id and prompt as arguments to prevent closure issues
+                threading.Thread(target=run_background_task, args=(task_id, full_message), daemon=True).start()
                 continue  # Don't block, move to next message
             
             # Stream real agent execution with proper step callbacks
