@@ -151,6 +151,7 @@ def save_custom_context():
 def run_scheduler():
     """Background thread to check and execute scheduled tasks."""
     global scheduler_stop_event
+    print("[Scheduler] Starting scheduler thread...")
     while not scheduler_stop_event.is_set():
         try:
             now = datetime.now()
@@ -158,38 +159,64 @@ def run_scheduler():
                 if task.get("status") != "active":
                     continue
                 
-                schedule_time = datetime.fromisoformat(task["schedule_time"])
+                # Parse schedule time - handle various formats
+                schedule_time_str = task.get("schedule_time", "")
+                try:
+                    # Handle ISO format with timezone
+                    if schedule_time_str.endswith('Z'):
+                        schedule_time_str = schedule_time_str[:-1]
+                    schedule_time = datetime.fromisoformat(schedule_time_str.replace('Z', ''))
+                except (ValueError, TypeError) as e:
+                    print(f"[Scheduler] Invalid schedule time for task {task_id}: {schedule_time_str} - {e}")
+                    continue
                 
                 # Check if it's time to run
                 if now >= schedule_time:
+                    print(f"[Scheduler] Running task {task_id}: {task.get('name', 'unnamed')}")
+                    
                     # Mark as running
                     task["status"] = "running"
                     task["last_run"] = now.isoformat()
                     save_scheduled_tasks_to_file()
                     
-                    # Execute the task
-                    try:
-                        if agent:
-                            result = agent.run(task["prompt"])
-                            task["last_result"] = str(result)[:5000]
-                    except Exception as e:
-                        task["last_result"] = f"Error: {str(e)}"
+                    # Execute the task in a separate thread to not block scheduler
+                    def execute_scheduled_task(tid, t):
+                        try:
+                            if agent:
+                                # Create a fresh agent for this task
+                                from app.agents.owasp_agent import build_owasp_agent
+                                task_agent = build_owasp_agent()
+                                result = task_agent.run(t["prompt"])
+                                t["last_result"] = str(result)[:5000]
+                                print(f"[Scheduler] Task {tid} completed successfully")
+                            else:
+                                t["last_result"] = "Error: Agent not initialized"
+                        except Exception as e:
+                            t["last_result"] = f"Error: {str(e)}"
+                            print(f"[Scheduler] Task {tid} failed: {e}")
+                        
+                        # Handle recurring vs one-time
+                        if t.get("recurring") and t.get("interval_minutes"):
+                            # Schedule next run
+                            next_run = datetime.now() + timedelta(minutes=t["interval_minutes"])
+                            t["schedule_time"] = next_run.isoformat()
+                            t["status"] = "active"
+                            print(f"[Scheduler] Task {tid} rescheduled for {next_run}")
+                        else:
+                            t["status"] = "completed"
+                        
+                        save_scheduled_tasks_to_file()
                     
-                    # Handle recurring vs one-time
-                    if task.get("recurring") and task.get("interval_minutes"):
-                        # Schedule next run
-                        next_run = now + timedelta(minutes=task["interval_minutes"])
-                        task["schedule_time"] = next_run.isoformat()
-                        task["status"] = "active"
-                    else:
-                        task["status"] = "completed"
+                    # Run in thread pool
+                    executor.submit(execute_scheduled_task, task_id, task)
                     
-                    save_scheduled_tasks_to_file()
         except Exception as e:
-            print(f"Scheduler error: {e}")
+            print(f"[Scheduler] Error in scheduler loop: {e}")
+            import traceback
+            traceback.print_exc()
         
-        # Check every 30 seconds
-        scheduler_stop_event.wait(30)
+        # Check every 15 seconds for more responsive scheduling
+        scheduler_stop_event.wait(15)
 
 def start_scheduler():
     """Start the scheduler background thread."""
@@ -496,6 +523,25 @@ async def toggle_scheduled_task(task_id: str):
         task["status"] = "active"
     save_scheduled_tasks_to_file()
     return JSONResponse({"success": True, "status": task["status"]})
+
+@app.put("/api/scheduled/{task_id}")
+async def update_scheduled_task(task_id: str, task_update: ScheduledTaskCreate):
+    """Update an existing scheduled task."""
+    if task_id not in scheduled_tasks_store:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    task = scheduled_tasks_store[task_id]
+    task["prompt"] = task_update.prompt
+    task["name"] = task_update.name or task_update.prompt[:50]
+    task["schedule_time"] = task_update.schedule_time
+    task["recurring"] = task_update.recurring
+    task["interval_minutes"] = task_update.interval_minutes
+    # Reset status to active if it was completed
+    if task["status"] == "completed":
+        task["status"] = "active"
+    
+    save_scheduled_tasks_to_file()
+    return JSONResponse({"success": True, "task_id": task_id})
 
 # ============== CUSTOM CONTEXT ENDPOINTS ==============
 
@@ -2102,7 +2148,7 @@ main {
   <div class="task-modal" id="schedule-modal">
     <div class="task-modal-content" style="max-width: 500px;">
       <div class="task-modal-header">
-        <span class="task-modal-title">⏰ Schedule New Task</span>
+        <span class="task-modal-title" id="schedule-modal-title">⏰ Schedule New Task</span>
         <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
       </div>
       <div class="task-modal-body">
@@ -2133,7 +2179,7 @@ main {
           <input type="number" id="schedule-interval" value="60" min="5" 
             style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
         </div>
-        <button class="btn btn-primary" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
+        <button class="btn btn-primary" id="schedule-submit-btn" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
       </div>
     </div>
   </div>
@@ -2308,7 +2354,7 @@ function renderTasks() {
         </div>
         ${isActive ? `
         <div class="task-actions">
-          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')" ${task.status === 'paused' ? 'disabled' : ''}>
+          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')">
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
           <button class="task-btn task-btn-cancel" onclick="cancelTask('${task.id}')">
@@ -2377,9 +2423,23 @@ async function viewTaskResult(taskId) {
     // Format result with markdown-like rendering
     let resultHtml = task.result || 'No result available';
     
-    // Check for base64 images and render them
+    // Handle SCREENSHOT_IMAGE_DATA format from agent
+    const screenshotPattern = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\/=]+):END_IMAGE_DATA/g;
+    resultHtml = resultHtml.replace(screenshotPattern, (match, base64Data) => {
+      return `<div style="margin: 15px 0;">
+        <img src="data:image/png;base64,${base64Data}" 
+             onclick="showImageModal(this.src)" 
+             style="max-width: 100%; max-height: 500px; border-radius: 8px; cursor: pointer; border: 1px solid rgba(255,255,255,0.2);">
+        <div style="font-size: 0.75rem; color: var(--gray-400); margin-top: 5px;">Click to view full size</div>
+      </div>`;
+    });
+    
+    // Also check for regular base64 images
     const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
-    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px;">');
+    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" onclick="showImageModal(this.src)" style="max-width: 100%; margin: 10px 0; border-radius: 8px; cursor: pointer;">');
+    
+    // Format the result with basic HTML escaping for non-image content
+    resultHtml = resultHtml.replace(/\n/g, '<br>');
     
     body.innerHTML = `
       <div style="margin-bottom: 1rem;">
@@ -3220,6 +3280,9 @@ function renderScheduledTasks() {
         <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
         ${task.last_result ? `<div class="scheduled-item-prompt" style="color: var(--success); margin-top: 4px;">Last run: ${task.last_result.substring(0, 100)}...</div>` : ''}
         <div class="scheduled-item-actions">
+          <button class="task-btn" onclick="editScheduledTask('${task.id}')" title="Edit">
+            ✏️ Edit
+          </button>
           <button class="task-btn" onclick="toggleScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
@@ -3230,16 +3293,52 @@ function renderScheduledTasks() {
   }).join('');
 }
 
-function showScheduleModal() {
+// Track which task is being edited (null = creating new)
+let editingScheduledTaskId = null;
+
+function showScheduleModal(taskId = null) {
   const modal = document.getElementById('schedule-modal');
-  modal.classList.add('active');
+  const modalTitle = document.getElementById('schedule-modal-title');
+  const submitBtn = document.getElementById('schedule-submit-btn');
   
-  // Set default time to now + 1 hour
-  const now = new Date();
-  now.setHours(now.getHours() + 1);
-  now.setMinutes(0);
-  const dateStr = now.toISOString().slice(0, 16);
-  document.getElementById('schedule-time').value = dateStr;
+  editingScheduledTaskId = taskId;
+  
+  if (taskId && scheduledTasksStore[taskId]) {
+    // Editing existing task
+    const task = scheduledTasksStore[taskId];
+    modalTitle.textContent = '✏️ Edit Scheduled Task';
+    submitBtn.textContent = '💾 Save Changes';
+    
+    document.getElementById('schedule-name').value = task.name || '';
+    document.getElementById('schedule-prompt').value = task.prompt || '';
+    
+    // Parse the ISO time to local datetime-local format
+    const scheduleDate = new Date(task.schedule_time);
+    const localDateTime = new Date(scheduleDate.getTime() - scheduleDate.getTimezoneOffset() * 60000)
+      .toISOString().slice(0, 16);
+    document.getElementById('schedule-time').value = localDateTime;
+    
+    document.getElementById('schedule-recurring').checked = task.recurring || false;
+    document.getElementById('schedule-interval').value = task.interval_minutes || 60;
+    document.getElementById('recurring-options').style.display = task.recurring ? 'block' : 'none';
+  } else {
+    // Creating new task
+    modalTitle.textContent = '⏰ Schedule New Task';
+    submitBtn.textContent = '📅 Schedule Task';
+    
+    // Set default time to now + 1 hour
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+    now.setMinutes(0);
+    const dateStr = now.toISOString().slice(0, 16);
+    document.getElementById('schedule-time').value = dateStr;
+  }
+  
+  modal.classList.add('active');
+}
+
+function editScheduledTask(taskId) {
+  showScheduleModal(taskId);
 }
 
 function closeScheduleModal() {
@@ -3248,6 +3347,7 @@ function closeScheduleModal() {
   document.getElementById('schedule-prompt').value = '';
   document.getElementById('schedule-recurring').checked = false;
   document.getElementById('recurring-options').style.display = 'none';
+  editingScheduledTaskId = null;
 }
 
 // Toggle recurring options visibility
@@ -3271,26 +3371,40 @@ async function createScheduledTask() {
     return;
   }
   
+  const taskData = {
+    name: name || prompt.substring(0, 50),
+    prompt,
+    schedule_time: new Date(time).toISOString(),
+    recurring,
+    interval_minutes: recurring ? interval : null
+  };
+  
   try {
-    const response = await fetch('/api/scheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: name || prompt.substring(0, 50),
-        prompt,
-        schedule_time: new Date(time).toISOString(),
-        recurring,
-        interval_minutes: recurring ? interval : null
-      })
-    });
+    let response;
+    if (editingScheduledTaskId) {
+      // Update existing task
+      response = await fetch(`/api/scheduled/${editingScheduledTaskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData)
+      });
+    } else {
+      // Create new task
+      response = await fetch('/api/scheduled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData)
+      });
+    }
     
     if (response.ok) {
       closeScheduleModal();
       await loadScheduledTasks();
-      addMessage('system', `⏰ Task scheduled for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
+      const action = editingScheduledTaskId ? 'updated' : 'scheduled';
+      addMessage('system', `⏰ Task ${action} for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
     }
   } catch (err) {
-    addMessage('system', `⚠️ Failed to schedule task: ${err.message}`);
+    addMessage('system', `⚠️ Failed to ${editingScheduledTaskId ? 'update' : 'schedule'} task: ${err.message}`);
   }
 }
 
@@ -3403,6 +3517,7 @@ window.closeScheduleModal = closeScheduleModal;
 window.createScheduledTask = createScheduledTask;
 window.toggleScheduledTask = toggleScheduledTask;
 window.deleteScheduledTask = deleteScheduledTask;
+window.editScheduledTask = editScheduledTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
 </script>
@@ -3513,18 +3628,22 @@ The report should be comprehensive and professional, suitable for executive stak
                     "content": f"🔄 Background task created. Check the Tasks tab to monitor progress."
                 }))
                 
-                # Run task in background thread
+                # Run task in background thread with its own agent instance
                 def run_background_task():
                     try:
                         task_store[task_id].status = TaskStatus.running
                         task_store[task_id].started_at = datetime.now()
+                        
+                        # Create a fresh agent instance for this task (enables concurrency)
+                        from app.agents.owasp_agent import build_owasp_agent
+                        task_agent = build_owasp_agent()
                         
                         step_count = 0
                         tool_count = 0
                         final_result = None
                         all_outputs = []  # Collect all meaningful outputs
                         
-                        for event in agent.run(full_message, stream=True):
+                        for event in task_agent.run(full_message, stream=True):
                             # Check for cancellation
                             if task_store[task_id].status == TaskStatus.cancelled:
                                 return
@@ -3592,12 +3711,16 @@ The report should be comprehensive and professional, suitable for executive stak
                 def run_agent_with_streaming():
                     """Run agent in thread and put events in queue."""
                     try:
+                        # Create a fresh agent instance for this request (enables concurrency)
+                        from app.agents.owasp_agent import build_owasp_agent
+                        request_agent = build_owasp_agent()
+                        
                         # Use streaming mode for real-time updates
                         final_result = None
                         step_count = 0
                         tool_count = 0
                         
-                        for event in agent.run(full_message, stream=True):
+                        for event in request_agent.run(full_message, stream=True):
                             step_count += 1
                             event_type = type(event).__name__
                             
