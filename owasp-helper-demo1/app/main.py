@@ -17,6 +17,7 @@ import queue
 import threading
 import uuid
 import os
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
@@ -545,6 +546,160 @@ async def set_custom_context(data: Dict[str, str]):
     save_custom_context()
     return JSONResponse({"success": True})
 
+# Telegram monitoring state
+telegram_monitoring_active = False
+telegram_monitor_thread = None
+telegram_monitor_stop_event = threading.Event()
+
+def run_telegram_monitor():
+    """Background thread to monitor Telegram groups for bot mentions."""
+    global telegram_monitoring_active
+    from app.tools.telegram_tool import _telegram_state, _run_async, _get_telegram_bot
+    
+    Bot, err = _get_telegram_bot()
+    if err or not _telegram_state.get("bot"):
+        print(f"Telegram monitor: Bot not available - {err}")
+        telegram_monitoring_active = False
+        return
+    
+    bot_username = _telegram_state.get("bot_username", "").lower()
+    if not bot_username:
+        print("Telegram monitor: Bot username not set")
+        telegram_monitoring_active = False
+        return
+    
+    last_update_id = 0
+    print(f"Telegram monitor: Starting to monitor for @{bot_username}")
+    
+    while not telegram_monitor_stop_event.is_set():
+        try:
+            async def get_updates():
+                bot = _telegram_state["bot"]
+                return await bot.get_updates(offset=last_update_id + 1, timeout=30)
+            
+            updates = _run_async(get_updates())
+            
+            for update in updates:
+                last_update_id = update.update_id
+                
+                if not update.message or not update.message.text:
+                    continue
+                
+                msg = update.message
+                text = msg.text.lower()
+                
+                # Check if bot is mentioned
+                bot_mention = f"@{bot_username}"
+                if bot_mention not in text:
+                    continue
+                
+                # Extract command after mention
+                command = msg.text.replace(f"@{bot_username}", "").replace(f"@{bot_username.upper()}", "").strip()
+                if not command:
+                    continue
+                
+                chat_id = msg.chat.id
+                user = msg.from_user.username if msg.from_user else "Unknown"
+                
+                print(f"Telegram command from @{user} in chat {chat_id}: {command}")
+                
+                # Send acknowledgment
+                async def send_ack():
+                    await _telegram_state["bot"].send_message(
+                        chat_id=chat_id,
+                        text=f"🤖 Processing your request: {command[:100]}...",
+                        reply_to_message_id=msg.message_id
+                    )
+                _run_async(send_ack())
+                
+                # Execute command with agent
+                def execute_command():
+                    try:
+                        task_agent = build_owasp_agent()
+                        result = task_agent.run(command)
+                        
+                        # Send result back (truncate if too long)
+                        result_text = str(result)
+                        if len(result_text) > 4000:
+                            result_text = result_text[:4000] + "\\n\\n[Result truncated]"
+                        
+                        async def send_result():
+                            await _telegram_state["bot"].send_message(
+                                chat_id=chat_id,
+                                text=f"✅ Result for @{user}:\\n\\n{result_text}",
+                                reply_to_message_id=msg.message_id
+                            )
+                        _run_async(send_result())
+                    except Exception as e:
+                        async def send_error():
+                            await _telegram_state["bot"].send_message(
+                                chat_id=chat_id,
+                                text=f"❌ Error: {str(e)[:500]}",
+                                reply_to_message_id=msg.message_id
+                            )
+                        _run_async(send_error())
+                
+                # Run in separate thread
+                threading.Thread(target=execute_command, daemon=True).start()
+                
+        except Exception as e:
+            if not telegram_monitor_stop_event.is_set():
+                print(f"Telegram monitor error: {e}")
+                time.sleep(5)
+    
+    print("Telegram monitor: Stopped")
+
+@app.post("/api/telegram/monitor/start")
+async def start_telegram_monitoring():
+    """Start monitoring Telegram groups for bot mentions."""
+    global telegram_monitoring_active, telegram_monitor_thread, telegram_monitor_stop_event
+    from app.tools.telegram_tool import _telegram_state, telegram_connect
+    
+    # Check if bot is connected
+    if not _telegram_state.get("connected"):
+        # Try to connect
+        bot_token = api_keys_store.get("TELEGRAM_BOT_TOKEN", "")
+        if not bot_token:
+            return JSONResponse({"success": False, "error": "No bot token configured"})
+        
+        result = telegram_connect(bot_token)
+        if "❌" in result:
+            return JSONResponse({"success": False, "error": "Failed to connect to Telegram"})
+    
+    if telegram_monitoring_active:
+        return JSONResponse({"success": True, "message": "Already monitoring"})
+    
+    telegram_monitor_stop_event.clear()
+    telegram_monitoring_active = True
+    telegram_monitor_thread = threading.Thread(target=run_telegram_monitor, daemon=True)
+    telegram_monitor_thread.start()
+    
+    return JSONResponse({
+        "success": True, 
+        "bot_username": _telegram_state.get("bot_username", "")
+    })
+
+@app.post("/api/telegram/monitor/stop")
+async def stop_telegram_monitoring():
+    """Stop monitoring Telegram groups."""
+    global telegram_monitoring_active, telegram_monitor_stop_event
+    
+    telegram_monitor_stop_event.set()
+    telegram_monitoring_active = False
+    
+    return JSONResponse({"success": True})
+
+@app.get("/api/telegram/monitor/status")
+async def get_telegram_monitoring_status():
+    """Get Telegram monitoring status."""
+    from app.tools.telegram_tool import _telegram_state
+    
+    return JSONResponse({
+        "active": telegram_monitoring_active,
+        "connected": _telegram_state.get("connected", False),
+        "bot_username": _telegram_state.get("bot_username", "")
+    })
+
 # Task management endpoints
 @app.get("/api/tasks")
 async def get_tasks():
@@ -693,16 +848,35 @@ body.light-theme {
   --bg-secondary: #ffffff;
   --text-primary: #1e293b;
   --text-secondary: #475569;
-  --border-color: rgba(0,0,0,0.1);
+  --border-color: rgba(0,0,0,0.15);
   --dark: #f1f5f9;
   --darker: #ffffff;
   --light: #1e293b;
-  --gray-300: #64748b;
-  --gray-400: #475569;
-  --gray-500: #334155;
+  --gray-100: #1e293b;
+  --gray-200: #334155;
+  --gray-300: #475569;
+  --gray-400: #64748b;
+  --gray-500: #94a3b8;
   --gray-600: #e2e8f0;
   --gradient-dark: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.15);
 }
+body.light-theme .message { color: var(--text-primary); }
+body.light-theme .msg-agent { background: #e2e8f0; color: #1e293b; }
+body.light-theme .msg-user { background: var(--primary); color: white; }
+body.light-theme .msg-system { background: rgba(99, 102, 241, 0.15); color: #1e293b; }
+body.light-theme input, body.light-theme textarea { color: #1e293b; background: #f1f5f9; border-color: #cbd5e1; }
+body.light-theme input::placeholder, body.light-theme textarea::placeholder { color: #94a3b8; }
+body.light-theme .sidebar { background: #ffffff; border-color: #e2e8f0; }
+body.light-theme .task-item, body.light-theme .chat-item, body.light-theme .scheduled-item { background: #f1f5f9; border-color: #e2e8f0; }
+body.light-theme .task-modal-content { background: #ffffff; color: #1e293b; }
+body.light-theme .task-modal-body { color: #334155; }
+body.light-theme .activity-item { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.08); color: #334155; }
+body.light-theme .api-key-input { background: #f1f5f9; color: #1e293b; border-color: #cbd5e1; }
+body.light-theme header { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border-color: #e2e8f0; }
+body.light-theme .settings-section-title { color: #1e293b; }
+body.light-theme .no-tasks { color: #64748b; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   height: 100%;
@@ -2296,6 +2470,21 @@ main {
           <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
             Create a bot via @BotFather on Telegram. Use the agent's telegram_connect tool to link.
           </p>
+          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+              <span style="font-size: 0.85rem; font-weight: 500;">🎧 Group Monitoring</span>
+              <label class="checkbox-wrapper" style="margin: 0;">
+                <input type="checkbox" id="telegram-monitoring-toggle">
+                <span class="checkmark"></span>
+                <span class="checkbox-label">Enable</span>
+              </label>
+            </div>
+            <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.4;">
+              When enabled, the agent monitors Telegram group chats for commands.<br>
+              Mention the bot to execute commands: <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">@bot_name scan example.com</code>
+            </p>
+            <div id="telegram-monitoring-status" style="margin-top: 8px; font-size: 0.8rem; color: var(--gray-400);">Status: Not monitoring</div>
+          </div>
         </div>
         
         <div class="settings-section">
@@ -3786,6 +3975,73 @@ async function clearCustomContext() {
   await saveCustomContext();
 }
 
+// ============== TELEGRAM GROUP MONITORING ==============
+let telegramMonitoringActive = false;
+
+async function toggleTelegramMonitoring() {
+  const toggle = document.getElementById('telegram-monitoring-toggle');
+  const statusDiv = document.getElementById('telegram-monitoring-status');
+  
+  if (toggle.checked) {
+    // Start monitoring
+    try {
+      const response = await fetch('/api/telegram/monitor/start', { method: 'POST' });
+      const result = await response.json();
+      if (result.success) {
+        telegramMonitoringActive = true;
+        statusDiv.innerHTML = '<span style="color: var(--success);">✅ Monitoring active - listening for @mentions</span>';
+        addMessage('system', '📱 Telegram group monitoring started');
+      } else {
+        toggle.checked = false;
+        statusDiv.innerHTML = `<span style="color: var(--danger);">❌ ${result.error}</span>`;
+      }
+    } catch (err) {
+      toggle.checked = false;
+      statusDiv.innerHTML = `<span style="color: var(--danger);">❌ Failed to start: ${err.message}</span>`;
+    }
+  } else {
+    // Stop monitoring
+    try {
+      await fetch('/api/telegram/monitor/stop', { method: 'POST' });
+      telegramMonitoringActive = false;
+      statusDiv.innerHTML = 'Status: Not monitoring';
+      addMessage('system', '📱 Telegram group monitoring stopped');
+    } catch (err) {
+      statusDiv.innerHTML = `<span style="color: var(--warning);">⚠️ ${err.message}</span>`;
+    }
+  }
+}
+
+// Add event listener for telegram monitoring toggle
+document.addEventListener('DOMContentLoaded', () => {
+  const telegramToggle = document.getElementById('telegram-monitoring-toggle');
+  if (telegramToggle) {
+    telegramToggle.addEventListener('change', toggleTelegramMonitoring);
+  }
+});
+
+// Check telegram monitoring status on settings load
+async function checkTelegramMonitoringStatus() {
+  try {
+    const response = await fetch('/api/telegram/monitor/status');
+    const result = await response.json();
+    const toggle = document.getElementById('telegram-monitoring-toggle');
+    const statusDiv = document.getElementById('telegram-monitoring-status');
+    
+    if (toggle && statusDiv) {
+      toggle.checked = result.active;
+      telegramMonitoringActive = result.active;
+      if (result.active) {
+        statusDiv.innerHTML = `<span style="color: var(--success);">✅ Monitoring active - @${result.bot_username || 'bot'}</span>`;
+      } else {
+        statusDiv.innerHTML = 'Status: Not monitoring';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to check telegram status:', err);
+  }
+}
+
 // ============== TAB SWITCHING UPDATES ==============
 // Update sidebar tab handling
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
@@ -3804,6 +4060,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     if (tabId === 'settings') {
       loadApiKeys();
       loadCustomContext();
+      checkTelegramMonitoringStatus();
     }
     
     if (tabId === 'chats') loadChats();
@@ -3996,10 +4253,14 @@ The report should be comprehensive and professional, suitable for executive stak
                                     if hasattr(tc, 'name'):
                                         all_outputs.append(f"🔧 Tool: {tc.name}")
                             
-                            # Collect tool results
+                            # Collect tool results - preserve full base64 image data
                             if hasattr(event, 'tool_result') and event.tool_result:
-                                result_str = str(event.tool_result)[:2000]
-                                all_outputs.append(f"📤 Result: {result_str}")
+                                result_str = str(event.tool_result)
+                                # Keep full data for screenshots, truncate others
+                                if 'SCREENSHOT_IMAGE_DATA:' in result_str or 'base64,' in result_str:
+                                    all_outputs.append(f"📤 Result: {result_str}")
+                                else:
+                                    all_outputs.append(f"📤 Result: {result_str[:2000]}")
                             
                             # Collect final output
                             if hasattr(event, 'output') and event.output is not None:
@@ -4009,10 +4270,18 @@ The report should be comprehensive and professional, suitable for executive stak
                             task_store[tid].step_count = step_count
                             task_store[tid].tool_count = tool_count
                         
-                        # Build comprehensive result
+                        # Build comprehensive result - prioritize screenshots
                         result_parts = []
+                        screenshot_outputs = [o for o in all_outputs if 'SCREENSHOT_IMAGE_DATA:' in o or 'base64,' in o]
+                        
                         if final_result:
                             result_parts.append(str(final_result))
+                        
+                        # Always include screenshots even if we have final_result
+                        for screenshot in screenshot_outputs:
+                            if screenshot not in str(final_result) if final_result else True:
+                                result_parts.append(screenshot)
+                        
                         if not result_parts and all_outputs:
                             result_parts.append("\\n".join(all_outputs[-10:]))  # Last 10 outputs
                         
