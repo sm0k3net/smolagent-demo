@@ -17,7 +17,7 @@ import queue
 import threading
 import uuid
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
@@ -62,6 +62,143 @@ task_queues: Dict[str, queue.Queue] = {}
 API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
 api_keys_store: Dict[str, str] = {}
 
+# Chat history storage with file persistence
+CHATS_FILE = os.path.join(os.path.dirname(__file__), ".chats.json")
+chats_store: Dict[str, Dict[str, Any]] = {}  # chat_id -> {name, messages, created_at, updated_at}
+
+# Scheduled tasks storage
+SCHEDULED_TASKS_FILE = os.path.join(os.path.dirname(__file__), ".scheduled_tasks.json")
+scheduled_tasks_store: Dict[str, Dict[str, Any]] = {}  # task_id -> {prompt, schedule_time, recurring, interval, status, etc.}
+scheduler_thread = None
+scheduler_stop_event = threading.Event()
+
+# Custom context/instructions storage
+CUSTOM_CONTEXT_FILE = os.path.join(os.path.dirname(__file__), ".custom_context.txt")
+custom_context: str = ""
+
+def load_chats_from_file():
+    """Load chat history from file."""
+    global chats_store
+    if os.path.exists(CHATS_FILE):
+        try:
+            with open(CHATS_FILE, 'r', encoding='utf-8') as f:
+                chats_store = json.load(f)
+        except Exception as e:
+            print(f"Error loading chats: {e}")
+            chats_store = {}
+    
+    # Ensure default chat exists
+    if not chats_store:
+        chats_store["default"] = {
+            "name": "Main Chat",
+            "messages": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+
+def save_chats_to_file():
+    """Save chat history to file."""
+    try:
+        with open(CHATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(chats_store, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        print(f"Error saving chats: {e}")
+        return False
+
+def load_scheduled_tasks_from_file():
+    """Load scheduled tasks from file."""
+    global scheduled_tasks_store
+    if os.path.exists(SCHEDULED_TASKS_FILE):
+        try:
+            with open(SCHEDULED_TASKS_FILE, 'r', encoding='utf-8') as f:
+                scheduled_tasks_store = json.load(f)
+        except Exception as e:
+            print(f"Error loading scheduled tasks: {e}")
+            scheduled_tasks_store = {}
+
+def save_scheduled_tasks_to_file():
+    """Save scheduled tasks to file."""
+    try:
+        with open(SCHEDULED_TASKS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(scheduled_tasks_store, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        print(f"Error saving scheduled tasks: {e}")
+        return False
+
+def load_custom_context():
+    """Load custom context from file."""
+    global custom_context
+    if os.path.exists(CUSTOM_CONTEXT_FILE):
+        try:
+            with open(CUSTOM_CONTEXT_FILE, 'r', encoding='utf-8') as f:
+                custom_context = f.read()
+        except Exception as e:
+            print(f"Error loading custom context: {e}")
+            custom_context = ""
+
+def save_custom_context():
+    """Save custom context to file."""
+    try:
+        with open(CUSTOM_CONTEXT_FILE, 'w', encoding='utf-8') as f:
+            f.write(custom_context)
+        return True
+    except Exception as e:
+        print(f"Error saving custom context: {e}")
+        return False
+
+def run_scheduler():
+    """Background thread to check and execute scheduled tasks."""
+    global scheduler_stop_event
+    while not scheduler_stop_event.is_set():
+        try:
+            now = datetime.now()
+            for task_id, task in list(scheduled_tasks_store.items()):
+                if task.get("status") != "active":
+                    continue
+                
+                schedule_time = datetime.fromisoformat(task["schedule_time"])
+                
+                # Check if it's time to run
+                if now >= schedule_time:
+                    # Mark as running
+                    task["status"] = "running"
+                    task["last_run"] = now.isoformat()
+                    save_scheduled_tasks_to_file()
+                    
+                    # Execute the task
+                    try:
+                        if agent:
+                            result = agent.run(task["prompt"])
+                            task["last_result"] = str(result)[:5000]
+                    except Exception as e:
+                        task["last_result"] = f"Error: {str(e)}"
+                    
+                    # Handle recurring vs one-time
+                    if task.get("recurring") and task.get("interval_minutes"):
+                        # Schedule next run
+                        next_run = now + timedelta(minutes=task["interval_minutes"])
+                        task["schedule_time"] = next_run.isoformat()
+                        task["status"] = "active"
+                    else:
+                        task["status"] = "completed"
+                    
+                    save_scheduled_tasks_to_file()
+        except Exception as e:
+            print(f"Scheduler error: {e}")
+        
+        # Check every 30 seconds
+        scheduler_stop_event.wait(30)
+
+def start_scheduler():
+    """Start the scheduler background thread."""
+    global scheduler_thread, scheduler_stop_event
+    if scheduler_thread is None or not scheduler_thread.is_alive():
+        scheduler_stop_event.clear()
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+
 def load_api_keys_from_file():
     """Load API keys from file."""
     global api_keys_store
@@ -73,6 +210,8 @@ def load_api_keys_from_file():
         "HIBP_API_KEY": "",
         "CENSYS_API_KEY": "",
         "ALIENVAULT_API_KEY": "",
+        "TELEGRAM_BOT_TOKEN": "",
+        "TELEGRAM_CHAT_ID": "",
     }
     
     # Try to load from file first
@@ -119,6 +258,22 @@ class APIKeyUpdate(BaseModel):
     service: str
     api_key: str
 
+class ScheduledTaskCreate(BaseModel):
+    prompt: str
+    schedule_time: str  # ISO format datetime
+    recurring: bool = False
+    interval_minutes: Optional[int] = None
+    name: Optional[str] = None
+
+class ChatCreate(BaseModel):
+    name: str
+
+class ChatMessage(BaseModel):
+    chat_id: str
+    type: str
+    content: str
+    timestamp: Optional[str] = None
+
 @app.on_event("startup")
 async def startup():
     global agent, api_keys_store
@@ -126,6 +281,15 @@ async def startup():
         if agent is None:
             # Load API keys from file/environment
             load_api_keys_from_file()
+            # Load chat history
+            load_chats_from_file()
+            # Load scheduled tasks
+            load_scheduled_tasks_from_file()
+            # Load custom context
+            load_custom_context()
+            # Start scheduler
+            start_scheduler()
+            # Build agent
             agent = build_owasp_agent()
 
 # API Keys management endpoints
@@ -181,6 +345,172 @@ async def import_api_keys(keys: Dict[str, str]):
             os.environ[key] = value
     save_api_keys_to_file()
     return JSONResponse({"success": True, "imported": len(keys)})
+
+# ============== CHAT MANAGEMENT ENDPOINTS ==============
+
+@app.get("/api/chats")
+async def get_chats():
+    """Get all chats with metadata (not full messages)."""
+    chat_list = []
+    for chat_id, chat in chats_store.items():
+        chat_list.append({
+            "id": chat_id,
+            "name": chat.get("name", "Unnamed"),
+            "message_count": len(chat.get("messages", [])),
+            "created_at": chat.get("created_at"),
+            "updated_at": chat.get("updated_at")
+        })
+    # Sort by updated_at descending
+    chat_list.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    return JSONResponse(chat_list)
+
+@app.get("/api/chats/{chat_id}")
+async def get_chat(chat_id: str):
+    """Get a specific chat with all messages."""
+    if chat_id not in chats_store:
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
+    return JSONResponse(chats_store[chat_id])
+
+@app.post("/api/chats")
+async def create_chat(chat: ChatCreate):
+    """Create a new chat."""
+    chat_id = str(uuid.uuid4())[:8]
+    chats_store[chat_id] = {
+        "name": chat.name,
+        "messages": [],
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    save_chats_to_file()
+    return JSONResponse({"success": True, "chat_id": chat_id, "name": chat.name})
+
+@app.put("/api/chats/{chat_id}")
+async def update_chat(chat_id: str, chat: ChatCreate):
+    """Update chat name."""
+    if chat_id not in chats_store:
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
+    chats_store[chat_id]["name"] = chat.name
+    chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
+    save_chats_to_file()
+    return JSONResponse({"success": True, "chat_id": chat_id})
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat(chat_id: str):
+    """Delete a chat."""
+    if chat_id == "default":
+        return JSONResponse({"error": "Cannot delete default chat"}, status_code=400)
+    if chat_id not in chats_store:
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
+    del chats_store[chat_id]
+    save_chats_to_file()
+    return JSONResponse({"success": True, "chat_id": chat_id})
+
+@app.post("/api/chats/{chat_id}/messages")
+async def add_chat_message(chat_id: str, message: ChatMessage):
+    """Add a message to a chat."""
+    if chat_id not in chats_store:
+        # Auto-create chat if it doesn't exist
+        chats_store[chat_id] = {
+            "name": f"Chat {chat_id}",
+            "messages": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+    
+    msg_data = {
+        "type": message.type,
+        "content": message.content,
+        "timestamp": message.timestamp or datetime.now().isoformat()
+    }
+    chats_store[chat_id]["messages"].append(msg_data)
+    chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
+    
+    # Keep only last 500 messages per chat to prevent file bloat
+    if len(chats_store[chat_id]["messages"]) > 500:
+        chats_store[chat_id]["messages"] = chats_store[chat_id]["messages"][-500:]
+    
+    save_chats_to_file()
+    return JSONResponse({"success": True})
+
+@app.delete("/api/chats/{chat_id}/messages")
+async def clear_chat_messages(chat_id: str):
+    """Clear all messages from a chat."""
+    if chat_id not in chats_store:
+        return JSONResponse({"error": "Chat not found"}, status_code=404)
+    chats_store[chat_id]["messages"] = []
+    chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
+    save_chats_to_file()
+    return JSONResponse({"success": True})
+
+# ============== SCHEDULED TASKS ENDPOINTS ==============
+
+@app.get("/api/scheduled")
+async def get_scheduled_tasks():
+    """Get all scheduled tasks."""
+    tasks = []
+    for task_id, task in scheduled_tasks_store.items():
+        tasks.append({
+            "id": task_id,
+            **task
+        })
+    # Sort by schedule_time
+    tasks.sort(key=lambda x: x.get("schedule_time", ""))
+    return JSONResponse(tasks)
+
+@app.post("/api/scheduled")
+async def create_scheduled_task(task: ScheduledTaskCreate):
+    """Create a new scheduled task."""
+    task_id = str(uuid.uuid4())[:8]
+    scheduled_tasks_store[task_id] = {
+        "prompt": task.prompt,
+        "name": task.name or task.prompt[:50],
+        "schedule_time": task.schedule_time,
+        "recurring": task.recurring,
+        "interval_minutes": task.interval_minutes,
+        "status": "active",
+        "created_at": datetime.now().isoformat(),
+        "last_run": None,
+        "last_result": None
+    }
+    save_scheduled_tasks_to_file()
+    return JSONResponse({"success": True, "task_id": task_id})
+
+@app.delete("/api/scheduled/{task_id}")
+async def delete_scheduled_task(task_id: str):
+    """Delete/cancel a scheduled task."""
+    if task_id not in scheduled_tasks_store:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    del scheduled_tasks_store[task_id]
+    save_scheduled_tasks_to_file()
+    return JSONResponse({"success": True})
+
+@app.patch("/api/scheduled/{task_id}")
+async def toggle_scheduled_task(task_id: str):
+    """Pause/resume a scheduled task."""
+    if task_id not in scheduled_tasks_store:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    task = scheduled_tasks_store[task_id]
+    if task["status"] == "active":
+        task["status"] = "paused"
+    elif task["status"] == "paused":
+        task["status"] = "active"
+    save_scheduled_tasks_to_file()
+    return JSONResponse({"success": True, "status": task["status"]})
+
+# ============== CUSTOM CONTEXT ENDPOINTS ==============
+
+@app.get("/api/context")
+async def get_custom_context():
+    """Get custom context/instructions."""
+    return JSONResponse({"context": custom_context})
+
+@app.post("/api/context")
+async def set_custom_context(data: Dict[str, str]):
+    """Set custom context/instructions."""
+    global custom_context
+    custom_context = data.get("context", "")
+    save_custom_context()
+    return JSONResponse({"success": True})
 
 # Task management endpoints
 @app.get("/api/tasks")
@@ -821,6 +1151,146 @@ h1 {
   color: var(--gray-500);
   padding: 2rem;
   font-size: 0.9rem;
+}
+/* Chats Tab */
+#chats-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+.chat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.chat-item:hover {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+.chat-item.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: var(--primary);
+}
+.chat-item-info {
+  flex: 1;
+  min-width: 0;
+}
+.chat-item-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-item-meta {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+.chat-item-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.chat-item:hover .chat-item-actions {
+  opacity: 1;
+}
+.chat-item-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+.chat-item-btn:hover {
+  opacity: 1;
+}
+.btn-new-chat {
+  background: var(--primary);
+  border: none;
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  transition: all 0.2s;
+}
+.btn-new-chat:hover {
+  background: var(--primary-dark);
+  transform: scale(1.1);
+}
+/* Scheduled Tasks */
+.scheduled-item {
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.scheduled-item.active {
+  border-left: 3px solid var(--success);
+}
+.scheduled-item.paused {
+  border-left: 3px solid var(--warning);
+  opacity: 0.7;
+}
+.scheduled-item.completed {
+  border-left: 3px solid var(--gray-500);
+  opacity: 0.5;
+}
+.scheduled-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.scheduled-item-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--light);
+}
+.scheduled-item-status {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.1);
+}
+.scheduled-item-status.active { color: var(--success); }
+.scheduled-item-status.paused { color: var(--warning); }
+.scheduled-item-status.completed { color: var(--gray-400); }
+.scheduled-item-status.running { color: var(--secondary); }
+.scheduled-item-time {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  margin-bottom: 0.25rem;
+}
+.scheduled-item-prompt {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scheduled-item-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 /* Settings Tab */
 #settings-content {
@@ -1467,9 +1937,22 @@ main {
     
     <!-- Sidebar Tabs -->
     <div class="sidebar-tabs">
+      <button class="sidebar-tab" data-tab="chats">💬 Chats</button>
       <button class="sidebar-tab active" data-tab="activity">🔍 Activity</button>
       <button class="sidebar-tab" data-tab="tasks">📋 Tasks</button>
+      <button class="sidebar-tab" data-tab="scheduled">⏰ Scheduled</button>
       <button class="sidebar-tab" data-tab="settings">⚙️ Settings</button>
+    </div>
+    
+    <!-- Chats Tab Content -->
+    <div class="tab-content" id="tab-chats">
+      <div class="sidebar-header">
+        <span class="header-icon">💬</span> Conversations
+        <button class="btn-new-chat" onclick="createNewChat()" title="New Chat">➕</button>
+      </div>
+      <div id="chats-list">
+        <div class="chat-loading">Loading chats...</div>
+      </div>
     </div>
     
     <!-- Activity Tab Content -->
@@ -1568,6 +2051,89 @@ main {
             Use Export/Import to backup or transfer your keys between installations.
           </p>
         </div>
+        
+        <div class="settings-section">
+          <div class="settings-section-title">📱 Telegram Integration</div>
+          <div class="api-key-item">
+            <span class="api-key-label">Bot Token</span>
+            <input type="password" class="api-key-input" id="api-key-telegram_bot" placeholder="Enter Telegram bot token...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_bot')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_bot')">🗑️</button>
+          </div>
+          <div class="api-key-item">
+            <span class="api-key-label">Chat ID</span>
+            <input type="text" class="api-key-input" id="api-key-telegram_chat" placeholder="Enter chat/group ID...">
+            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_chat')">💾</button>
+            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_chat')">🗑️</button>
+          </div>
+          <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
+            Create a bot via @BotFather on Telegram. Use the agent's telegram_connect tool to link.
+          </p>
+        </div>
+        
+        <div class="settings-section">
+          <div class="settings-section-title">📋 Custom Context / Instructions</div>
+          <textarea id="custom-context-input" placeholder="Add custom instructions for the agent (e.g., preferred reporting format, specific rules)..." 
+            style="width: 100%; height: 120px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px; color: var(--light); font-family: inherit; font-size: 0.85rem; resize: vertical;"></textarea>
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="saveCustomContext()">💾 Save Context</button>
+            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="clearCustomContext()">🗑️ Clear</button>
+          </div>
+          <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
+            These instructions will be included with every request to the agent.
+          </p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Scheduled Tasks Tab Content -->
+    <div class="tab-content" id="tab-scheduled">
+      <div class="sidebar-header">
+        <span class="header-icon">⏰</span> Scheduled Tasks
+        <button class="btn-new-chat" onclick="showScheduleModal()" title="New Scheduled Task">➕</button>
+      </div>
+      <div id="scheduled-list">
+        <div class="no-tasks">No scheduled tasks</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Schedule Task Modal -->
+  <div class="task-modal" id="schedule-modal">
+    <div class="task-modal-content" style="max-width: 500px;">
+      <div class="task-modal-header">
+        <span class="task-modal-title">⏰ Schedule New Task</span>
+        <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
+      </div>
+      <div class="task-modal-body">
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Task Name</label>
+          <input type="text" id="schedule-name" placeholder="e.g., Daily security scan" 
+            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Task Prompt</label>
+          <textarea id="schedule-prompt" placeholder="e.g., Run a quick nmap scan on target.com and report findings..." 
+            style="width: 100%; height: 80px; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light); resize: vertical;"></textarea>
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Schedule Time</label>
+          <input type="datetime-local" id="schedule-time" 
+            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label class="checkbox-wrapper">
+            <input type="checkbox" id="schedule-recurring">
+            <span class="checkmark"></span>
+            <span class="checkbox-label">🔄 Recurring Task</span>
+          </label>
+        </div>
+        <div id="recurring-options" style="display: none; margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Repeat Every (minutes)</label>
+          <input type="number" id="schedule-interval" value="60" min="5" 
+            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
+        </div>
+        <button class="btn btn-primary" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
       </div>
     </div>
   </div>
@@ -1856,7 +2422,9 @@ const API_KEY_MAP = {
   'securitytrails': 'SECURITYTRAILS_API_KEY',
   'hibp': 'HIBP_API_KEY',
   'censys': 'CENSYS_API_KEY',
-  'alienvault': 'ALIENVAULT_API_KEY'
+  'alienvault': 'ALIENVAULT_API_KEY',
+  'telegram_bot': 'TELEGRAM_BOT_TOKEN',
+  'telegram_chat': 'TELEGRAM_CHAT_ID'
 };
 
 // Reverse mapping for display
@@ -2446,6 +3014,378 @@ clearBtn.onclick = () => {
   }
 };
 
+// ============== CHAT MANAGEMENT ==============
+let currentChatId = 'default';
+let chatsStore = {};
+
+async function loadChats() {
+  try {
+    const response = await fetch('/api/chats');
+    const chats = await response.json();
+    chatsStore = {};
+    chats.forEach(c => chatsStore[c.id] = c);
+    renderChats();
+  } catch (err) {
+    console.error('Failed to load chats:', err);
+  }
+}
+
+function renderChats() {
+  const chatsList = document.getElementById('chats-list');
+  const chats = Object.values(chatsStore);
+  
+  if (chats.length === 0) {
+    chatsList.innerHTML = '<div class="no-tasks">No chats yet. Create one!</div>';
+    return;
+  }
+  
+  chatsList.innerHTML = chats.map(chat => `
+    <div class="chat-item ${chat.id === currentChatId ? 'active' : ''}" onclick="switchChat('${chat.id}')">
+      <div class="chat-item-info">
+        <div class="chat-item-name">${escapeHtml(chat.name)}</div>
+        <div class="chat-item-meta">${chat.message_count || 0} messages</div>
+      </div>
+      <div class="chat-item-actions">
+        <button class="chat-item-btn" onclick="event.stopPropagation(); renameChat('${chat.id}')" title="Rename">✏️</button>
+        ${chat.id !== 'default' ? `<button class="chat-item-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')" title="Delete">🗑️</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function createNewChat() {
+  const name = prompt('Enter chat name:', 'New Chat');
+  if (!name) return;
+  
+  try {
+    const response = await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const result = await response.json();
+    if (result.success) {
+      await loadChats();
+      switchChat(result.chat_id);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to create chat: ${err.message}`);
+  }
+}
+
+async function switchChat(chatId) {
+  // Save current chat messages first
+  await saveChatMessages();
+  
+  currentChatId = chatId;
+  sessionId = chatId;  // Update session ID to match chat
+  
+  // Clear current messages
+  messagesDiv.innerHTML = '';
+  chatHistory = [];
+  
+  // Load messages for this chat
+  try {
+    const response = await fetch(`/api/chats/${chatId}`);
+    const chat = await response.json();
+    
+    if (chat.messages) {
+      chat.messages.forEach(msg => {
+        addMessage(msg.type, msg.content, { skipSave: true });
+      });
+      chatHistory = [...chat.messages];
+    }
+  } catch (err) {
+    console.error('Failed to load chat:', err);
+  }
+  
+  renderChats();
+  
+  if (chatHistory.length === 0) {
+    addMessage('system', `💬 Switched to: ${chatsStore[chatId]?.name || 'Chat'}`, { skipSave: true });
+  }
+}
+
+async function saveChatMessages() {
+  if (chatHistory.length === 0) return;
+  
+  try {
+    // Save all messages at once by clearing and re-adding
+    await fetch(`/api/chats/${currentChatId}/messages`, {
+      method: 'DELETE'
+    });
+    
+    for (const msg of chatHistory) {
+      await fetch(`/api/chats/${currentChatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: currentChatId,
+          type: msg.type,
+          content: msg.content,
+          timestamp: msg.timestamp
+        })
+      });
+    }
+  } catch (err) {
+    console.error('Failed to save chat messages:', err);
+  }
+}
+
+async function renameChat(chatId) {
+  const chat = chatsStore[chatId];
+  const newName = prompt('Enter new name:', chat?.name || 'Chat');
+  if (!newName || newName === chat?.name) return;
+  
+  try {
+    await fetch(`/api/chats/${chatId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    await loadChats();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to rename chat: ${err.message}`);
+  }
+}
+
+async function deleteChat(chatId) {
+  if (!confirm('Delete this chat and all its messages?')) return;
+  
+  try {
+    await fetch(`/api/chats/${chatId}`, { method: 'DELETE' });
+    if (currentChatId === chatId) {
+      currentChatId = 'default';
+      sessionId = 'default';
+    }
+    await loadChats();
+    if (currentChatId === 'default') {
+      switchChat('default');
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to delete chat: ${err.message}`);
+  }
+}
+
+// Auto-save chat when page unloads
+window.addEventListener('beforeunload', () => {
+  // Use sendBeacon for reliable save on page close
+  if (chatHistory.length > 0) {
+    navigator.sendBeacon('/api/chats/' + currentChatId + '/save', JSON.stringify({
+      messages: chatHistory
+    }));
+  }
+});
+
+// ============== SCHEDULED TASKS ==============
+let scheduledTasksStore = {};
+let scheduledRefreshInterval = null;
+
+async function loadScheduledTasks() {
+  try {
+    const response = await fetch('/api/scheduled');
+    const tasks = await response.json();
+    scheduledTasksStore = {};
+    tasks.forEach(t => scheduledTasksStore[t.id] = t);
+    renderScheduledTasks();
+  } catch (err) {
+    console.error('Failed to load scheduled tasks:', err);
+  }
+}
+
+function renderScheduledTasks() {
+  const list = document.getElementById('scheduled-list');
+  const tasks = Object.values(scheduledTasksStore);
+  
+  if (tasks.length === 0) {
+    list.innerHTML = '<div class="no-tasks">No scheduled tasks. Click + to create one.</div>';
+    return;
+  }
+  
+  list.innerHTML = tasks.map(task => {
+    const scheduleDate = new Date(task.schedule_time);
+    const isRecurring = task.recurring;
+    const isPast = scheduleDate < new Date() && task.status !== 'completed';
+    
+    return `
+      <div class="scheduled-item ${task.status}">
+        <div class="scheduled-item-header">
+          <span class="scheduled-item-name">${escapeHtml(task.name || task.prompt.substring(0, 30))}</span>
+          <span class="scheduled-item-status ${task.status}">${task.status}${isRecurring ? ' 🔄' : ''}</span>
+        </div>
+        <div class="scheduled-item-time">
+          ⏰ ${scheduleDate.toLocaleString()}
+          ${isRecurring ? ` (every ${task.interval_minutes}m)` : ''}
+        </div>
+        <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
+        ${task.last_result ? `<div class="scheduled-item-prompt" style="color: var(--success); margin-top: 4px;">Last run: ${task.last_result.substring(0, 100)}...</div>` : ''}
+        <div class="scheduled-item-actions">
+          <button class="task-btn" onclick="toggleScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
+            ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
+          </button>
+          <button class="task-btn task-btn-cancel" onclick="deleteScheduledTask('${task.id}')">🗑️ Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function showScheduleModal() {
+  const modal = document.getElementById('schedule-modal');
+  modal.classList.add('active');
+  
+  // Set default time to now + 1 hour
+  const now = new Date();
+  now.setHours(now.getHours() + 1);
+  now.setMinutes(0);
+  const dateStr = now.toISOString().slice(0, 16);
+  document.getElementById('schedule-time').value = dateStr;
+}
+
+function closeScheduleModal() {
+  document.getElementById('schedule-modal').classList.remove('active');
+  document.getElementById('schedule-name').value = '';
+  document.getElementById('schedule-prompt').value = '';
+  document.getElementById('schedule-recurring').checked = false;
+  document.getElementById('recurring-options').style.display = 'none';
+}
+
+// Toggle recurring options visibility
+document.getElementById('schedule-recurring')?.addEventListener('change', (e) => {
+  document.getElementById('recurring-options').style.display = e.target.checked ? 'block' : 'none';
+});
+
+async function createScheduledTask() {
+  const name = document.getElementById('schedule-name').value.trim();
+  const prompt = document.getElementById('schedule-prompt').value.trim();
+  const time = document.getElementById('schedule-time').value;
+  const recurring = document.getElementById('schedule-recurring').checked;
+  const interval = parseInt(document.getElementById('schedule-interval').value) || 60;
+  
+  if (!prompt) {
+    alert('Please enter a task prompt');
+    return;
+  }
+  if (!time) {
+    alert('Please select a schedule time');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/scheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name || prompt.substring(0, 50),
+        prompt,
+        schedule_time: new Date(time).toISOString(),
+        recurring,
+        interval_minutes: recurring ? interval : null
+      })
+    });
+    
+    if (response.ok) {
+      closeScheduleModal();
+      await loadScheduledTasks();
+      addMessage('system', `⏰ Task scheduled for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to schedule task: ${err.message}`);
+  }
+}
+
+async function toggleScheduledTask(taskId) {
+  try {
+    await fetch(`/api/scheduled/${taskId}`, { method: 'PATCH' });
+    await loadScheduledTasks();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to update task: ${err.message}`);
+  }
+}
+
+async function deleteScheduledTask(taskId) {
+  if (!confirm('Delete this scheduled task?')) return;
+  try {
+    await fetch(`/api/scheduled/${taskId}`, { method: 'DELETE' });
+    await loadScheduledTasks();
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to delete task: ${err.message}`);
+  }
+}
+
+// ============== CUSTOM CONTEXT ==============
+async function loadCustomContext() {
+  try {
+    const response = await fetch('/api/context');
+    const data = await response.json();
+    const textarea = document.getElementById('custom-context-input');
+    if (textarea && data.context) {
+      textarea.value = data.context;
+    }
+  } catch (err) {
+    console.error('Failed to load custom context:', err);
+  }
+}
+
+async function saveCustomContext() {
+  const context = document.getElementById('custom-context-input').value;
+  try {
+    await fetch('/api/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context })
+    });
+    addMessage('system', '✅ Custom context saved');
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to save context: ${err.message}`);
+  }
+}
+
+async function clearCustomContext() {
+  if (!confirm('Clear custom context?')) return;
+  document.getElementById('custom-context-input').value = '';
+  await saveCustomContext();
+}
+
+// ============== TAB SWITCHING UPDATES ==============
+// Update sidebar tab handling
+document.querySelectorAll('.sidebar-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    
+    tab.classList.add('active');
+    const tabId = tab.getAttribute('data-tab');
+    document.getElementById('tab-' + tabId).classList.add('active');
+    
+    // Load data based on tab
+    if (tabId === 'tasks') startTaskPolling();
+    else stopTaskPolling();
+    
+    if (tabId === 'settings') {
+      loadApiKeys();
+      loadCustomContext();
+    }
+    
+    if (tabId === 'chats') loadChats();
+    
+    if (tabId === 'scheduled') loadScheduledTasks();
+  };
+});
+
+// ============== INITIALIZATION ==============
+// Load chats on startup
+loadChats();
+
+// Update addMessage to support skipSave option
+const originalAddMessage = addMessage;
+addMessage = function(type, content, meta = {}) {
+  originalAddMessage(type, content, meta);
+  if (!meta.skipSave && type !== 'progress') {
+    // Messages are saved when switching chats or on page unload
+  }
+};
+
 // Expose functions globally for inline onclick handlers
 window.removeFile = removeFile;
 window.previewReport = previewReport;
@@ -2454,6 +3394,17 @@ window.pauseTask = pauseTask;
 window.cancelTask = cancelTask;
 window.saveApiKey = saveApiKey;
 window.deleteApiKey = deleteApiKey;
+window.createNewChat = createNewChat;
+window.switchChat = switchChat;
+window.renameChat = renameChat;
+window.deleteChat = deleteChat;
+window.showScheduleModal = showScheduleModal;
+window.closeScheduleModal = closeScheduleModal;
+window.createScheduledTask = createScheduledTask;
+window.toggleScheduledTask = toggleScheduledTask;
+window.deleteScheduledTask = deleteScheduledTask;
+window.saveCustomContext = saveCustomContext;
+window.clearCustomContext = clearCustomContext;
 </script>
 </body>
 </html>
@@ -2516,6 +3467,14 @@ async def ws_endpoint(ws: WebSocket):
                     full_message += "\n\n--- ATTACHED FILES ---"
                     for f in relevant_files:
                         full_message += f"\n\n### File: {f['filename']}\n```\n{f['content'][:15000]}\n```"
+            
+            # Add custom context if defined
+            if custom_context and custom_context.strip():
+                full_message = f"""[CUSTOM INSTRUCTIONS FROM USER]
+{custom_context}
+[END CUSTOM INSTRUCTIONS]
+
+{full_message}"""
             
             # Add report mode instruction
             if report_mode_enabled:

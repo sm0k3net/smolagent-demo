@@ -70,6 +70,15 @@ from app.tools.report_tools import (
     generate_markdown_report,
     generate_pdf_report,
 )
+from app.tools.telegram_tool import (
+    telegram_connect,
+    telegram_set_chat,
+    telegram_send_message,
+    telegram_send_file,
+    telegram_get_updates,
+    telegram_status,
+    telegram_disconnect,
+)
 from app.config import get_settings
 
 # DefectDojo tools are optional; import only if base URL is configured
@@ -209,6 +218,17 @@ def build_owasp_agent() -> CodeAgent:
         generate_html_report,
         generate_markdown_report,
         generate_pdf_report,
+    ])
+    
+    # Telegram integration tools
+    tools.extend([
+        telegram_connect,
+        telegram_set_chat,
+        telegram_send_message,
+        telegram_send_file,
+        telegram_get_updates,
+        telegram_status,
+        telegram_disconnect,
     ])
     
     # Add DefectDojo tools only if configured
