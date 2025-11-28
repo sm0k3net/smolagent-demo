@@ -11,6 +11,8 @@ _REPORT_MODE_ENABLED = False
 _CURRENT_REPORT_DATA: dict = {}
 # Track all tools used during the session (even outside report mode)
 _SESSION_TOOLS_USED: set = set()
+# Artifacts storage (screenshots, raw tool outputs)
+_REPORT_ARTIFACTS: list = []
 
 
 def track_tool_usage(tool_name: str):
@@ -199,11 +201,62 @@ def _get_report_template_html() -> str:
         .recon-data-list code:last-child { border-bottom: none; }
         .methodology { background: #fff3cd; border-left: 4px solid #ffc107; }
         .conclusion { background: #d4edda; border-left: 4px solid #28a745; }
+        .artifacts-section { background: #f0f7ff; border-left: 4px solid #0d6efd; }
+        .artifacts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        .artifact-card {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .artifact-header {
+            background: #0d6efd;
+            color: white;
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .artifact-header.screenshot { background: #6f42c1; }
+        .artifact-header.tool-output { background: #198754; }
+        .artifact-body { padding: 1rem; }
+        .artifact-body img { 
+            max-width: 100%; 
+            height: auto; 
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            cursor: pointer;
+        }
+        .artifact-body pre {
+            max-height: 300px;
+            overflow: auto;
+            font-size: 0.75rem;
+            margin: 0;
+        }
+        .artifact-meta { font-size: 0.8rem; color: #6c757d; margin-top: 0.5rem; }
+        .download-btn {
+            display: inline-block;
+            background: #0d6efd;
+            color: white;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+        .download-btn:hover { background: #0b5ed7; }
         @media print {
             .container { max-width: 100%; }
             .section { break-inside: avoid; }
             .finding { break-inside: avoid; }
             .recon-data-list { max-height: none; }
+            .artifact-body pre { max-height: none; }
         }
     </style>
 </head>
@@ -278,6 +331,8 @@ def _get_report_template_html() -> str:
             </div>
         </div>
         
+        {{artifacts_section}}
+        
         <div class="section">
             <h2>📚 References</h2>
             <ul>
@@ -308,6 +363,7 @@ def enable_report_mode(
     global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
     
     _REPORT_MODE_ENABLED = True
+    _REPORT_ARTIFACTS.clear()  # Clear previous artifacts
     _CURRENT_REPORT_DATA = {
         "title": title,
         "subtitle": f"{report_type} Report",
@@ -320,7 +376,8 @@ def enable_report_mode(
         "tools": set(),
         "findings": [],
         "conclusion": "",
-        "references": []
+        "references": [],
+        "artifacts": []  # Screenshots and tool outputs
     }
     
     return f"✅ Report mode ENABLED. Collecting findings for: {title}\nTarget: {target}\nUse add_finding_to_report() to add findings, then generate_report() when done."
@@ -607,6 +664,98 @@ def record_tool_used(tool_name: str, description: str | None = None) -> str:
 
 
 @tool
+def add_screenshot_to_report(
+    url: str,
+    base64_data: str,
+    description: str = "Website Screenshot",
+    timestamp: str | None = None
+) -> str:
+    """Add a screenshot to the report artifacts section.
+
+    Args:
+        url: The URL that was screenshotted.
+        base64_data: Base64 encoded PNG image data.
+        description: Description of the screenshot (e.g., 'Homepage', 'Login Page').
+        timestamp: Optional timestamp when screenshot was taken.
+    Returns: Confirmation that screenshot was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    artifact = {
+        "type": "screenshot",
+        "url": url,
+        "description": description,
+        "data": base64_data,
+        "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    _REPORT_ARTIFACTS.append(artifact)
+    if "artifacts" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["artifacts"] = []
+    _CURRENT_REPORT_DATA["artifacts"].append(artifact)
+    
+    return f"✅ Screenshot added to report: {description} ({url})"
+
+
+@tool
+def add_tool_output_to_report(
+    tool_name: str,
+    output_data: str,
+    output_format: str = "text",
+    filename: str | None = None,
+    description: str | None = None
+) -> str:
+    """Add raw tool output data to the report artifacts section.
+
+    Args:
+        tool_name: Name of the tool (e.g., 'nmap', 'nikto', 'nuclei').
+        output_data: Raw output data from the tool.
+        output_format: Format of the output (text, xml, json, csv).
+        filename: Optional filename for the artifact (e.g., 'nmap_scan.xml').
+        description: Optional description of what this output contains.
+    Returns: Confirmation that artifact was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    # Generate filename if not provided
+    if not filename:
+        ext = {"xml": "xml", "json": "json", "csv": "csv", "text": "txt"}.get(output_format, "txt")
+        filename = f"{tool_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+    
+    artifact = {
+        "type": "tool_output",
+        "tool_name": tool_name,
+        "filename": filename,
+        "format": output_format,
+        "data": output_data,
+        "description": description or f"Raw output from {tool_name}",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    _REPORT_ARTIFACTS.append(artifact)
+    if "artifacts" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["artifacts"] = []
+    _CURRENT_REPORT_DATA["artifacts"].append(artifact)
+    
+    # Also track the tool
+    _CURRENT_REPORT_DATA["tools"].add(tool_name)
+    
+    return f"✅ Tool output added to report: {filename} ({len(output_data)} bytes)"
+
+
+def get_report_artifacts() -> list:
+    """Get all artifacts for external access."""
+    global _REPORT_ARTIFACTS
+    return _REPORT_ARTIFACTS.copy()
+
+
+@tool
 def generate_html_report() -> str:
     """Generate the final HTML report from collected findings.
 
@@ -727,6 +876,59 @@ def generate_html_report() -> str:
         <li><a href="https://nvd.nist.gov/">NIST National Vulnerability Database</a></li>
     """
     
+    # Build artifacts section
+    artifacts = data.get("artifacts", []) + _REPORT_ARTIFACTS
+    artifacts_section = ""
+    if artifacts:
+        artifacts_html = ""
+        for artifact in artifacts:
+            if artifact.get("type") == "screenshot":
+                artifacts_html += f'''
+                <div class="artifact-card">
+                    <div class="artifact-header screenshot">
+                        <span>📸 {artifact.get("description", "Screenshot")}</span>
+                        <span style="font-size: 0.8rem; opacity: 0.8;">{artifact.get("timestamp", "")}</span>
+                    </div>
+                    <div class="artifact-body">
+                        <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{artifact.get("description", "Screenshot")}" onclick="window.open(this.src)">
+                        <div class="artifact-meta">URL: {artifact.get("url", "N/A")}</div>
+                    </div>
+                </div>
+                '''
+            elif artifact.get("type") == "tool_output":
+                # Truncate very long outputs in HTML, but provide download
+                output_data = artifact.get("data", "")
+                display_data = output_data[:5000] + ("\\n... [truncated, see download]" if len(output_data) > 5000 else "")
+                # Create data URL for download
+                import base64
+                encoded_data = base64.b64encode(output_data.encode()).decode()
+                mime_types = {"xml": "application/xml", "json": "application/json", "csv": "text/csv", "text": "text/plain"}
+                mime = mime_types.get(artifact.get("format", "text"), "text/plain")
+                
+                artifacts_html += f'''
+                <div class="artifact-card">
+                    <div class="artifact-header tool-output">
+                        <span>📄 {artifact.get("filename", "output.txt")}</span>
+                        <span style="font-size: 0.8rem; opacity: 0.8;">{artifact.get("tool_name", "")}</span>
+                    </div>
+                    <div class="artifact-body">
+                        <pre>{display_data}</pre>
+                        <div class="artifact-meta">{artifact.get("description", "")} | {artifact.get("timestamp", "")}</div>
+                        <a class="download-btn" href="data:{mime};base64,{encoded_data}" download="{artifact.get("filename", "output.txt")}">📥 Download {artifact.get("filename", "file")}</a>
+                    </div>
+                </div>
+                '''
+        
+        artifacts_section = f'''
+        <div class="section artifacts-section">
+            <h2>📦 Artifacts</h2>
+            <p>Screenshots and raw tool outputs collected during the assessment:</p>
+            <div class="artifacts-grid">
+                {artifacts_html}
+            </div>
+        </div>
+        '''
+    
     # Replace placeholders
     html = template
     html = html.replace("{{title}}", data.get("title", "Security Assessment Report"))
@@ -746,6 +948,7 @@ def generate_html_report() -> str:
     html = html.replace("{{tools_used}}", tools_html or '<div class="tool-card"><div class="tool-icon">🛠️</div><div class="tool-name">Manual Testing</div></div>')
     html = html.replace("{{findings_html}}", findings_html or "<p>No findings recorded.</p>")
     html = html.replace("{{conclusion}}", data.get("conclusion", "Based on the assessment, the recommendations above should be implemented to improve the security posture of the application."))
+    html = html.replace("{{artifacts_section}}", artifacts_section)
     html = html.replace("{{references}}", references_html)
     
     return html
@@ -933,6 +1136,54 @@ def generate_markdown_report() -> str:
     lines.append("")
     lines.append("---")
     lines.append("")
+    
+    # Artifacts Section
+    artifacts = data.get("artifacts", []) + _REPORT_ARTIFACTS
+    if artifacts:
+        lines.append("## 📦 Artifacts")
+        lines.append("")
+        lines.append("Screenshots and raw tool outputs collected during the assessment:")
+        lines.append("")
+        
+        screenshots = [a for a in artifacts if a.get("type") == "screenshot"]
+        tool_outputs = [a for a in artifacts if a.get("type") == "tool_output"]
+        
+        if screenshots:
+            lines.append("### Screenshots")
+            lines.append("")
+            for i, s in enumerate(screenshots, 1):
+                lines.append(f"**{i}. {s.get('description', 'Screenshot')}**")
+                lines.append(f"- URL: {s.get('url', 'N/A')}")
+                lines.append(f"- Timestamp: {s.get('timestamp', 'N/A')}")
+                # Include base64 image for markdown that supports it
+                lines.append(f"- ![Screenshot]({s.get('url', '')})")
+                lines.append("")
+        
+        if tool_outputs:
+            lines.append("### Tool Outputs")
+            lines.append("")
+            for i, t in enumerate(tool_outputs, 1):
+                lines.append(f"**{i}. {t.get('filename', 'output.txt')}** ({t.get('tool_name', 'Unknown')})")
+                lines.append(f"- Description: {t.get('description', 'N/A')}")
+                lines.append(f"- Format: {t.get('format', 'text')}")
+                lines.append(f"- Timestamp: {t.get('timestamp', 'N/A')}")
+                lines.append("")
+                lines.append("<details>")
+                lines.append("<summary>Click to expand output</summary>")
+                lines.append("")
+                lines.append("```")
+                output_data = t.get("data", "")
+                if len(output_data) > 10000:
+                    lines.append(output_data[:10000] + "\\n... [truncated]")
+                else:
+                    lines.append(output_data)
+                lines.append("```")
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+        
+        lines.append("---")
+        lines.append("")
     
     # References
     lines.append("## References")

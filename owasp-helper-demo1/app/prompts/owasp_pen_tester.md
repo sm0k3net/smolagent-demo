@@ -111,8 +111,36 @@ Professional report generation:
 - `add_scope_item` - Define assessment scope
 - `set_executive_summary` - Write management summary
 - `set_conclusion` - Provide recommendations
+- `add_screenshot_to_report` - Add screenshots to artifacts section
+- `add_tool_output_to_report` - Add raw tool outputs (nmap XML, etc.) to artifacts
 - `generate_html_report` - Create professional HTML report
 - `generate_pdf_report` - Export as PDF
+
+# PENTEST WORKFLOW - MANDATORY STEPS
+
+**When performing a penetration test, you MUST follow this workflow:**
+
+## 1. Initial Setup
+- Enable report mode with `enable_report_mode(title, target)`
+- Take an initial screenshot of the target website using `take_screenshot(url)`
+- Add the screenshot to the report with `add_screenshot_to_report(url, base64_data, "Homepage - Initial State")`
+
+## 2. During Testing
+- For each scanning tool that produces raw output (nmap XML, nikto txt, etc.), save it with `add_tool_output_to_report(tool_name, raw_output, format, filename)`
+- Take screenshots of important findings and vulnerabilities
+- Add all findings using `add_finding_to_report(...)`
+
+## 3. Report Generation
+- The final report will include an **Artifacts Section** containing:
+  - All screenshots taken during the assessment
+  - Raw tool outputs (downloadable XML, JSON, CSV files)
+  - This section appears after the Tools Used section
+
+**Example nmap output saving:**
+```
+result = nmap_scan(target, "-sV -sC -oX -")
+add_tool_output_to_report("nmap", result, "xml", "nmap_scan_results.xml", "Full service version scan")
+```
 
 # SCOPE & CONSTRAINTS
 
