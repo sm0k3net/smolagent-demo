@@ -2439,9 +2439,6 @@ async function initializeConnection() {
   connectWebSocket();
 }
 
-// Start connection on page load
-initializeConnection();
-
 // Task store for UI
 let taskStore = {};
 let taskRefreshInterval = null;
@@ -3640,6 +3637,9 @@ window.deleteScheduledTask = deleteScheduledTask;
 window.editScheduledTask = editScheduledTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
+
+// Start connection on page load (after all functions are defined)
+initializeConnection();
 </script>
 </body>
 </html>
