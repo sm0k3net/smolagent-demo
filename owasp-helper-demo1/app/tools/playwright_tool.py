@@ -4,6 +4,7 @@ import base64
 import tempfile
 import os
 import subprocess
+import sys
 from smolagents import tool
 
 
@@ -13,24 +14,82 @@ def _check_playwright_installed() -> tuple[bool, str | None]:
         from playwright.sync_api import sync_playwright
         return True, None
     except ImportError:
-        return False, "Playwright not installed. Install with: pip install playwright && playwright install chromium"
+        return False, "Playwright not installed"
 
 
-def _ensure_browser_installed() -> str | None:
-    """Ensure Chromium browser is installed for Playwright."""
+def _install_playwright_package() -> tuple[bool, str]:
+    """Install playwright package via pip."""
     try:
-        # Try to run playwright install chromium
         result = subprocess.run(
-            ["playwright", "install", "chromium"],
+            [sys.executable, '-m', 'pip', 'install', 'playwright'],
             capture_output=True,
             text=True,
             timeout=120
         )
-        if result.returncode != 0:
-            return f"Failed to install Chromium: {result.stderr}"
-        return None
+        if result.returncode == 0:
+            return True, "Playwright package installed successfully"
+        return False, f"Failed to install playwright: {result.stderr}"
     except Exception as e:
-        return f"Error installing browser: {e}"
+        return False, f"Error installing playwright: {e}"
+
+
+def _install_browser(browser: str = "chromium") -> tuple[bool, str]:
+    """Install Playwright browser binaries."""
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'playwright', 'install', browser],
+            capture_output=True,
+            text=True,
+            timeout=300  # Browser downloads can take time
+        )
+        if result.returncode == 0:
+            return True, f"{browser} browser installed successfully"
+        return False, f"Failed to install {browser}: {result.stderr}"
+    except Exception as e:
+        return False, f"Error installing browser: {e}"
+
+
+def _ensure_playwright_ready() -> tuple[bool, str]:
+    """Ensure Playwright and Chromium are ready to use. Auto-installs if needed."""
+    # Check if playwright package is installed
+    installed, _ = _check_playwright_installed()
+    if not installed:
+        print("📦 Installing Playwright package...")
+        success, msg = _install_playwright_package()
+        if not success:
+            return False, msg
+        print(f"✅ {msg}")
+    
+    # Try to launch browser to check if it's installed
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return True, "Playwright ready"
+    except Exception as e:
+        error_msg = str(e)
+        if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
+            print("📦 Installing Chromium browser...")
+            success, msg = _install_browser("chromium")
+            if success:
+                print(f"✅ {msg}")
+                return True, "Playwright and Chromium installed successfully"
+            return False, msg
+        return False, f"Playwright error: {e}"
+
+
+def _get_playwright_with_auto_install():
+    """Get Playwright sync API, auto-installing if needed."""
+    ready, msg = _ensure_playwright_ready()
+    if not ready:
+        return None, msg
+    
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright, None
+    except ImportError:
+        return None, "Failed to import playwright after installation"
 
 
 def _get_playwright():
@@ -48,14 +107,14 @@ def _get_playwright():
 
 @tool
 def fetch_page_title(url: str) -> str:
-    """Fetch a page title using Playwright (headless).
+    """Fetch a page title using Playwright (headless). Auto-installs Playwright if needed.
 
     Args:
         url: The URL to open.
     Returns:
         Extracted <title> text or an error message.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -73,7 +132,7 @@ def fetch_page_title(url: str) -> str:
 
 @tool
 def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> str:
-    """Navigate to a URL and return the page content and metadata.
+    """Navigate to a URL and return the page content and metadata. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to navigate to.
@@ -81,7 +140,7 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
         timeout: Navigation timeout in milliseconds (default 30000).
     Returns: Page title, URL, and text content summary.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -114,7 +173,7 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
 
 @tool
 def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/screenshots") -> str:
-    """Take a screenshot of a webpage and return the image data.
+    """Take a screenshot of a webpage and return the image data. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to screenshot.
@@ -122,7 +181,8 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
         output_dir: Directory to save screenshots (default /tmp/screenshots).
     Returns: Screenshot information including base64 data for display and file path.
     """
-    sync_playwright, err = _get_playwright()
+    # Use auto-install version to ensure Playwright and browser are ready
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -198,7 +258,7 @@ Original error: {error_msg}"""
 
 @tool
 def click_and_extract(url: str, click_selector: str, extract_selector: str) -> str:
-    """Click an element and extract text from another element.
+    """Click an element and extract text from another element. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to navigate to.
@@ -206,7 +266,7 @@ def click_and_extract(url: str, click_selector: str, extract_selector: str) -> s
         extract_selector: CSS selector of element to extract text from after clicking.
     Returns: Extracted text content.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -234,7 +294,7 @@ def click_and_extract(url: str, click_selector: str, extract_selector: str) -> s
 
 @tool
 def fill_form(url: str, form_data: str, submit_selector: str | None = None) -> str:
-    """Fill a form on a webpage with provided data.
+    """Fill a form on a webpage with provided data. Auto-installs Playwright if needed.
 
     Args:
         url: The URL containing the form.
@@ -242,7 +302,7 @@ def fill_form(url: str, form_data: str, submit_selector: str | None = None) -> s
         submit_selector: Optional CSS selector for submit button to click.
     Returns: Result of form submission or page state after filling.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -281,14 +341,14 @@ def fill_form(url: str, form_data: str, submit_selector: str | None = None) -> s
 
 @tool
 def get_page_links(url: str, filter_domain: bool = True) -> str:
-    """Extract all links from a webpage.
+    """Extract all links from a webpage. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to extract links from.
         filter_domain: Only return links from the same domain (default True).
     Returns: List of discovered links.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -325,14 +385,15 @@ def get_page_links(url: str, filter_domain: bool = True) -> str:
 
 @tool
 def get_page_forms(url: str) -> str:
-    """Extract all forms and their inputs from a webpage.
+    """Extract all forms and their inputs from a webpage. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to analyze for forms.
     Returns: Detailed information about forms and their fields.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
+        return err
         return err
     
     try:
@@ -382,14 +443,14 @@ def get_page_forms(url: str) -> str:
 
 @tool
 def intercept_requests(url: str, log_types: str = "xhr,fetch,document") -> str:
-    """Navigate to a URL and log network requests.
+    """Navigate to a URL and log network requests. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to navigate to.
         log_types: Comma-separated request types to log (xhr, fetch, document, stylesheet, image, script).
     Returns: List of network requests made by the page.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
@@ -429,13 +490,13 @@ def intercept_requests(url: str, log_types: str = "xhr,fetch,document") -> str:
 
 @tool
 def check_console_errors(url: str) -> str:
-    """Navigate to a URL and capture JavaScript console errors.
+    """Navigate to a URL and capture JavaScript console errors. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to check for console errors.
     Returns: List of console errors and warnings.
     """
-    sync_playwright, err = _get_playwright()
+    sync_playwright, err = _get_playwright_with_auto_install()
     if err:
         return err
     
