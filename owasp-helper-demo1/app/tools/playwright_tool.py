@@ -221,23 +221,16 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
             
             file_size = len(image_data) / 1024  # KB
             
-            return f"""## Screenshot Captured Successfully
+            # Return format optimized for chat display with embedded image
+            # Use SCREENSHOT_IMAGE_DATA format that the UI recognizes
+            return f"""📸 Screenshot Captured Successfully!
 
 **URL:** {url}
 **Page Title:** {title}
-**File:** {screenshot_path}
 **Size:** {file_size:.1f} KB
-**Full Page:** {'Yes' if full_page else 'No'}
+**Saved to:** `{screenshot_path}`
 
-### Preview:
-![Screenshot]({screenshot_path})
-
-### Base64 Image Data:
-```
-data:image/png;base64,{base64_data}
-```
-
-The screenshot has been saved to `{screenshot_path}` and can be included in reports."""
+SCREENSHOT_IMAGE_DATA:{base64_data}:END_IMAGE_DATA"""
     except Exception as e:
         error_msg = str(e)
         if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:

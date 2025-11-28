@@ -58,8 +58,57 @@ task_store: Dict[str, Task] = {}
 tasks_store: Dict[str, Dict[str, Any]] = {}
 task_queues: Dict[str, queue.Queue] = {}
 
-# API Keys storage (in-memory, should be in secure storage in production)
+# API Keys storage with file persistence
+API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
 api_keys_store: Dict[str, str] = {}
+
+def load_api_keys_from_file():
+    """Load API keys from file."""
+    global api_keys_store
+    default_keys = {
+        "SHODAN_API_KEY": "",
+        "VIRUSTOTAL_API_KEY": "",
+        "HUNTER_API_KEY": "",
+        "SECURITYTRAILS_API_KEY": "",
+        "HIBP_API_KEY": "",
+        "CENSYS_API_KEY": "",
+        "ALIENVAULT_API_KEY": "",
+    }
+    
+    # Try to load from file first
+    if os.path.exists(API_KEYS_FILE):
+        try:
+            with open(API_KEYS_FILE, 'r') as f:
+                saved_keys = json.load(f)
+                api_keys_store = {**default_keys, **saved_keys}
+        except Exception as e:
+            print(f"Error loading API keys: {e}")
+            api_keys_store = default_keys
+    else:
+        api_keys_store = default_keys
+    
+    # Also check environment variables (they override file)
+    for key in api_keys_store:
+        env_val = os.getenv(key, "")
+        if env_val:
+            api_keys_store[key] = env_val
+    
+    # Set environment variables for tools to use
+    for key, value in api_keys_store.items():
+        if value:
+            os.environ[key] = value
+
+def save_api_keys_to_file():
+    """Save API keys to file."""
+    try:
+        # Only save non-empty keys
+        keys_to_save = {k: v for k, v in api_keys_store.items() if v}
+        with open(API_KEYS_FILE, 'w') as f:
+            json.dump(keys_to_save, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving API keys: {e}")
+        return False
 
 class FileUpload(BaseModel):
     session_id: str
@@ -75,14 +124,8 @@ async def startup():
     global agent, api_keys_store
     async with startup_lock:
         if agent is None:
-            # Load any existing API keys from environment
-            api_keys_store = {
-                "SHODAN_API_KEY": os.getenv("SHODAN_API_KEY", ""),
-                "VIRUSTOTAL_API_KEY": os.getenv("VIRUSTOTAL_API_KEY", ""),
-                "HUNTER_API_KEY": os.getenv("HUNTER_API_KEY", ""),
-                "SECURITYTRAILS_API_KEY": os.getenv("SECURITYTRAILS_API_KEY", ""),
-                "HIBP_API_KEY": os.getenv("HIBP_API_KEY", ""),
-            }
+            # Load API keys from file/environment
+            load_api_keys_from_file()
             agent = build_owasp_agent()
 
 # API Keys management endpoints
@@ -99,14 +142,45 @@ async def get_api_keys():
 
 @app.post("/api/keys")
 async def update_api_key(update: APIKeyUpdate):
-    """Update an API key."""
+    """Update an API key and persist to file."""
     global api_keys_store
-    if update.service in api_keys_store:
-        api_keys_store[update.service] = update.api_key
-        # Also update environment variable for tools to use
-        os.environ[update.service] = update.api_key
-        return JSONResponse({"success": True, "service": update.service})
-    return JSONResponse({"error": "Unknown service"}, status_code=400)
+    # Allow adding new keys or updating existing ones
+    api_keys_store[update.service] = update.api_key
+    # Also update environment variable for tools to use
+    os.environ[update.service] = update.api_key
+    # Save to file
+    save_api_keys_to_file()
+    return JSONResponse({"success": True, "service": update.service})
+
+@app.delete("/api/keys/{service}")
+async def delete_api_key(service: str):
+    """Delete an API key."""
+    global api_keys_store
+    if service in api_keys_store:
+        api_keys_store[service] = ""
+        if service in os.environ:
+            del os.environ[service]
+        save_api_keys_to_file()
+        return JSONResponse({"success": True, "service": service})
+    return JSONResponse({"error": "Unknown service"}, status_code=404)
+
+@app.get("/api/keys/export")
+async def export_api_keys():
+    """Export API keys as JSON (for backup)."""
+    # Only export non-empty keys
+    keys_to_export = {k: v for k, v in api_keys_store.items() if v}
+    return JSONResponse(keys_to_export)
+
+@app.post("/api/keys/import")
+async def import_api_keys(keys: Dict[str, str]):
+    """Import API keys from JSON."""
+    global api_keys_store
+    for key, value in keys.items():
+        if value:
+            api_keys_store[key] = value
+            os.environ[key] = value
+    save_api_keys_to_file()
+    return JSONResponse({"success": True, "imported": len(keys)})
 
 # Task management endpoints
 @app.get("/api/tasks")
@@ -1479,10 +1553,19 @@ main {
         </div>
         
         <div class="settings-section">
+          <div class="settings-section-title">📤 Export / Import</div>
+          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="exportApiKeys()">📤 Export Keys</button>
+            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="importApiKeysDialog()">📥 Import Keys</button>
+            <input type="file" id="import-keys-input" accept=".json" style="display: none;" onchange="importApiKeys(this)">
+          </div>
+        </div>
+        
+        <div class="settings-section">
           <div class="settings-section-title">📝 Note</div>
           <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
-            API keys are stored in memory and will be cleared when the server restarts. 
-            Configure these keys to enable advanced OSINT and security scanning features.
+            API keys are now persisted to disk and will survive server restarts.
+            Use Export/Import to backup or transfer your keys between installations.
           </p>
         </div>
       </div>
@@ -1766,15 +1849,31 @@ document.getElementById('task-modal').addEventListener('click', (e) => {
 });
 
 // API Key management functions
+const API_KEY_MAP = {
+  'shodan': 'SHODAN_API_KEY',
+  'virustotal': 'VIRUSTOTAL_API_KEY',
+  'hunter': 'HUNTER_API_KEY',
+  'securitytrails': 'SECURITYTRAILS_API_KEY',
+  'hibp': 'HIBP_API_KEY',
+  'censys': 'CENSYS_API_KEY',
+  'alienvault': 'ALIENVAULT_API_KEY'
+};
+
+// Reverse mapping for display
+const API_KEY_REVERSE_MAP = Object.fromEntries(
+  Object.entries(API_KEY_MAP).map(([k, v]) => [v, k])
+);
+
 async function loadApiKeys() {
   try {
-    const response = await fetch('/api/settings/keys');
+    const response = await fetch('/api/keys');
     const keys = await response.json();
     
     // Clear all inputs and show which are configured
     document.querySelectorAll('.api-key-input').forEach(input => {
       const service = input.id.replace('api-key-', '');
-      if (keys[service]) {
+      const envKey = API_KEY_MAP[service] || service.toUpperCase() + '_API_KEY';
+      if (keys[envKey] && keys[envKey].length > 4) {
         input.value = '••••••••••••••••';
         input.setAttribute('data-configured', 'true');
       } else {
@@ -1796,11 +1895,14 @@ async function saveApiKey(service) {
     return;
   }
   
+  // Map to environment variable name
+  const envKey = API_KEY_MAP[service] || service.toUpperCase() + '_API_KEY';
+  
   try {
-    await fetch('/api/settings/keys', {
+    await fetch('/api/keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service, key: value })
+      body: JSON.stringify({ service: envKey, api_key: value })
     });
     input.value = '••••••••••••••••';
     input.setAttribute('data-configured', 'true');
@@ -1813,8 +1915,11 @@ async function saveApiKey(service) {
 async function deleteApiKey(service) {
   if (!confirm(`Are you sure you want to delete the ${service} API key?`)) return;
   
+  // Map to environment variable name
+  const envKey = API_KEY_MAP[service] || service.toUpperCase() + '_API_KEY';
+  
   try {
-    await fetch(`/api/settings/keys/${service}`, { method: 'DELETE' });
+    await fetch(`/api/keys/${envKey}`, { method: 'DELETE' });
     const input = document.getElementById('api-key-' + service);
     input.value = '';
     input.removeAttribute('data-configured');
@@ -1822,6 +1927,60 @@ async function deleteApiKey(service) {
   } catch (err) {
     addMessage('system', `⚠️ Failed to delete API key: ${err.message}`);
   }
+}
+
+async function exportApiKeys() {
+  try {
+    const response = await fetch('/api/keys/export');
+    const keys = await response.json();
+    
+    // Create download
+    const blob = new Blob([JSON.stringify(keys, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'owasp-helper-api-keys.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    addMessage('system', '📤 API keys exported successfully');
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to export API keys: ${err.message}`);
+  }
+}
+
+function importApiKeysDialog() {
+  document.getElementById('import-keys-input').click();
+}
+
+async function importApiKeys(input) {
+  const file = input.files[0];
+  if (!file) return;
+  
+  try {
+    const content = await file.text();
+    const keys = JSON.parse(content);
+    
+    const response = await fetch('/api/keys/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keys)
+    });
+    
+    if (response.ok) {
+      addMessage('system', '📥 API keys imported successfully');
+      await loadApiKeys(); // Refresh the display
+    } else {
+      throw new Error('Import failed');
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to import API keys: ${err.message}`);
+  }
+  
+  // Clear the file input for future imports
+  input.value = '';
 }
 
 function escapeHtml(str) {
@@ -1987,6 +2146,38 @@ function addMessage(type, content, meta = {}) {
         <button class="report-btn report-btn-html" onclick="downloadReport('html')">📥 Download HTML</button>
       </div>
     `;
+  }
+  // Handle SCREENSHOT_IMAGE_DATA format from agent
+  else if (content.includes('SCREENSHOT_IMAGE_DATA:')) {
+    const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g;
+    let formattedContent = content;
+    let match;
+    let imageCount = 0;
+    
+    while ((match = screenshotRegex.exec(content)) !== null) {
+      imageCount++;
+      const base64Data = match[0].replace('SCREENSHOT_IMAGE_DATA:', '').replace(':END_IMAGE_DATA', '');
+      const imgSrc = 'data:image/png;base64,' + base64Data;
+      const imgHtml = `
+        <div class="screenshot-container" style="margin: 15px 0;">
+          <div style="font-weight: bold; margin-bottom: 8px;">📸 Screenshot captured:</div>
+          <img src="${imgSrc}" 
+               onclick="showImageModal(this.src)" 
+               alt="Screenshot" 
+               style="max-width: 100%; max-height: 400px; border-radius: 8px; cursor: pointer; border: 1px solid var(--gray-600); box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+          <div style="font-size: 0.75rem; color: var(--gray-400); margin-top: 5px;">Click image to view full size</div>
+        </div>`;
+      formattedContent = formattedContent.replace(match[0], imgHtml);
+    }
+    
+    // Format the rest of the content (text before/after the image)
+    const parts = formattedContent.split(/<div class="screenshot-container"/);
+    if (parts.length > 1) {
+      const textPart = formatContent(parts[0]);
+      msgDiv.innerHTML = textPart + '<div class="screenshot-container"' + parts.slice(1).join('<div class="screenshot-container"');
+    } else {
+      msgDiv.innerHTML = formattedContent;
+    }
   } else {
     // Check for base64 images in content and render them
     let formattedContent = formatContent(content);
