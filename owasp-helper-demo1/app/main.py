@@ -686,7 +686,7 @@ async def get_report(format: str):
     else:
         return JSONResponse({"error": "Invalid format"}, status_code=400)
 
-HTML = """
+HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
