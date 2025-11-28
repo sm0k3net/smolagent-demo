@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, Callable
 from smolagents import tool
 
 
-# Telegram bot state
+# Telegram bot state - use a persistent event loop
 _telegram_state = {
     "bot": None,
     "connected": False,
@@ -18,7 +18,42 @@ _telegram_state = {
     "command_callback": None,
     "polling_thread": None,
     "stop_polling": False,
+    "event_loop": None,
+    "loop_thread": None,
 }
+
+
+def _get_or_create_event_loop():
+    """Get or create a persistent event loop for Telegram operations."""
+    global _telegram_state
+    
+    if _telegram_state["event_loop"] is not None:
+        try:
+            if not _telegram_state["event_loop"].is_closed():
+                return _telegram_state["event_loop"]
+        except:
+            pass
+    
+    # Create a new event loop in a background thread
+    loop = asyncio.new_event_loop()
+    _telegram_state["event_loop"] = loop
+    
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+    
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
+    _telegram_state["loop_thread"] = thread
+    
+    return loop
+
+
+def _run_async(coro):
+    """Run an async coroutine in the persistent event loop."""
+    loop = _get_or_create_event_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=60)  # 60 second timeout
 
 
 def _get_telegram_bot():
@@ -77,20 +112,13 @@ To create a Telegram bot:
         return err
     
     try:
-        import asyncio
-        
         async def verify_bot():
             bot = Bot(token=token)
             me = await bot.get_me()
             return bot, me
         
-        # Run async in new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            bot, me = loop.run_until_complete(verify_bot())
-        finally:
-            loop.close()
+        # Use persistent event loop
+        bot, me = _run_async(verify_bot())
         
         _telegram_state["bot"] = bot
         _telegram_state["connected"] = True
@@ -163,8 +191,6 @@ def telegram_send_message(message: str, chat_id: Optional[str] = None, parse_mod
         return "❌ No chat ID specified. Use telegram_set_chat() or provide chat_id parameter."
     
     try:
-        import asyncio
-        
         async def send():
             bot = _telegram_state["bot"]
             result = await bot.send_message(
@@ -174,13 +200,7 @@ def telegram_send_message(message: str, chat_id: Optional[str] = None, parse_mod
             )
             return result
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(send())
-        finally:
-            loop.close()
-        
+        result = _run_async(send())
         return f"✅ Message sent to chat {target_chat} (message_id: {result.message_id})"
         
     except Exception as e:
@@ -233,13 +253,7 @@ def telegram_send_file(file_path: str, caption: Optional[str] = None, chat_id: O
                     )
                 return result
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(send_doc())
-        finally:
-            loop.close()
-        
+        result = _run_async(send_doc())
         return f"✅ File sent to chat {target_chat}"
         
     except Exception as e:
@@ -262,19 +276,12 @@ def telegram_get_updates(limit: int = 10) -> str:
         return "❌ Not connected to Telegram. Use telegram_connect() first."
     
     try:
-        import asyncio
-        
         async def get_updates():
             bot = _telegram_state["bot"]
             updates = await bot.get_updates(limit=limit)
             return updates
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            updates = loop.run_until_complete(get_updates())
-        finally:
-            loop.close()
+        updates = _run_async(get_updates())
         
         if not updates:
             return "No recent updates found."

@@ -159,7 +159,16 @@ def run_scheduler():
                 if task.get("status") != "active":
                     continue
                 
-                schedule_time = datetime.fromisoformat(task["schedule_time"])
+                # Parse schedule_time, handling both aware and naive datetimes
+                schedule_time_str = task["schedule_time"]
+                schedule_time = datetime.fromisoformat(schedule_time_str.replace('Z', '+00:00'))
+                
+                # Convert to naive datetime for comparison (remove timezone info)
+                if schedule_time.tzinfo is not None:
+                    # Convert to local time and make naive
+                    import time
+                    local_offset = time.timezone if time.localtime().tm_isdst == 0 else time.altzone
+                    schedule_time = schedule_time.replace(tzinfo=None) - timedelta(seconds=-local_offset)
                 
                 # Check if it's time to run
                 if now >= schedule_time:
@@ -1285,57 +1294,138 @@ h1 {
   background: var(--primary-dark);
   transform: scale(1.1);
 }
-/* Scheduled Tasks */
+/* Scheduled Tasks - Enhanced UI */
 .scheduled-item {
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+  border-radius: 12px;
   border: 1px solid rgba(255,255,255,0.1);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+.scheduled-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--gray-600);
+}
+.scheduled-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+}
+.scheduled-item.active::before {
+  background: linear-gradient(180deg, var(--success) 0%, #059669 100%);
 }
 .scheduled-item.active {
-  border-left: 3px solid var(--success);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.scheduled-item.paused::before {
+  background: linear-gradient(180deg, var(--warning) 0%, #d97706 100%);
 }
 .scheduled-item.paused {
-  border-left: 3px solid var(--warning);
-  opacity: 0.7;
+  border-color: rgba(245, 158, 11, 0.3);
+  opacity: 0.85;
+}
+.scheduled-item.running::before {
+  background: linear-gradient(180deg, var(--secondary) 0%, #0284c7 100%);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.scheduled-item.running {
+  border-color: rgba(14, 165, 233, 0.3);
+}
+.scheduled-item.completed::before {
+  background: var(--gray-500);
 }
 .scheduled-item.completed {
-  border-left: 3px solid var(--gray-500);
-  opacity: 0.5;
+  opacity: 0.6;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 .scheduled-item-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+  gap: 0.5rem;
 }
 .scheduled-item-name {
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: 0.9rem;
+  font-weight: 600;
   color: var(--light);
+  flex: 1;
+  line-height: 1.3;
 }
 .scheduled-item-status {
   font-size: 0.7rem;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.1);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
 }
-.scheduled-item-status.active { color: var(--success); }
-.scheduled-item-status.paused { color: var(--warning); }
-.scheduled-item-status.completed { color: var(--gray-400); }
-.scheduled-item-status.running { color: var(--secondary); }
+.scheduled-item-status.active { 
+  background: rgba(16, 185, 129, 0.2); 
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.scheduled-item-status.paused { 
+  background: rgba(245, 158, 11, 0.2); 
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.scheduled-item-status.completed { 
+  background: rgba(156, 163, 175, 0.2); 
+  color: var(--gray-400);
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+.scheduled-item-status.running { 
+  background: rgba(14, 165, 233, 0.2); 
+  color: var(--secondary);
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  animation: pulse 1.5s ease-in-out infinite;
+}
 .scheduled-item-time {
+  font-size: 0.8rem;
+  color: var(--gray-300);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.scheduled-item-meta {
+  display: flex;
+  gap: 1rem;
   font-size: 0.75rem;
   color: var(--gray-400);
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
 }
+.scheduled-item-meta .status-badge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.scheduled-item-meta .status-badge.completed { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+.scheduled-item-meta .status-badge.failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+.scheduled-item-meta .status-badge.pending { background: rgba(156, 163, 175, 0.2); color: var(--gray-400); }
 .scheduled-item-prompt {
-  font-size: 0.75rem;
-  color: var(--gray-500);
-  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--gray-400);
+  background: rgba(0,0,0,0.2);
+  padding: 0.5rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+  max-height: 60px;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 .scheduled-result-preview {
   margin-top: 0.5rem;
@@ -3294,53 +3384,81 @@ function renderScheduledTasks() {
   
   list.innerHTML = tasks.map(task => {
     const scheduleDate = new Date(task.schedule_time);
+    const now = new Date();
     const isRecurring = task.recurring;
-    const isPast = scheduleDate < new Date() && task.status !== 'completed';
+    const isPast = scheduleDate < now && task.status !== 'completed';
+    const isUpcoming = scheduleDate > now && (scheduleDate - now) < 3600000; // within 1 hour
     
     // Determine execution status
-    let execStatus = 'not-started';
+    let execStatus = 'Not Run';
     let execStatusIcon = '⏳';
     let execStatusClass = 'pending';
     if (task.last_run) {
       if (task.last_result && task.last_result.startsWith('Error:')) {
-        execStatus = 'failed';
+        execStatus = 'Failed';
         execStatusIcon = '❌';
         execStatusClass = 'failed';
       } else if (task.last_result) {
-        execStatus = 'completed';
+        execStatus = 'Success';
         execStatusIcon = '✅';
         execStatusClass = 'completed';
       }
     }
     
-    // Format last run time
+    // Format times
     const lastRunTime = task.last_run ? new Date(task.last_run).toLocaleString() : 'Never';
+    const nextRunFormatted = task.status === 'completed' ? 'Completed' : scheduleDate.toLocaleString();
+    
+    // Time remaining
+    let timeRemaining = '';
+    if (task.status === 'active' && scheduleDate > now) {
+      const diff = scheduleDate - now;
+      const hours = Math.floor(diff / 3600000);
+      const mins = Math.floor((diff % 3600000) / 60000);
+      if (hours > 0) {
+        timeRemaining = `in ${hours}h ${mins}m`;
+      } else if (mins > 0) {
+        timeRemaining = `in ${mins}m`;
+      } else {
+        timeRemaining = 'imminent';
+      }
+    } else if (task.status === 'active' && scheduleDate <= now) {
+      timeRemaining = 'pending execution';
+    }
     
     return `
       <div class="scheduled-item ${task.status}">
         <div class="scheduled-item-header">
-          <span class="scheduled-item-name">${escapeHtml(task.name || task.prompt.substring(0, 30))}</span>
-          <div style="display: flex; gap: 6px; align-items: center;">
-            <span class="scheduled-item-status ${task.status}">${task.status === 'running' ? '🔄 Running' : task.status}${isRecurring ? ' 🔄' : ''}</span>
-          </div>
+          <span class="scheduled-item-name">${escapeHtml(task.name || task.prompt.substring(0, 40) + '...')}</span>
+          <span class="scheduled-item-status ${task.status}">
+            ${task.status === 'running' ? '⚡ Running' : task.status === 'active' ? '✓ Active' : task.status === 'paused' ? '⏸ Paused' : '✓ Done'}
+            ${isRecurring ? ' 🔁' : ''}
+          </span>
         </div>
+        
         <div class="scheduled-item-time">
-          ⏰ Next: ${scheduleDate.toLocaleString()}
-          ${isRecurring ? ` (every ${task.interval_minutes}m)` : ''}
+          📅 ${nextRunFormatted}
+          ${timeRemaining ? `<span style="color: ${isUpcoming ? 'var(--warning)' : 'var(--gray-400)'}; font-weight: 500;">(${timeRemaining})</span>` : ''}
+          ${isRecurring ? `<span style="color: var(--secondary);">• Repeats every ${task.interval_minutes}m</span>` : ''}
         </div>
-        <div class="scheduled-item-meta" style="font-size: 0.7rem; color: var(--gray-400); margin-top: 4px;">
-          ${execStatusIcon} Last execution: <span class="${execStatusClass}">${execStatus}</span> | 🕐 Last run: ${lastRunTime}
+        
+        <div class="scheduled-item-meta">
+          <span><span class="status-badge ${execStatusClass}">${execStatusIcon} ${execStatus}</span></span>
+          <span>🕐 Last: ${lastRunTime}</span>
         </div>
+        
         <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
+        
         ${task.last_result ? `
         <div class="scheduled-result-preview" onclick="viewScheduledTaskResult('${task.id}')">
-          ${escapeHtml(task.last_result.substring(0, 100))}${task.last_result.length > 100 ? '...' : ''}
+          📋 ${escapeHtml(task.last_result.substring(0, 120))}${task.last_result.length > 120 ? '...' : ''}
         </div>
         ` : ''}
+        
         <div class="scheduled-item-actions">
           ${task.last_result ? `
           <button class="task-btn task-btn-view" onclick="viewScheduledTaskResult('${task.id}')">
-            👁️ View Result
+            👁️ Results
           </button>
           ` : ''}
           <button class="task-btn" onclick="editScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
@@ -3349,7 +3467,7 @@ function renderScheduledTasks() {
           <button class="task-btn" onclick="toggleScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
-          <button class="task-btn task-btn-cancel" onclick="deleteScheduledTask('${task.id}')">🗑️ Delete</button>
+          <button class="task-btn task-btn-cancel" onclick="deleteScheduledTask('${task.id}')">🗑️</button>
         </div>
       </div>
     `;
@@ -3581,7 +3699,18 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     
     if (tabId === 'chats') loadChats();
     
-    if (tabId === 'scheduled') loadScheduledTasks();
+    if (tabId === 'scheduled') {
+      loadScheduledTasks();
+      // Start auto-refresh every 15 seconds when on scheduled tab
+      if (scheduledRefreshInterval) clearInterval(scheduledRefreshInterval);
+      scheduledRefreshInterval = setInterval(loadScheduledTasks, 15000);
+    } else {
+      // Stop auto-refresh when leaving scheduled tab
+      if (scheduledRefreshInterval) {
+        clearInterval(scheduledRefreshInterval);
+        scheduledRefreshInterval = null;
+      }
+    }
   };
 });
 
