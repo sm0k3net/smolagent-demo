@@ -48,6 +48,7 @@ class Task(BaseModel):
 app = FastAPI(title="OWASP SmolAgent")
 agent = None
 startup_lock = asyncio.Lock()
+agent_lock = threading.Lock()  # Lock for concurrent agent access
 executor = ThreadPoolExecutor(max_workers=8)
 
 # File storage for sessions
@@ -167,10 +168,11 @@ def run_scheduler():
                     task["last_run"] = now.isoformat()
                     save_scheduled_tasks_to_file()
                     
-                    # Execute the task
+                    # Execute the task with lock
                     try:
                         if agent:
-                            result = agent.run(task["prompt"])
+                            with agent_lock:
+                                result = agent.run(task["prompt"])
                             task["last_result"] = str(result)[:5000]
                     except Exception as e:
                         task["last_result"] = f"Error: {str(e)}"
@@ -496,6 +498,21 @@ async def toggle_scheduled_task(task_id: str):
         task["status"] = "active"
     save_scheduled_tasks_to_file()
     return JSONResponse({"success": True, "status": task["status"]})
+
+@app.put("/api/scheduled/{task_id}")
+async def update_scheduled_task(task_id: str, update: ScheduledTaskCreate):
+    """Update a scheduled task."""
+    if task_id not in scheduled_tasks_store:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    task = scheduled_tasks_store[task_id]
+    task["prompt"] = update.prompt
+    task["name"] = update.name or update.prompt[:50]
+    task["schedule_time"] = update.schedule_time
+    task["recurring"] = update.recurring
+    task["interval_minutes"] = update.interval_minutes
+    save_scheduled_tasks_to_file()
+    return JSONResponse({"success": True, "task_id": task_id})
 
 # ============== CUSTOM CONTEXT ENDPOINTS ==============
 
@@ -2308,7 +2325,7 @@ function renderTasks() {
         </div>
         ${isActive ? `
         <div class="task-actions">
-          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')" ${task.status === 'paused' ? 'disabled' : ''}>
+          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')">
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
           <button class="task-btn task-btn-cancel" onclick="cancelTask('${task.id}')">
@@ -2377,9 +2394,21 @@ async function viewTaskResult(taskId) {
     // Format result with markdown-like rendering
     let resultHtml = task.result || 'No result available';
     
-    // Check for base64 images and render them
+    // Handle SCREENSHOT_IMAGE_DATA format first
+    const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g;
+    resultHtml = resultHtml.replace(screenshotRegex, (match, base64Data) => {
+      return `<div style="margin: 15px 0;">
+        <div style="font-weight: bold; margin-bottom: 8px;">📸 Screenshot:</div>
+        <img src="data:image/png;base64,${base64Data}" 
+             onclick="showImageModal(this.src)" 
+             style="max-width: 100%; max-height: 500px; border-radius: 8px; cursor: pointer; border: 1px solid rgba(255,255,255,0.2);">
+        <div style="font-size: 0.75rem; color: var(--gray-400); margin-top: 5px;">Click to view full size</div>
+      </div>`;
+    });
+    
+    // Check for regular base64 images and render them
     const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
-    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px;">');
+    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px; cursor: pointer;" onclick="showImageModal(this.src)">');
     
     body.innerHTML = `
       <div style="margin-bottom: 1rem;">
@@ -3220,6 +3249,9 @@ function renderScheduledTasks() {
         <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
         ${task.last_result ? `<div class="scheduled-item-prompt" style="color: var(--success); margin-top: 4px;">Last run: ${task.last_result.substring(0, 100)}...</div>` : ''}
         <div class="scheduled-item-actions">
+          <button class="task-btn" onclick="editScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
+            ✏️ Edit
+          </button>
           <button class="task-btn" onclick="toggleScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
@@ -3230,20 +3262,61 @@ function renderScheduledTasks() {
   }).join('');
 }
 
-function showScheduleModal() {
+let editingScheduledTaskId = null;
+
+function showScheduleModal(taskId = null) {
   const modal = document.getElementById('schedule-modal');
-  modal.classList.add('active');
+  const title = modal.querySelector('.task-modal-title');
+  const submitBtn = modal.querySelector('button.btn-primary');
   
-  // Set default time to now + 1 hour
-  const now = new Date();
-  now.setHours(now.getHours() + 1);
-  now.setMinutes(0);
-  const dateStr = now.toISOString().slice(0, 16);
-  document.getElementById('schedule-time').value = dateStr;
+  editingScheduledTaskId = taskId;
+  
+  if (taskId && scheduledTasksStore[taskId]) {
+    // Editing existing task
+    const task = scheduledTasksStore[taskId];
+    title.textContent = '✏️ Edit Scheduled Task';
+    submitBtn.textContent = '💾 Save Changes';
+    
+    document.getElementById('schedule-name').value = task.name || '';
+    document.getElementById('schedule-prompt').value = task.prompt || '';
+    
+    // Parse ISO date to local datetime-local format
+    const scheduleDate = new Date(task.schedule_time);
+    const localDateTime = new Date(scheduleDate.getTime() - scheduleDate.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    document.getElementById('schedule-time').value = localDateTime;
+    
+    document.getElementById('schedule-recurring').checked = task.recurring || false;
+    document.getElementById('recurring-options').style.display = task.recurring ? 'block' : 'none';
+    document.getElementById('schedule-interval').value = task.interval_minutes || 60;
+  } else {
+    // New task
+    title.textContent = '⏰ Schedule New Task';
+    submitBtn.textContent = '📅 Schedule Task';
+    
+    document.getElementById('schedule-name').value = '';
+    document.getElementById('schedule-prompt').value = '';
+    document.getElementById('schedule-recurring').checked = false;
+    document.getElementById('recurring-options').style.display = 'none';
+    document.getElementById('schedule-interval').value = 60;
+    
+    // Set default time to now + 1 hour
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+    now.setMinutes(0);
+    const dateStr = now.toISOString().slice(0, 16);
+    document.getElementById('schedule-time').value = dateStr;
+  }
+  
+  modal.classList.add('active');
+}
+
+function editScheduledTask(taskId) {
+  showScheduleModal(taskId);
 }
 
 function closeScheduleModal() {
   document.getElementById('schedule-modal').classList.remove('active');
+  editingScheduledTaskId = null;
   document.getElementById('schedule-name').value = '';
   document.getElementById('schedule-prompt').value = '';
   document.getElementById('schedule-recurring').checked = false;
@@ -3272,8 +3345,12 @@ async function createScheduledTask() {
   }
   
   try {
-    const response = await fetch('/api/scheduled', {
-      method: 'POST',
+    const isEditing = editingScheduledTaskId !== null;
+    const url = isEditing ? `/api/scheduled/${editingScheduledTaskId}` : '/api/scheduled';
+    const method = isEditing ? 'PUT' : 'POST';
+    
+    const response = await fetch(url, {
+      method: method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: name || prompt.substring(0, 50),
@@ -3287,7 +3364,8 @@ async function createScheduledTask() {
     if (response.ok) {
       closeScheduleModal();
       await loadScheduledTasks();
-      addMessage('system', `⏰ Task scheduled for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
+      const action = isEditing ? 'updated' : 'scheduled';
+      addMessage('system', `⏰ Task ${action} for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
     }
   } catch (err) {
     addMessage('system', `⚠️ Failed to schedule task: ${err.message}`);
@@ -3403,6 +3481,7 @@ window.closeScheduleModal = closeScheduleModal;
 window.createScheduledTask = createScheduledTask;
 window.toggleScheduledTask = toggleScheduledTask;
 window.deleteScheduledTask = deleteScheduledTask;
+window.editScheduledTask = editScheduledTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
 </script>
@@ -3524,33 +3603,35 @@ The report should be comprehensive and professional, suitable for executive stak
                         final_result = None
                         all_outputs = []  # Collect all meaningful outputs
                         
-                        for event in agent.run(full_message, stream=True):
-                            # Check for cancellation
-                            if task_store[task_id].status == TaskStatus.cancelled:
-                                return
-                            
-                            step_count += 1
-                            event_type = type(event).__name__
-                            
-                            # Collect tool calls and their results
-                            if hasattr(event, 'tool_calls') and event.tool_calls:
-                                for tc in event.tool_calls:
-                                    tool_count += 1
-                                    if hasattr(tc, 'name'):
-                                        all_outputs.append(f"🔧 Tool: {tc.name}")
-                            
-                            # Collect tool results
-                            if hasattr(event, 'tool_result') and event.tool_result:
-                                result_str = str(event.tool_result)[:2000]
-                                all_outputs.append(f"📤 Result: {result_str}")
-                            
-                            # Collect final output
-                            if hasattr(event, 'output') and event.output is not None:
-                                final_result = event.output
-                            
-                            # Update task counts
-                            task_store[task_id].step_count = step_count
-                            task_store[task_id].tool_count = tool_count
+                        # Acquire lock for concurrent agent access
+                        with agent_lock:
+                            for event in agent.run(full_message, stream=True):
+                                # Check for cancellation
+                                if task_store[task_id].status == TaskStatus.cancelled:
+                                    return
+                                
+                                step_count += 1
+                                event_type = type(event).__name__
+                                
+                                # Collect tool calls and their results
+                                if hasattr(event, 'tool_calls') and event.tool_calls:
+                                    for tc in event.tool_calls:
+                                        tool_count += 1
+                                        if hasattr(tc, 'name'):
+                                            all_outputs.append(f"🔧 Tool: {tc.name}")
+                                
+                                # Collect tool results
+                                if hasattr(event, 'tool_result') and event.tool_result:
+                                    result_str = str(event.tool_result)[:2000]
+                                    all_outputs.append(f"📤 Result: {result_str}")
+                                
+                                # Collect final output
+                                if hasattr(event, 'output') and event.output is not None:
+                                    final_result = event.output
+                                
+                                # Update task counts
+                                task_store[task_id].step_count = step_count
+                                task_store[task_id].tool_count = tool_count
                         
                         # Build comprehensive result
                         result_parts = []
@@ -3592,101 +3673,103 @@ The report should be comprehensive and professional, suitable for executive stak
                 def run_agent_with_streaming():
                     """Run agent in thread and put events in queue."""
                     try:
-                        # Use streaming mode for real-time updates
-                        final_result = None
-                        step_count = 0
-                        tool_count = 0
-                        
-                        for event in agent.run(full_message, stream=True):
-                            step_count += 1
-                            event_type = type(event).__name__
+                        # Acquire lock for concurrent access
+                        with agent_lock:
+                            # Use streaming mode for real-time updates
+                            final_result = None
+                            step_count = 0
+                            tool_count = 0
                             
-                            # Extract meaningful info from different event types
-                            if hasattr(event, 'tool_calls') and event.tool_calls:
-                                for tool_call in event.tool_calls:
-                                    tool_count += 1
-                                    tool_name = getattr(tool_call, 'name', str(tool_call))
-                                    tool_args = getattr(tool_call, 'arguments', {})
-                                    
-                                    # Map tool names to activity types
-                                    activity_type = "tool"
-                                    icon = "🔧"
-                                    
-                                    # Categorize tools for better display
-                                    if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
-                                        icon = "🔍"
-                                        activity_msg = f"Running security scan: {tool_name}"
-                                    elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
-                                        icon = "🌐"
-                                        activity_msg = f"OSINT lookup: {tool_name}"
-                                    elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
-                                        icon = "🌍"
-                                        activity_msg = f"Browser automation: {tool_name}"
-                                    elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
-                                        icon = "📡"
-                                        activity_msg = f"HTTP request: {tool_name}"
-                                    elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
-                                        icon = "📋"
-                                        activity_msg = f"Report generation: {tool_name}"
-                                        activity_type = "tool-result"
-                                    elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
-                                        icon = "📚"
-                                        activity_msg = f"OWASP analysis: {tool_name}"
-                                    else:
-                                        activity_msg = f"Executing: {tool_name}"
-                                    
-                                    # Get target/args info
-                                    target_info = ""
-                                    if isinstance(tool_args, dict):
-                                        for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
-                                            if key in tool_args:
-                                                target_info = f" → {tool_args[key][:60]}"
-                                                break
-                                    
+                            for event in agent.run(full_message, stream=True):
+                                step_count += 1
+                                event_type = type(event).__name__
+                                
+                                # Extract meaningful info from different event types
+                                if hasattr(event, 'tool_calls') and event.tool_calls:
+                                    for tool_call in event.tool_calls:
+                                        tool_count += 1
+                                        tool_name = getattr(tool_call, 'name', str(tool_call))
+                                        tool_args = getattr(tool_call, 'arguments', {})
+                                        
+                                        # Map tool names to activity types
+                                        activity_type = "tool"
+                                        icon = "🔧"
+                                        
+                                        # Categorize tools for better display
+                                        if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
+                                            icon = "🔍"
+                                            activity_msg = f"Running security scan: {tool_name}"
+                                        elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
+                                            icon = "🌐"
+                                            activity_msg = f"OSINT lookup: {tool_name}"
+                                        elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
+                                            icon = "🌍"
+                                            activity_msg = f"Browser automation: {tool_name}"
+                                        elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
+                                            icon = "📡"
+                                            activity_msg = f"HTTP request: {tool_name}"
+                                        elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
+                                            icon = "📋"
+                                            activity_msg = f"Report generation: {tool_name}"
+                                            activity_type = "tool-result"
+                                        elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
+                                            icon = "📚"
+                                            activity_msg = f"OWASP analysis: {tool_name}"
+                                        else:
+                                            activity_msg = f"Executing: {tool_name}"
+                                        
+                                        # Get target/args info
+                                        target_info = ""
+                                        if isinstance(tool_args, dict):
+                                            for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
+                                                if key in tool_args:
+                                                    target_info = f" → {tool_args[key][:60]}"
+                                                    break
+                                        
+                                        event_queue.put({
+                                            "type": "activity",
+                                            "activity_type": activity_type,
+                                            "title": f"{icon} {activity_msg}",
+                                            "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                            "tool_count": tool_count,
+                                            "step_count": step_count
+                                        })
+                                
+                                # Check for observations/results
+                                if hasattr(event, 'observations') and event.observations:
+                                    obs = str(event.observations)[:200]
                                     event_queue.put({
                                         "type": "activity",
-                                        "activity_type": activity_type,
-                                        "title": f"{icon} {activity_msg}",
-                                        "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                        "activity_type": "tool-result",
+                                        "title": "📊 Tool Result",
+                                        "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
                                         "tool_count": tool_count,
                                         "step_count": step_count
                                     })
+                                
+                                # Check for planning steps
+                                if hasattr(event, 'plan') and event.plan:
+                                    plan = str(event.plan)[:300]
+                                    event_queue.put({
+                                        "type": "activity",
+                                        "activity_type": "thinking",
+                                        "title": "🧠 Agent Planning",
+                                        "content": plan,
+                                        "tool_count": tool_count,
+                                        "step_count": step_count
+                                    })
+                                
+                                # Capture final result
+                                if hasattr(event, 'output') and event.output is not None:
+                                    final_result = event.output
                             
-                            # Check for observations/results
-                            if hasattr(event, 'observations') and event.observations:
-                                obs = str(event.observations)[:200]
-                                event_queue.put({
-                                    "type": "activity",
-                                    "activity_type": "tool-result",
-                                    "title": "📊 Tool Result",
-                                    "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
-                                    "tool_count": tool_count,
-                                    "step_count": step_count
-                                })
-                            
-                            # Check for planning steps
-                            if hasattr(event, 'plan') and event.plan:
-                                plan = str(event.plan)[:300]
-                                event_queue.put({
-                                    "type": "activity",
-                                    "activity_type": "thinking",
-                                    "title": "🧠 Agent Planning",
-                                    "content": plan,
-                                    "tool_count": tool_count,
-                                    "step_count": step_count
-                                })
-                            
-                            # Capture final result
-                            if hasattr(event, 'output') and event.output is not None:
-                                final_result = event.output
-                        
-                        # Signal completion
-                        event_queue.put({
-                            "type": "complete",
-                            "result": final_result if final_result else "Task completed",
-                            "tool_count": tool_count,
-                            "step_count": step_count
-                        })
+                            # Signal completion
+                            event_queue.put({
+                                "type": "complete",
+                                "result": final_result if final_result else "Task completed",
+                                "tool_count": tool_count,
+                                "step_count": step_count
+                            })
                         
                     except Exception as e:
                         event_queue.put({
