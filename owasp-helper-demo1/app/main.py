@@ -151,7 +151,6 @@ def save_custom_context():
 def run_scheduler():
     """Background thread to check and execute scheduled tasks."""
     global scheduler_stop_event
-    print("[Scheduler] Starting scheduler thread...")
     while not scheduler_stop_event.is_set():
         try:
             now = datetime.now()
@@ -159,64 +158,38 @@ def run_scheduler():
                 if task.get("status") != "active":
                     continue
                 
-                # Parse schedule time - handle various formats
-                schedule_time_str = task.get("schedule_time", "")
-                try:
-                    # Handle ISO format with timezone
-                    if schedule_time_str.endswith('Z'):
-                        schedule_time_str = schedule_time_str[:-1]
-                    schedule_time = datetime.fromisoformat(schedule_time_str.replace('Z', ''))
-                except (ValueError, TypeError) as e:
-                    print(f"[Scheduler] Invalid schedule time for task {task_id}: {schedule_time_str} - {e}")
-                    continue
+                schedule_time = datetime.fromisoformat(task["schedule_time"])
                 
                 # Check if it's time to run
                 if now >= schedule_time:
-                    print(f"[Scheduler] Running task {task_id}: {task.get('name', 'unnamed')}")
-                    
                     # Mark as running
                     task["status"] = "running"
                     task["last_run"] = now.isoformat()
                     save_scheduled_tasks_to_file()
                     
-                    # Execute the task in a separate thread to not block scheduler
-                    def execute_scheduled_task(tid, t):
-                        try:
-                            if agent:
-                                # Create a fresh agent for this task
-                                from app.agents.owasp_agent import build_owasp_agent
-                                task_agent = build_owasp_agent()
-                                result = task_agent.run(t["prompt"])
-                                t["last_result"] = str(result)[:5000]
-                                print(f"[Scheduler] Task {tid} completed successfully")
-                            else:
-                                t["last_result"] = "Error: Agent not initialized"
-                        except Exception as e:
-                            t["last_result"] = f"Error: {str(e)}"
-                            print(f"[Scheduler] Task {tid} failed: {e}")
-                        
-                        # Handle recurring vs one-time
-                        if t.get("recurring") and t.get("interval_minutes"):
-                            # Schedule next run
-                            next_run = datetime.now() + timedelta(minutes=t["interval_minutes"])
-                            t["schedule_time"] = next_run.isoformat()
-                            t["status"] = "active"
-                            print(f"[Scheduler] Task {tid} rescheduled for {next_run}")
-                        else:
-                            t["status"] = "completed"
-                        
-                        save_scheduled_tasks_to_file()
+                    # Execute the task
+                    try:
+                        if agent:
+                            result = agent.run(task["prompt"])
+                            task["last_result"] = str(result)[:5000]
+                    except Exception as e:
+                        task["last_result"] = f"Error: {str(e)}"
                     
-                    # Run in thread pool
-                    executor.submit(execute_scheduled_task, task_id, task)
+                    # Handle recurring vs one-time
+                    if task.get("recurring") and task.get("interval_minutes"):
+                        # Schedule next run
+                        next_run = now + timedelta(minutes=task["interval_minutes"])
+                        task["schedule_time"] = next_run.isoformat()
+                        task["status"] = "active"
+                    else:
+                        task["status"] = "completed"
                     
+                    save_scheduled_tasks_to_file()
         except Exception as e:
-            print(f"[Scheduler] Error in scheduler loop: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Scheduler error: {e}")
         
-        # Check every 15 seconds for more responsive scheduling
-        scheduler_stop_event.wait(15)
+        # Check every 30 seconds
+        scheduler_stop_event.wait(30)
 
 def start_scheduler():
     """Start the scheduler background thread."""
@@ -306,47 +279,18 @@ async def startup():
     global agent, api_keys_store
     async with startup_lock:
         if agent is None:
-            print("[Startup] Initializing OWASP SmolAgent...")
             # Load API keys from file/environment
             load_api_keys_from_file()
-            print(f"[Startup] API keys loaded: {list(api_keys_store.keys())}")
-            
-            # Apply saved API keys to environment variables so agent can use them
-            for key, value in api_keys_store.items():
-                if value:
-                    os.environ[key] = value
-                    print(f"[Startup] Set environment variable: {key}")
-            
             # Load chat history
             load_chats_from_file()
-            print("[Startup] Chat history loaded")
             # Load scheduled tasks
             load_scheduled_tasks_from_file()
-            print("[Startup] Scheduled tasks loaded")
             # Load custom context
             load_custom_context()
-            print("[Startup] Custom context loaded")
             # Start scheduler
             start_scheduler()
-            print("[Startup] Scheduler started")
-            
-            # Check if DEEPSEEK_API_KEY is available
-            deepseek_key = os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY")
-            if not deepseek_key:
-                print("[Startup] WARNING: DEEPSEEK_API_KEY not set!")
-                print("[Startup] Please set DEEPSEEK_API_KEY in Settings tab or .env file")
-                # Still try to build agent - it will fail but with a clear error
-            
             # Build agent
-            try:
-                agent = build_owasp_agent()
-                print("[Startup] Agent built successfully!")
-            except Exception as e:
-                print(f"[Startup] ERROR building agent: {e}")
-                import traceback
-                traceback.print_exc()
-                # Don't raise - allow app to start so user can set API key in Settings
-                print("[Startup] Agent not available - please configure DEEPSEEK_API_KEY in Settings")
+            agent = build_owasp_agent()
 
 # API Keys management endpoints
 @app.get("/api/keys")
@@ -363,22 +307,13 @@ async def get_api_keys():
 @app.post("/api/keys")
 async def update_api_key(update: APIKeyUpdate):
     """Update an API key and persist to file."""
-    global api_keys_store, agent
+    global api_keys_store
     # Allow adding new keys or updating existing ones
     api_keys_store[update.service] = update.api_key
     # Also update environment variable for tools to use
     os.environ[update.service] = update.api_key
     # Save to file
     save_api_keys_to_file()
-    
-    # If this is the DEEPSEEK_API_KEY and agent is not yet built, try to build it
-    if update.service == "DEEPSEEK_API_KEY" and agent is None:
-        try:
-            agent = build_owasp_agent()
-            print("[API Key Update] Agent built successfully after API key was set!")
-        except Exception as e:
-            print(f"[API Key Update] Failed to build agent: {e}")
-    
     return JSONResponse({"success": True, "service": update.service})
 
 @app.delete("/api/keys/{service}")
@@ -562,25 +497,6 @@ async def toggle_scheduled_task(task_id: str):
     save_scheduled_tasks_to_file()
     return JSONResponse({"success": True, "status": task["status"]})
 
-@app.put("/api/scheduled/{task_id}")
-async def update_scheduled_task(task_id: str, task_update: ScheduledTaskCreate):
-    """Update an existing scheduled task."""
-    if task_id not in scheduled_tasks_store:
-        return JSONResponse({"error": "Task not found"}, status_code=404)
-    
-    task = scheduled_tasks_store[task_id]
-    task["prompt"] = task_update.prompt
-    task["name"] = task_update.name or task_update.prompt[:50]
-    task["schedule_time"] = task_update.schedule_time
-    task["recurring"] = task_update.recurring
-    task["interval_minutes"] = task_update.interval_minutes
-    # Reset status to active if it was completed
-    if task["status"] == "completed":
-        task["status"] = "active"
-    
-    save_scheduled_tasks_to_file()
-    return JSONResponse({"success": True, "task_id": task_id})
-
 # ============== CUSTOM CONTEXT ENDPOINTS ==============
 
 @app.get("/api/context")
@@ -645,6 +561,13 @@ async def get_task(task_id: str):
         return JSONResponse(task)
     return JSONResponse({"error": "Task not found"}, status_code=404)
 
+@app.on_event("startup")
+async def startup():
+    global agent
+    async with startup_lock:
+        if agent is None:
+            agent = build_owasp_agent()
+
 # File upload endpoint
 @app.post("/upload")
 async def upload_file(upload: FileUpload):
@@ -686,7 +609,7 @@ async def get_report(format: str):
     else:
         return JSONResponse({"error": "Invalid format"}, status_code=400)
 
-HTML = r"""
+HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2179,7 +2102,7 @@ main {
   <div class="task-modal" id="schedule-modal">
     <div class="task-modal-content" style="max-width: 500px;">
       <div class="task-modal-header">
-        <span class="task-modal-title" id="schedule-modal-title">⏰ Schedule New Task</span>
+        <span class="task-modal-title">⏰ Schedule New Task</span>
         <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
       </div>
       <div class="task-modal-body">
@@ -2210,7 +2133,7 @@ main {
           <input type="number" id="schedule-interval" value="60" min="5" 
             style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
         </div>
-        <button class="btn btn-primary" id="schedule-submit-btn" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
+        <button class="btn btn-primary" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
       </div>
     </div>
   </div>
@@ -2293,151 +2216,7 @@ let sessionId = 'session_' + Date.now();
 
 let chatHistory = [];
 let currentReport = { html: null, markdown: null };
-let ws = null;
-let wsReconnectAttempts = 0;
-const maxReconnectAttempts = 5;
-
-function connectWebSocket() {
-  if (ws && ws.readyState === WebSocket.OPEN) return;
-  
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  
-  ws.onopen = () => {
-    wsReconnectAttempts = 0;
-    statusBadge.className = 'status-badge connected';
-    statusText.textContent = 'Connected';
-    addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
-  };
-  
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-    statusBadge.className = 'status-badge disconnected';
-    statusText.textContent = 'Error';
-  };
-  
-  ws.onclose = (event) => {
-    statusBadge.className = 'status-badge disconnected';
-    statusText.textContent = 'Disconnected';
-    console.log('WebSocket closed:', event.code, event.reason);
-    
-    // Try to reconnect after a delay
-    if (wsReconnectAttempts < maxReconnectAttempts) {
-      wsReconnectAttempts++;
-      const delay = Math.min(1000 * wsReconnectAttempts, 5000);
-      addMessage('system', `🔄 Connection lost. Reconnecting in ${delay/1000}s... (attempt ${wsReconnectAttempts}/${maxReconnectAttempts})`);
-      setTimeout(connectWebSocket, delay);
-    } else {
-      addMessage('system', '🔴 Failed to reconnect. Please refresh the page.');
-    }
-  };
-  
-  ws.onmessage = handleWebSocketMessage;
-}
-
-function handleWebSocketMessage(event) {
-  let data;
-  try {
-    data = JSON.parse(event.data);
-  } catch {
-    addMessage('agent', event.data);
-    return;
-  }
-  
-  if (data.type === 'progress') {
-    // Update existing progress message or add new one
-    const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
-    if (existingProgress) {
-      existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
-    } else {
-      addMessage('progress', data.content);
-    }
-  } else if (data.type === 'activity') {
-    // Activity log update from agent steps - use server-provided counts
-    addActivity(data.activity_type, data.title || '', data.content, data.details);
-    
-    // Update counters from server if provided
-    if (typeof data.tool_count === 'number') {
-      toolCount = data.tool_count;
-      document.getElementById('stat-tools').textContent = toolCount;
-    }
-    if (typeof data.step_count === 'number') {
-      stepCount = data.step_count;
-      document.getElementById('stat-steps').textContent = stepCount;
-    }
-  } else if (data.type === 'final') {
-    stopTimer();
-    // Remove progress message if exists
-    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
-    if (progressMsg) progressMsg.remove();
-
-    // Add final response
-    addMessage('agent', data.content);
-    
-    // Update activity stats from final response
-    if (typeof data.tool_count === 'number') {
-      toolCount = data.tool_count;
-      document.getElementById('stat-tools').textContent = toolCount;
-    }
-    if (typeof data.step_count === 'number') {
-      stepCount = data.step_count;
-      document.getElementById('stat-steps').textContent = stepCount;
-    }
-    if (data.duration) {
-      document.getElementById('stat-duration').textContent = data.duration;
-    }
-  } else if (data.type === 'report_ready') {
-    currentReport = data.report;
-    addMessage('system', '📋 Report generated! Click "📄 Report Mode" toggle to view.');
-  } else if (data.type === 'report') {
-    addMessage('report', data.content, { html: data.html, markdown: data.markdown });
-    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
-  } else if (data.type === 'report_mode') {
-    addMessage('system', data.content);
-  } else if (data.type === 'task_created') {
-    addMessage('system', data.content);
-    refreshTasks();
-  } else if (data.type === 'system') {
-    addMessage('system', data.content);
-  } else if (data.type === 'error') {
-    stopTimer();
-    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
-    if (progressMsg) progressMsg.remove();
-    addMessage('error', data.content);
-  } else {
-    addMessage('agent', data.content || JSON.stringify(data));
-  }
-}
-
-// Check health and connect WebSocket
-async function initializeConnection() {
-  statusBadge.className = 'status-badge disconnected';
-  statusText.textContent = 'Connecting...';
-  
-  // Check if agent is ready
-  try {
-    const healthResp = await fetch('/api/health');
-    const health = await healthResp.json();
-    console.log('Health check:', health);
-    
-    if (!health.agent_ready) {
-      if (health.status === 'no_api_key') {
-        addMessage('system', '⚠️ DEEPSEEK_API_KEY not configured! Please go to Settings tab and add your API key.');
-        statusText.textContent = 'No API Key';
-        // Still retry in case user adds key via Settings
-        setTimeout(initializeConnection, 5000);
-      } else {
-        addMessage('system', '⏳ Agent is still initializing, please wait...');
-        // Retry after 2 seconds
-        setTimeout(initializeConnection, 2000);
-      }
-      return;
-    }
-  } catch (e) {
-    console.error('Health check failed:', e);
-  }
-  
-  connectWebSocket();
-}
+const ws = new WebSocket(`ws://${location.host}/ws`);
 
 // Task store for UI
 let taskStore = {};
@@ -2529,7 +2308,7 @@ function renderTasks() {
         </div>
         ${isActive ? `
         <div class="task-actions">
-          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')">
+          <button class="task-btn task-btn-pause" onclick="pauseTask('${task.id}')" ${task.status === 'paused' ? 'disabled' : ''}>
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
           <button class="task-btn task-btn-cancel" onclick="cancelTask('${task.id}')">
@@ -2598,23 +2377,9 @@ async function viewTaskResult(taskId) {
     // Format result with markdown-like rendering
     let resultHtml = task.result || 'No result available';
     
-    // Handle SCREENSHOT_IMAGE_DATA format from agent
-    const screenshotPattern = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\/=]+):END_IMAGE_DATA/g;
-    resultHtml = resultHtml.replace(screenshotPattern, (match, base64Data) => {
-      return `<div style="margin: 15px 0;">
-        <img src="data:image/png;base64,${base64Data}" 
-             onclick="showImageModal(this.src)" 
-             style="max-width: 100%; max-height: 500px; border-radius: 8px; cursor: pointer; border: 1px solid rgba(255,255,255,0.2);">
-        <div style="font-size: 0.75rem; color: var(--gray-400); margin-top: 5px;">Click to view full size</div>
-      </div>`;
-    });
-    
-    // Also check for regular base64 images
+    // Check for base64 images and render them
     const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
-    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" onclick="showImageModal(this.src)" style="max-width: 100%; margin: 10px 0; border-radius: 8px; cursor: pointer;">');
-    
-    // Format the result with basic HTML escaping for non-image content
-    resultHtml = resultHtml.replace(/\n/g, '<br>');
+    resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px;">');
     
     body.innerHTML = `
       <div style="margin-bottom: 1rem;">
@@ -3071,6 +2836,64 @@ function downloadReport(type) {
   URL.revokeObjectURL(url);
 }
 
+ws.onopen = () => {
+  statusBadge.className = 'status-badge connected';
+  statusText.textContent = 'Connected';
+  addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
+};
+
+ws.onclose = () => {
+  statusBadge.className = 'status-badge disconnected';
+  statusText.textContent = 'Disconnected';
+  addMessage('system', '🔴 Disconnected from server. Please refresh the page.');
+};
+
+ws.onmessage = (event) => {
+  let data;
+  try {
+    data = JSON.parse(event.data);
+  } catch {
+    addMessage('agent', event.data);
+    return;
+  }
+  
+  if (data.type === 'progress') {
+    // Update existing progress message or add new one
+    const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
+    if (existingProgress) {
+      existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
+    } else {
+      addMessage('progress', data.content);
+    }
+  } else if (data.type === 'activity') {
+    // Activity log update from agent steps - use server-provided counts
+    addActivity(data.activity_type, data.title || '', data.content, data.details);
+    
+    // Update counters from server if provided
+    if (typeof data.tool_count === 'number') {
+      toolCount = data.tool_count;
+      document.getElementById('stat-tools').textContent = toolCount;
+    }
+    if (typeof data.step_count === 'number') {
+      stepCount = data.step_count;
+      document.getElementById('stat-steps').textContent = stepCount;
+    }
+  } else if (data.type === 'final') {
+    stopTimer();
+    // Remove progress message if exists
+    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+    if (progressMsg) progressMsg.remove();
+    addMessage('agent', data.content);
+  } else if (data.type === 'report') {
+    addMessage('report', data.content, { html: data.html, markdown: data.markdown });
+    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
+  } else if (data.type === 'report_mode') {
+    addMessage('system', data.content);
+  } else {
+    addMessage('agent', event.data);
+  }
+};
+
 async function sendMessage() {
   const content = messageInput.value.trim();
   if (!content) return;
@@ -3397,9 +3220,6 @@ function renderScheduledTasks() {
         <div class="scheduled-item-prompt">${escapeHtml(task.prompt)}</div>
         ${task.last_result ? `<div class="scheduled-item-prompt" style="color: var(--success); margin-top: 4px;">Last run: ${task.last_result.substring(0, 100)}...</div>` : ''}
         <div class="scheduled-item-actions">
-          <button class="task-btn" onclick="editScheduledTask('${task.id}')" title="Edit">
-            ✏️ Edit
-          </button>
           <button class="task-btn" onclick="toggleScheduledTask('${task.id}')" ${task.status === 'completed' ? 'disabled' : ''}>
             ${task.status === 'paused' ? '▶️ Resume' : '⏸️ Pause'}
           </button>
@@ -3410,52 +3230,16 @@ function renderScheduledTasks() {
   }).join('');
 }
 
-// Track which task is being edited (null = creating new)
-let editingScheduledTaskId = null;
-
-function showScheduleModal(taskId = null) {
+function showScheduleModal() {
   const modal = document.getElementById('schedule-modal');
-  const modalTitle = document.getElementById('schedule-modal-title');
-  const submitBtn = document.getElementById('schedule-submit-btn');
-  
-  editingScheduledTaskId = taskId;
-  
-  if (taskId && scheduledTasksStore[taskId]) {
-    // Editing existing task
-    const task = scheduledTasksStore[taskId];
-    modalTitle.textContent = '✏️ Edit Scheduled Task';
-    submitBtn.textContent = '💾 Save Changes';
-    
-    document.getElementById('schedule-name').value = task.name || '';
-    document.getElementById('schedule-prompt').value = task.prompt || '';
-    
-    // Parse the ISO time to local datetime-local format
-    const scheduleDate = new Date(task.schedule_time);
-    const localDateTime = new Date(scheduleDate.getTime() - scheduleDate.getTimezoneOffset() * 60000)
-      .toISOString().slice(0, 16);
-    document.getElementById('schedule-time').value = localDateTime;
-    
-    document.getElementById('schedule-recurring').checked = task.recurring || false;
-    document.getElementById('schedule-interval').value = task.interval_minutes || 60;
-    document.getElementById('recurring-options').style.display = task.recurring ? 'block' : 'none';
-  } else {
-    // Creating new task
-    modalTitle.textContent = '⏰ Schedule New Task';
-    submitBtn.textContent = '📅 Schedule Task';
-    
-    // Set default time to now + 1 hour
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    now.setMinutes(0);
-    const dateStr = now.toISOString().slice(0, 16);
-    document.getElementById('schedule-time').value = dateStr;
-  }
-  
   modal.classList.add('active');
-}
-
-function editScheduledTask(taskId) {
-  showScheduleModal(taskId);
+  
+  // Set default time to now + 1 hour
+  const now = new Date();
+  now.setHours(now.getHours() + 1);
+  now.setMinutes(0);
+  const dateStr = now.toISOString().slice(0, 16);
+  document.getElementById('schedule-time').value = dateStr;
 }
 
 function closeScheduleModal() {
@@ -3464,7 +3248,6 @@ function closeScheduleModal() {
   document.getElementById('schedule-prompt').value = '';
   document.getElementById('schedule-recurring').checked = false;
   document.getElementById('recurring-options').style.display = 'none';
-  editingScheduledTaskId = null;
 }
 
 // Toggle recurring options visibility
@@ -3488,40 +3271,26 @@ async function createScheduledTask() {
     return;
   }
   
-  const taskData = {
-    name: name || prompt.substring(0, 50),
-    prompt,
-    schedule_time: new Date(time).toISOString(),
-    recurring,
-    interval_minutes: recurring ? interval : null
-  };
-  
   try {
-    let response;
-    if (editingScheduledTaskId) {
-      // Update existing task
-      response = await fetch(`/api/scheduled/${editingScheduledTaskId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(taskData)
-      });
-    } else {
-      // Create new task
-      response = await fetch('/api/scheduled', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(taskData)
-      });
-    }
+    const response = await fetch('/api/scheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name || prompt.substring(0, 50),
+        prompt,
+        schedule_time: new Date(time).toISOString(),
+        recurring,
+        interval_minutes: recurring ? interval : null
+      })
+    });
     
     if (response.ok) {
       closeScheduleModal();
       await loadScheduledTasks();
-      const action = editingScheduledTaskId ? 'updated' : 'scheduled';
-      addMessage('system', `⏰ Task ${action} for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
+      addMessage('system', `⏰ Task scheduled for ${new Date(time).toLocaleString()}${recurring ? ` (repeating every ${interval}m)` : ''}`);
     }
   } catch (err) {
-    addMessage('system', `⚠️ Failed to ${editingScheduledTaskId ? 'update' : 'schedule'} task: ${err.message}`);
+    addMessage('system', `⚠️ Failed to schedule task: ${err.message}`);
   }
 }
 
@@ -3634,12 +3403,8 @@ window.closeScheduleModal = closeScheduleModal;
 window.createScheduledTask = createScheduledTask;
 window.toggleScheduledTask = toggleScheduledTask;
 window.deleteScheduledTask = deleteScheduledTask;
-window.editScheduledTask = editScheduledTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
-
-// Start connection on page load (after all functions are defined)
-initializeConnection();
 </script>
 </body>
 </html>
@@ -3649,28 +3414,11 @@ initializeConnection();
 async def index():
     return HTMLResponse(HTML)
 
-@app.get("/api/health")
-async def health_check():
-    """Health check endpoint to verify agent status."""
-    has_api_key = bool(os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY"))
-    return JSONResponse({
-        "status": "ready" if agent is not None else ("no_api_key" if not has_api_key else "initializing"),
-        "agent_ready": agent is not None,
-        "has_api_key": has_api_key,
-        "scheduler_running": scheduler_thread is not None and scheduler_thread.is_alive() if scheduler_thread else False,
-        "scheduled_tasks_count": len(scheduled_tasks_store),
-        "active_tasks_count": len([t for t in tasks_store.values() if t.get("status") == "running"]),
-    })
-
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     if agent is None:
-        has_api_key = bool(os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY"))
-        if not has_api_key:
-            await ws.send_text(json.dumps({"type": "error", "content": "⚠️ DEEPSEEK_API_KEY not configured! Please go to Settings tab and add your API key."}))
-        else:
-            await ws.send_text(json.dumps({"type": "system", "content": "Agent is still initializing. Please wait and refresh."}))
+        await ws.send_text(json.dumps({"type": "system", "content": "Agent not ready"}))
         await ws.close()
         return
     
@@ -3765,22 +3513,18 @@ The report should be comprehensive and professional, suitable for executive stak
                     "content": f"🔄 Background task created. Check the Tasks tab to monitor progress."
                 }))
                 
-                # Run task in background thread with its own agent instance
+                # Run task in background thread
                 def run_background_task():
                     try:
                         task_store[task_id].status = TaskStatus.running
                         task_store[task_id].started_at = datetime.now()
-                        
-                        # Create a fresh agent instance for this task (enables concurrency)
-                        from app.agents.owasp_agent import build_owasp_agent
-                        task_agent = build_owasp_agent()
                         
                         step_count = 0
                         tool_count = 0
                         final_result = None
                         all_outputs = []  # Collect all meaningful outputs
                         
-                        for event in task_agent.run(full_message, stream=True):
+                        for event in agent.run(full_message, stream=True):
                             # Check for cancellation
                             if task_store[task_id].status == TaskStatus.cancelled:
                                 return
@@ -3848,16 +3592,12 @@ The report should be comprehensive and professional, suitable for executive stak
                 def run_agent_with_streaming():
                     """Run agent in thread and put events in queue."""
                     try:
-                        # Create a fresh agent instance for this request (enables concurrency)
-                        from app.agents.owasp_agent import build_owasp_agent
-                        request_agent = build_owasp_agent()
-                        
                         # Use streaming mode for real-time updates
                         final_result = None
                         step_count = 0
                         tool_count = 0
                         
-                        for event in request_agent.run(full_message, stream=True):
+                        for event in agent.run(full_message, stream=True):
                             step_count += 1
                             event_type = type(event).__name__
                             
