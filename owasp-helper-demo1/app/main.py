@@ -306,18 +306,47 @@ async def startup():
     global agent, api_keys_store
     async with startup_lock:
         if agent is None:
+            print("[Startup] Initializing OWASP SmolAgent...")
             # Load API keys from file/environment
             load_api_keys_from_file()
+            print(f"[Startup] API keys loaded: {list(api_keys_store.keys())}")
+            
+            # Apply saved API keys to environment variables so agent can use them
+            for key, value in api_keys_store.items():
+                if value:
+                    os.environ[key] = value
+                    print(f"[Startup] Set environment variable: {key}")
+            
             # Load chat history
             load_chats_from_file()
+            print("[Startup] Chat history loaded")
             # Load scheduled tasks
             load_scheduled_tasks_from_file()
+            print("[Startup] Scheduled tasks loaded")
             # Load custom context
             load_custom_context()
+            print("[Startup] Custom context loaded")
             # Start scheduler
             start_scheduler()
+            print("[Startup] Scheduler started")
+            
+            # Check if DEEPSEEK_API_KEY is available
+            deepseek_key = os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY")
+            if not deepseek_key:
+                print("[Startup] WARNING: DEEPSEEK_API_KEY not set!")
+                print("[Startup] Please set DEEPSEEK_API_KEY in Settings tab or .env file")
+                # Still try to build agent - it will fail but with a clear error
+            
             # Build agent
-            agent = build_owasp_agent()
+            try:
+                agent = build_owasp_agent()
+                print("[Startup] Agent built successfully!")
+            except Exception as e:
+                print(f"[Startup] ERROR building agent: {e}")
+                import traceback
+                traceback.print_exc()
+                # Don't raise - allow app to start so user can set API key in Settings
+                print("[Startup] Agent not available - please configure DEEPSEEK_API_KEY in Settings")
 
 # API Keys management endpoints
 @app.get("/api/keys")
@@ -334,13 +363,22 @@ async def get_api_keys():
 @app.post("/api/keys")
 async def update_api_key(update: APIKeyUpdate):
     """Update an API key and persist to file."""
-    global api_keys_store
+    global api_keys_store, agent
     # Allow adding new keys or updating existing ones
     api_keys_store[update.service] = update.api_key
     # Also update environment variable for tools to use
     os.environ[update.service] = update.api_key
     # Save to file
     save_api_keys_to_file()
+    
+    # If this is the DEEPSEEK_API_KEY and agent is not yet built, try to build it
+    if update.service == "DEEPSEEK_API_KEY" and agent is None:
+        try:
+            agent = build_owasp_agent()
+            print("[API Key Update] Agent built successfully after API key was set!")
+        except Exception as e:
+            print(f"[API Key Update] Failed to build agent: {e}")
+    
     return JSONResponse({"success": True, "service": update.service})
 
 @app.delete("/api/keys/{service}")
@@ -606,13 +644,6 @@ async def get_task(task_id: str):
             task["completed_at"] = task["completed_at"].isoformat()
         return JSONResponse(task)
     return JSONResponse({"error": "Task not found"}, status_code=404)
-
-@app.on_event("startup")
-async def startup():
-    global agent
-    async with startup_lock:
-        if agent is None:
-            agent = build_owasp_agent()
 
 # File upload endpoint
 @app.post("/upload")
@@ -2262,7 +2293,154 @@ let sessionId = 'session_' + Date.now();
 
 let chatHistory = [];
 let currentReport = { html: null, markdown: null };
-const ws = new WebSocket(`ws://${location.host}/ws`);
+let ws = null;
+let wsReconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+
+function connectWebSocket() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  
+  ws.onopen = () => {
+    wsReconnectAttempts = 0;
+    statusBadge.className = 'status-badge connected';
+    statusText.textContent = 'Connected';
+    addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
+  };
+  
+  ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+    statusBadge.className = 'status-badge disconnected';
+    statusText.textContent = 'Error';
+  };
+  
+  ws.onclose = (event) => {
+    statusBadge.className = 'status-badge disconnected';
+    statusText.textContent = 'Disconnected';
+    console.log('WebSocket closed:', event.code, event.reason);
+    
+    // Try to reconnect after a delay
+    if (wsReconnectAttempts < maxReconnectAttempts) {
+      wsReconnectAttempts++;
+      const delay = Math.min(1000 * wsReconnectAttempts, 5000);
+      addMessage('system', `🔄 Connection lost. Reconnecting in ${delay/1000}s... (attempt ${wsReconnectAttempts}/${maxReconnectAttempts})`);
+      setTimeout(connectWebSocket, delay);
+    } else {
+      addMessage('system', '🔴 Failed to reconnect. Please refresh the page.');
+    }
+  };
+  
+  ws.onmessage = handleWebSocketMessage;
+}
+
+function handleWebSocketMessage(event) {
+  let data;
+  try {
+    data = JSON.parse(event.data);
+  } catch {
+    addMessage('agent', event.data);
+    return;
+  }
+  
+  if (data.type === 'progress') {
+    // Update existing progress message or add new one
+    const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
+    if (existingProgress) {
+      existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
+    } else {
+      addMessage('progress', data.content);
+    }
+  } else if (data.type === 'activity') {
+    // Activity log update from agent steps - use server-provided counts
+    addActivity(data.activity_type, data.title || '', data.content, data.details);
+    
+    // Update counters from server if provided
+    if (typeof data.tool_count === 'number') {
+      toolCount = data.tool_count;
+      document.getElementById('stat-tools').textContent = toolCount;
+    }
+    if (typeof data.step_count === 'number') {
+      stepCount = data.step_count;
+      document.getElementById('stat-steps').textContent = stepCount;
+    }
+  } else if (data.type === 'final') {
+    stopTimer();
+    // Remove progress message if exists
+    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+    if (progressMsg) progressMsg.remove();
+
+    // Add final response
+    addMessage('agent', data.content);
+    
+    // Update activity stats from final response
+    if (typeof data.tool_count === 'number') {
+      toolCount = data.tool_count;
+      document.getElementById('stat-tools').textContent = toolCount;
+    }
+    if (typeof data.step_count === 'number') {
+      stepCount = data.step_count;
+      document.getElementById('stat-steps').textContent = stepCount;
+    }
+    if (data.duration) {
+      document.getElementById('stat-duration').textContent = data.duration;
+    }
+  } else if (data.type === 'report_ready') {
+    currentReport = data.report;
+    addMessage('system', '📋 Report generated! Click "📄 Report Mode" toggle to view.');
+  } else if (data.type === 'report') {
+    addMessage('report', data.content, { html: data.html, markdown: data.markdown });
+    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
+  } else if (data.type === 'report_mode') {
+    addMessage('system', data.content);
+  } else if (data.type === 'task_created') {
+    addMessage('system', data.content);
+    refreshTasks();
+  } else if (data.type === 'system') {
+    addMessage('system', data.content);
+  } else if (data.type === 'error') {
+    stopTimer();
+    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+    if (progressMsg) progressMsg.remove();
+    addMessage('error', data.content);
+  } else {
+    addMessage('agent', data.content || JSON.stringify(data));
+  }
+}
+
+// Check health and connect WebSocket
+async function initializeConnection() {
+  statusBadge.className = 'status-badge disconnected';
+  statusText.textContent = 'Connecting...';
+  
+  // Check if agent is ready
+  try {
+    const healthResp = await fetch('/api/health');
+    const health = await healthResp.json();
+    console.log('Health check:', health);
+    
+    if (!health.agent_ready) {
+      if (health.status === 'no_api_key') {
+        addMessage('system', '⚠️ DEEPSEEK_API_KEY not configured! Please go to Settings tab and add your API key.');
+        statusText.textContent = 'No API Key';
+        // Still retry in case user adds key via Settings
+        setTimeout(initializeConnection, 5000);
+      } else {
+        addMessage('system', '⏳ Agent is still initializing, please wait...');
+        // Retry after 2 seconds
+        setTimeout(initializeConnection, 2000);
+      }
+      return;
+    }
+  } catch (e) {
+    console.error('Health check failed:', e);
+  }
+  
+  connectWebSocket();
+}
+
+// Start connection on page load
+initializeConnection();
 
 // Task store for UI
 let taskStore = {};
@@ -2896,64 +3074,6 @@ function downloadReport(type) {
   URL.revokeObjectURL(url);
 }
 
-ws.onopen = () => {
-  statusBadge.className = 'status-badge connected';
-  statusText.textContent = 'Connected';
-  addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
-};
-
-ws.onclose = () => {
-  statusBadge.className = 'status-badge disconnected';
-  statusText.textContent = 'Disconnected';
-  addMessage('system', '🔴 Disconnected from server. Please refresh the page.');
-};
-
-ws.onmessage = (event) => {
-  let data;
-  try {
-    data = JSON.parse(event.data);
-  } catch {
-    addMessage('agent', event.data);
-    return;
-  }
-  
-  if (data.type === 'progress') {
-    // Update existing progress message or add new one
-    const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
-    if (existingProgress) {
-      existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
-    } else {
-      addMessage('progress', data.content);
-    }
-  } else if (data.type === 'activity') {
-    // Activity log update from agent steps - use server-provided counts
-    addActivity(data.activity_type, data.title || '', data.content, data.details);
-    
-    // Update counters from server if provided
-    if (typeof data.tool_count === 'number') {
-      toolCount = data.tool_count;
-      document.getElementById('stat-tools').textContent = toolCount;
-    }
-    if (typeof data.step_count === 'number') {
-      stepCount = data.step_count;
-      document.getElementById('stat-steps').textContent = stepCount;
-    }
-  } else if (data.type === 'final') {
-    stopTimer();
-    // Remove progress message if exists
-    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
-    if (progressMsg) progressMsg.remove();
-    addMessage('agent', data.content);
-  } else if (data.type === 'report') {
-    addMessage('report', data.content, { html: data.html, markdown: data.markdown });
-    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
-  } else if (data.type === 'report_mode') {
-    addMessage('system', data.content);
-  } else {
-    addMessage('agent', event.data);
-  }
-};
-
 async function sendMessage() {
   const content = messageInput.value.trim();
   if (!content) return;
@@ -3529,11 +3649,28 @@ window.clearCustomContext = clearCustomContext;
 async def index():
     return HTMLResponse(HTML)
 
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint to verify agent status."""
+    has_api_key = bool(os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY"))
+    return JSONResponse({
+        "status": "ready" if agent is not None else ("no_api_key" if not has_api_key else "initializing"),
+        "agent_ready": agent is not None,
+        "has_api_key": has_api_key,
+        "scheduler_running": scheduler_thread is not None and scheduler_thread.is_alive() if scheduler_thread else False,
+        "scheduled_tasks_count": len(scheduled_tasks_store),
+        "active_tasks_count": len([t for t in tasks_store.values() if t.get("status") == "running"]),
+    })
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     if agent is None:
-        await ws.send_text(json.dumps({"type": "system", "content": "Agent not ready"}))
+        has_api_key = bool(os.environ.get("DEEPSEEK_API_KEY") or api_keys_store.get("DEEPSEEK_API_KEY"))
+        if not has_api_key:
+            await ws.send_text(json.dumps({"type": "error", "content": "⚠️ DEEPSEEK_API_KEY not configured! Please go to Settings tab and add your API key."}))
+        else:
+            await ws.send_text(json.dumps({"type": "system", "content": "Agent is still initializing. Please wait and refresh."}))
         await ws.close()
         return
     
