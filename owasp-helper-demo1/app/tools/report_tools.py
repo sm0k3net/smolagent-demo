@@ -141,6 +141,38 @@ def _get_report_template_html() -> str:
         .scope-list { list-style: none; }
         .scope-list li { padding: 0.5rem 0; border-bottom: 1px solid #eee; }
         .scope-list li:last-child { border-bottom: none; }
+        .scope-table { margin-bottom: 1.5rem; }
+        .scope-table th { background: #667eea; color: white; }
+        .scope-table td { font-family: monospace; font-size: 0.9rem; }
+        .scope-type-header { background: #f0f0f0; font-weight: 600; color: #495057; }
+        .exec-summary-content { margin-bottom: 1.5rem; }
+        .exec-summary-content p { margin-bottom: 1rem; line-height: 1.8; }
+        .exec-summary-findings { background: #f8f9fa; padding: 1.5rem; border-radius: 8px; margin-top: 1rem; }
+        .exec-summary-findings h4 { margin-bottom: 1rem; color: #495057; }
+        .exec-summary-findings ul { margin: 0; padding-left: 1.5rem; }
+        .exec-summary-findings li { margin-bottom: 0.5rem; }
+        .steps-list { counter-reset: step-counter; list-style: none; padding-left: 0; }
+        .steps-list li { counter-increment: step-counter; margin-bottom: 0.75rem; padding-left: 2rem; position: relative; }
+        .steps-list li::before { content: counter(step-counter); position: absolute; left: 0; background: #667eea; color: white; width: 1.5rem; height: 1.5rem; border-radius: 50%; text-align: center; font-size: 0.85rem; line-height: 1.5rem; }
+        .command-block { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px; margin: 0.5rem 0; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; overflow-x: auto; border-left: 3px solid #667eea; }
+        .command-label { color: #6a9955; margin-bottom: 0.25rem; font-size: 0.8rem; }
+        .references-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+        .references-list li { padding: 0.25rem 0; }
+        .references-list a { color: #0d6efd; text-decoration: none; }
+        .references-list a:hover { text-decoration: underline; }
+        .conclusion-section { background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); }
+        .conclusion-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem; }
+        .conclusion-card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .conclusion-card h4 { color: #155724; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+        .conclusion-card ul { margin: 0; padding-left: 1.25rem; }
+        .conclusion-card li { margin-bottom: 0.5rem; }
+        .priority-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
+        .priority-immediate { background: #dc3545; color: white; }
+        .priority-short { background: #fd7e14; color: white; }
+        .priority-medium { background: #ffc107; color: #333; }
+        .priority-long { background: #28a745; color: white; }
+        .risk-summary { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+        @media (max-width: 768px) { .conclusion-grid { grid-template-columns: 1fr; } }
         .tool-badge {
             display: inline-block;
             background: #e9ecef;
@@ -274,7 +306,10 @@ def _get_report_template_html() -> str:
         
         <div class="section executive-summary">
             <h2>📋 Executive Summary</h2>
-            <p>{{executive_summary}}</p>
+            
+            <div class="exec-summary-content">
+                {{executive_summary_html}}
+            </div>
             
             <div class="findings-summary">
                 <div class="stat-card critical">
@@ -303,9 +338,7 @@ def _get_report_template_html() -> str:
         <div class="section">
             <h2>🎯 Scope & Methodology</h2>
             <h3>Targets in Scope</h3>
-            <ul class="scope-list">
-                {{scope_items}}
-            </ul>
+            {{scope_table}}
             
             <h3>Testing Methodology</h3>
             <p>{{methodology}}</p>
@@ -318,9 +351,9 @@ def _get_report_template_html() -> str:
             {{findings_html}}
         </div>
         
-        <div class="section conclusion">
+        <div class="section conclusion-section">
             <h2>📝 Conclusion & Recommendations</h2>
-            <p>{{conclusion}}</p>
+            {{conclusion_html}}
         </div>
         
         <div class="section">
@@ -434,7 +467,10 @@ def add_finding_to_report(
     affected_component: str | None = None,
     evidence: str | None = None,
     steps_to_reproduce: str | None = None,
-    tool_used: str | None = None
+    tool_used: str | None = None,
+    command_used: str | None = None,
+    references: str | None = None,
+    cwe_id: str | None = None
 ) -> str:
     """Add a security finding to the current report.
 
@@ -446,10 +482,13 @@ def add_finding_to_report(
         remediation: Recommended fix/mitigation.
         owasp_category: OWASP Top 10 category (e.g., 'A03:2021 Injection').
         cvss_score: CVSS score if calculated (e.g., '9.8').
-        affected_component: Specific URL/endpoint/component affected.
+        affected_component: Full vulnerability path/URL (e.g., 'https://example.com/admin/upload.php').
         evidence: Proof of concept, screenshots description, or payload.
-        steps_to_reproduce: Steps to reproduce the issue.
+        steps_to_reproduce: Steps to reproduce (use numbered list format: '1. Step one\n2. Step two').
         tool_used: Tool used to discover (e.g., 'nmap', 'nikto', 'manual').
+        command_used: Exact command that was executed (e.g., 'nmap -sV -sC -p- target.com').
+        references: Relevant references (newline-separated URLs or CVE IDs).
+        cwe_id: CWE ID if applicable (e.g., 'CWE-89').
     Returns: Confirmation that finding was added.
     """
     global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
@@ -466,10 +505,13 @@ def add_finding_to_report(
         "remediation": remediation,
         "owasp_category": owasp_category or "N/A",
         "cvss_score": cvss_score or "N/A",
+        "cwe_id": cwe_id or "N/A",
         "affected_component": affected_component or _CURRENT_REPORT_DATA.get("target", "N/A"),
         "evidence": evidence or "",
         "steps_to_reproduce": steps_to_reproduce or "",
-        "tool_used": tool_used or "Manual Testing"
+        "tool_used": tool_used or "Manual Testing",
+        "command_used": command_used or "",
+        "references": references or ""
     }
     
     _CURRENT_REPORT_DATA["findings"].append(finding)
@@ -755,6 +797,291 @@ def get_report_artifacts() -> list:
     return _REPORT_ARTIFACTS.copy()
 
 
+def _classify_scope_item(item: str) -> str:
+    """Classify a scope item as FQDN/URL or Subnet/IP."""
+    import re
+    item = item.strip()
+    # Check for IP address (IPv4)
+    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
+    # Check for CIDR notation
+    cidr_pattern = r'^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    # Check for IP range
+    range_pattern = r'^(\d{1,3}\.){3}\d{1,3}\s*-\s*(\d{1,3}\.){3}\d{1,3}$'
+    
+    if re.match(ip_pattern, item) or re.match(cidr_pattern, item) or re.match(range_pattern, item):
+        return "subnet_ip"
+    return "fqdn_url"
+
+
+def _build_scope_table(scope_items: list) -> str:
+    """Build HTML table for scope items grouped by type."""
+    fqdns_urls = []
+    subnets_ips = []
+    
+    for item in scope_items:
+        if _classify_scope_item(item) == "subnet_ip":
+            subnets_ips.append(item)
+        else:
+            fqdns_urls.append(item)
+    
+    table_html = '<table class="scope-table">'
+    table_html += '<thead><tr><th>Type</th><th>Target</th><th>Description</th></tr></thead>'
+    table_html += '<tbody>'
+    
+    # Add FQDNs/URLs section
+    if fqdns_urls:
+        table_html += f'<tr class="scope-type-header"><td colspan="3">🌐 FQDNs / URLs ({len(fqdns_urls)})</td></tr>'
+        for item in fqdns_urls:
+            item_type = "URL" if item.startswith(("http://", "https://")) else "FQDN"
+            table_html += f'<tr><td>{item_type}</td><td>{item}</td><td>In scope</td></tr>'
+    
+    # Add Subnets/IPs section
+    if subnets_ips:
+        table_html += f'<tr class="scope-type-header"><td colspan="3">🔢 Subnets / IP Addresses ({len(subnets_ips)})</td></tr>'
+        for item in subnets_ips:
+            if "/" in item:
+                item_type = "Subnet (CIDR)"
+            elif "-" in item:
+                item_type = "IP Range"
+            else:
+                item_type = "IP Address"
+            table_html += f'<tr><td>{item_type}</td><td>{item}</td><td>In scope</td></tr>'
+    
+    if not fqdns_urls and not subnets_ips:
+        table_html += '<tr><td colspan="3">No targets specified</td></tr>'
+    
+    table_html += '</tbody></table>'
+    return table_html
+
+
+def _build_executive_summary_html(summary: str, findings: list, severity_counts: dict) -> str:
+    """Build structured executive summary HTML."""
+    # Split summary into paragraphs
+    paragraphs = [p.strip() for p in summary.split('\n\n') if p.strip()]
+    if not paragraphs:
+        paragraphs = [summary] if summary else ["This report presents the findings from a security assessment."]
+    
+    # Build description section
+    desc_html = ""
+    for p in paragraphs:
+        # Convert single newlines to <br> within paragraphs
+        p = p.replace('\n', '<br>')
+        desc_html += f"<p>{p}</p>"
+    
+    # Build key findings bullet list
+    key_findings = []
+    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
+    sorted_findings = sorted(findings, key=lambda x: severity_order.index(x.get("severity", "Info")) if x.get("severity", "Info") in severity_order else 5)
+    
+    for f in sorted_findings[:10]:  # Top 10 findings
+        sev = f.get("severity", "Info")
+        emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(sev, "⚪")
+        key_findings.append(f"{emoji} <strong>[{sev}]</strong> {f['title']}")
+    
+    findings_html = ""
+    if key_findings:
+        findings_html = '''
+        <div class="exec-summary-findings">
+            <h4>Key Findings</h4>
+            <ul>
+        '''
+        for finding in key_findings:
+            findings_html += f"<li>{finding}</li>"
+        findings_html += "</ul></div>"
+    
+    return desc_html + findings_html
+
+
+def _build_finding_steps_html(steps: str) -> str:
+    """Build structured steps to reproduce HTML."""
+    if not steps:
+        return ""
+    
+    # Check if already numbered (1. Step or 1) Step format)
+    import re
+    numbered_pattern = r'^[\d]+[\.\)]\s*'
+    
+    lines = [l.strip() for l in steps.split('\n') if l.strip()]
+    if not lines:
+        return f"<p>{steps}</p>"
+    
+    # Check if lines are numbered
+    is_numbered = any(re.match(numbered_pattern, line) for line in lines)
+    
+    if is_numbered or len(lines) > 1:
+        # Build numbered list
+        html = '<ol class="steps-list">'
+        for line in lines:
+            # Remove existing numbers if present
+            cleaned = re.sub(numbered_pattern, '', line)
+            html += f"<li>{cleaned}</li>"
+        html += '</ol>'
+        return html
+    else:
+        return f"<p>{steps}</p>"
+
+
+def _build_finding_references_html(references: str, owasp_cat: str, cwe_id: str) -> str:
+    """Build references section HTML for a finding."""
+    refs = []
+    
+    # Add OWASP reference
+    if owasp_cat and owasp_cat != "N/A":
+        # Extract category ID (e.g., A01 from A01:2021)
+        cat_match = owasp_cat.split(":")[0] if ":" in owasp_cat else owasp_cat
+        refs.append(f'<a href="https://owasp.org/Top10/{cat_match}/" target="_blank">OWASP Top 10 - {owasp_cat}</a>')
+    
+    # Add CWE reference
+    if cwe_id and cwe_id != "N/A":
+        cwe_num = cwe_id.replace("CWE-", "").replace("cwe-", "")
+        refs.append(f'<a href="https://cwe.mitre.org/data/definitions/{cwe_num}.html" target="_blank">{cwe_id}</a>')
+    
+    # Parse custom references
+    if references:
+        for ref in references.split('\n'):
+            ref = ref.strip()
+            if ref:
+                if ref.startswith(("http://", "https://")):
+                    refs.append(f'<a href="{ref}" target="_blank">{ref}</a>')
+                elif ref.startswith("CVE-"):
+                    refs.append(f'<a href="https://nvd.nist.gov/vuln/detail/{ref}" target="_blank">{ref}</a>')
+                else:
+                    refs.append(ref)
+    
+    if not refs:
+        return ""
+    
+    html = '<h4>References</h4><ul class="references-list">'
+    for ref in refs:
+        html += f"<li>{ref}</li>"
+    html += "</ul>"
+    return html
+
+
+def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dict) -> str:
+    """Build professional conclusion section HTML."""
+    total_findings = sum(severity_counts.values())
+    critical_high = severity_counts.get("Critical", 0) + severity_counts.get("High", 0)
+    
+    # Risk level determination
+    if severity_counts.get("Critical", 0) > 0:
+        risk_level = "Critical"
+        risk_color = "#dc3545"
+        risk_text = "The assessment identified critical vulnerabilities that pose an immediate threat to the security of the system."
+    elif severity_counts.get("High", 0) > 0:
+        risk_level = "High"
+        risk_color = "#fd7e14"
+        risk_text = "The assessment identified high-severity vulnerabilities that should be addressed as a priority."
+    elif severity_counts.get("Medium", 0) > 0:
+        risk_level = "Medium"
+        risk_color = "#ffc107"
+        risk_text = "The assessment identified vulnerabilities of moderate severity that should be remediated in a timely manner."
+    else:
+        risk_level = "Low"
+        risk_color = "#28a745"
+        risk_text = "The assessment found primarily low-severity or informational findings. The overall security posture is reasonable."
+    
+    # Build priority remediation lists
+    immediate_actions = []
+    short_term_actions = []
+    medium_term_actions = []
+    long_term_actions = []
+    
+    for f in findings:
+        sev = f.get("severity", "Info")
+        item = f"Fix: {f['title']}"
+        if sev == "Critical":
+            immediate_actions.append(item)
+        elif sev == "High":
+            short_term_actions.append(item)
+        elif sev == "Medium":
+            medium_term_actions.append(item)
+        else:
+            long_term_actions.append(item)
+    
+    # Parse conclusion text into paragraphs
+    conclusion_paragraphs = ""
+    if conclusion:
+        for p in conclusion.split('\n\n'):
+            p = p.strip()
+            if p:
+                conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
+    
+    html = f'''
+    <div class="risk-summary" style="border-color: {risk_color};">
+        <strong style="color: {risk_color};">Overall Risk Level: {risk_level}</strong>
+        <p style="margin: 0.5rem 0 0 0;">{risk_text}</p>
+        <p style="margin: 0.5rem 0 0 0;"><strong>Summary:</strong> {total_findings} total findings identified ({severity_counts.get("Critical", 0)} Critical, {severity_counts.get("High", 0)} High, {severity_counts.get("Medium", 0)} Medium, {severity_counts.get("Low", 0)} Low, {severity_counts.get("Info", 0)} Informational)</p>
+    </div>
+    
+    <h3>Assessment Summary</h3>
+    {conclusion_paragraphs if conclusion_paragraphs else "<p>Based on the assessment, the recommendations in this report should be implemented to improve the security posture of the application.</p>"}
+    
+    <h3>Prioritized Remediation Roadmap</h3>
+    <div class="conclusion-grid">
+    '''
+    
+    if immediate_actions:
+        html += '''
+        <div class="conclusion-card">
+            <h4>🚨 Immediate Actions <span class="priority-badge priority-immediate">0-48 hours</span></h4>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Critical issues requiring emergency response</p>
+            <ul>
+        '''
+        for action in immediate_actions[:5]:
+            html += f"<li>{action}</li>"
+        html += "</ul></div>"
+    
+    if short_term_actions:
+        html += '''
+        <div class="conclusion-card">
+            <h4>⚠️ Short-Term Actions <span class="priority-badge priority-short">1-2 weeks</span></h4>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">High priority issues for immediate sprint</p>
+            <ul>
+        '''
+        for action in short_term_actions[:5]:
+            html += f"<li>{action}</li>"
+        html += "</ul></div>"
+    
+    if medium_term_actions:
+        html += '''
+        <div class="conclusion-card">
+            <h4>📋 Medium-Term Actions <span class="priority-badge priority-medium">1-3 months</span></h4>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Moderate issues for planned remediation</p>
+            <ul>
+        '''
+        for action in medium_term_actions[:5]:
+            html += f"<li>{action}</li>"
+        html += "</ul></div>"
+    
+    if long_term_actions:
+        html += '''
+        <div class="conclusion-card">
+            <h4>📝 Long-Term Improvements <span class="priority-badge priority-long">3-6 months</span></h4>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Low priority enhancements and best practices</p>
+            <ul>
+        '''
+        for action in long_term_actions[:5]:
+            html += f"<li>{action}</li>"
+        html += "</ul></div>"
+    
+    # Add general recommendations
+    html += '''
+    </div>
+    
+    <h3>General Recommendations</h3>
+    <ul>
+        <li><strong>Establish a Vulnerability Management Program:</strong> Implement regular security assessments and vulnerability scanning</li>
+        <li><strong>Security Awareness Training:</strong> Conduct regular security training for development and operations teams</li>
+        <li><strong>Secure Development Lifecycle:</strong> Integrate security testing into CI/CD pipelines</li>
+        <li><strong>Incident Response Plan:</strong> Ensure a documented and tested incident response procedure is in place</li>
+        <li><strong>Regular Patching:</strong> Maintain an aggressive patching schedule for all systems and dependencies</li>
+    </ul>
+    '''
+    
+    return html
+
+
 @tool
 def generate_html_report() -> str:
     """Generate the final HTML report from collected findings.
@@ -776,9 +1103,16 @@ def generate_html_report() -> str:
         if sev in severity_counts:
             severity_counts[sev] += 1
     
-    # Build scope HTML - include all items
+    # Build scope table (grouped by type)
     scope_items = data.get("scope", [])
-    scope_html = "".join([f"<li>{s}</li>" for s in scope_items])
+    scope_table = _build_scope_table(scope_items)
+    
+    # Build executive summary HTML (structured with findings list)
+    exec_summary_html = _build_executive_summary_html(
+        data.get("executive_summary", ""),
+        data.get("findings", []),
+        severity_counts
+    )
     
     # Build tools HTML with cards for better presentation
     all_tools = data.get("tools", set()) | _SESSION_TOOLS_USED
@@ -830,50 +1164,82 @@ def generate_html_report() -> str:
         </div>
         '''
     
-    # Build findings HTML
+    # Build findings HTML with improved structure
     findings_html = ""
     for f in sorted(data.get("findings", []), key=lambda x: ["Critical", "High", "Medium", "Low", "Info"].index(x.get("severity", "Info"))):
         sev_class = f.get("severity", "Info").lower()
+        
+        # Build steps to reproduce HTML
+        steps_html = _build_finding_steps_html(f.get("steps_to_reproduce", ""))
+        if steps_html:
+            steps_html = f"<h4>Steps to Reproduce</h4>{steps_html}"
+        
+        # Build command used HTML
+        command_html = ""
+        if f.get("command_used"):
+            command_html = f'''
+            <h4>Command Executed</h4>
+            <div class="command-block">
+                <div class="command-label"># {f.get("tool_used", "Tool")} command</div>
+                {f["command_used"]}
+            </div>
+            '''
+        
+        # Build references HTML
+        references_html = _build_finding_references_html(
+            f.get("references", ""),
+            f.get("owasp_category", ""),
+            f.get("cwe_id", "")
+        )
+        
         findings_html += f'''
         <div class="finding">
             <div class="finding-header {sev_class}">
                 <span class="finding-title">#{f['id']}: {f['title']}</span>
                 <span class="tag">{f['severity']}</span>
                 <span class="tag">{f['owasp_category']}</span>
+                {f'<span class="tag">{f["cwe_id"]}</span>' if f.get("cwe_id") and f["cwe_id"] != "N/A" else ""}
             </div>
             <div class="finding-body">
                 <h4>Description</h4>
                 <p>{f['description']}</p>
                 
                 <h4>Affected Component</h4>
-                <p>{f['affected_component']}</p>
+                <p><code>{f['affected_component']}</code></p>
                 
                 <h4>Impact</h4>
                 <p>{f['impact']}</p>
                 
-                {"<h4>Evidence / PoC</h4><pre>" + f['evidence'] + "</pre>" if f.get('evidence') else ""}
+                {"<h4>Evidence / Proof of Concept</h4><pre>" + f['evidence'] + "</pre>" if f.get('evidence') else ""}
                 
-                {"<h4>Steps to Reproduce</h4><p>" + f['steps_to_reproduce'] + "</p>" if f.get('steps_to_reproduce') else ""}
+                {steps_html}
+                
+                {command_html}
                 
                 <h4>Remediation</h4>
                 <p>{f['remediation']}</p>
                 
-                <h4>Details</h4>
+                {references_html}
+                
+                <h4>Technical Details</h4>
                 <table>
                     <tr><th>CVSS Score</th><td>{f['cvss_score']}</td></tr>
+                    <tr><th>CWE ID</th><td>{f.get('cwe_id', 'N/A')}</td></tr>
                     <tr><th>Tool Used</th><td>{f['tool_used']}</td></tr>
                 </table>
             </div>
         </div>
         '''
     
-    # Build references
-    references_html = """
-        <li><a href="https://owasp.org/Top10/">OWASP Top 10</a></li>
+    # Build general references
+    references_list_html = """
+        <li><a href="https://owasp.org/Top10/">OWASP Top 10 (2021)</a></li>
         <li><a href="https://owasp.org/www-project-web-security-testing-guide/">OWASP Web Security Testing Guide (WSTG)</a></li>
-        <li><a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP ASVS</a></li>
+        <li><a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP Application Security Verification Standard (ASVS)</a></li>
+        <li><a href="https://owasp.org/API-Security/">OWASP API Security Top 10</a></li>
         <li><a href="https://cwe.mitre.org/">CWE - Common Weakness Enumeration</a></li>
         <li><a href="https://nvd.nist.gov/">NIST National Vulnerability Database</a></li>
+        <li><a href="https://www.first.org/cvss/calculator/3.1">CVSS v3.1 Calculator</a></li>
     """
     
     # Build artifacts section
@@ -929,6 +1295,13 @@ def generate_html_report() -> str:
         </div>
         '''
     
+    # Build conclusion HTML (professional structure)
+    conclusion_html = _build_conclusion_html(
+        data.get("conclusion", ""),
+        data.get("findings", []),
+        severity_counts
+    )
+    
     # Replace placeholders
     html = template
     html = html.replace("{{title}}", data.get("title", "Security Assessment Report"))
@@ -936,20 +1309,20 @@ def generate_html_report() -> str:
     html = html.replace("{{target}}", data.get("target", "N/A"))
     html = html.replace("{{date}}", data.get("date", datetime.now().strftime("%Y-%m-%d")))
     html = html.replace("{{author}}", data.get("author", "OWASP SmolAgent"))
-    html = html.replace("{{executive_summary}}", data.get("executive_summary", "This report presents the findings from a security assessment conducted against the target application."))
+    html = html.replace("{{executive_summary_html}}", exec_summary_html)
     html = html.replace("{{critical_count}}", str(severity_counts["Critical"]))
     html = html.replace("{{high_count}}", str(severity_counts["High"]))
     html = html.replace("{{medium_count}}", str(severity_counts["Medium"]))
     html = html.replace("{{low_count}}", str(severity_counts["Low"]))
     html = html.replace("{{info_count}}", str(severity_counts["Info"]))
-    html = html.replace("{{scope_items}}", scope_html or "<li>Target scope not specified</li>")
+    html = html.replace("{{scope_table}}", scope_table)
     html = html.replace("{{methodology}}", data.get("methodology", ""))
     html = html.replace("{{recon_section}}", recon_section)
     html = html.replace("{{tools_used}}", tools_html or '<div class="tool-card"><div class="tool-icon">🛠️</div><div class="tool-name">Manual Testing</div></div>')
     html = html.replace("{{findings_html}}", findings_html or "<p>No findings recorded.</p>")
-    html = html.replace("{{conclusion}}", data.get("conclusion", "Based on the assessment, the recommendations above should be implemented to improve the security posture of the application."))
+    html = html.replace("{{conclusion_html}}", conclusion_html)
     html = html.replace("{{artifacts_section}}", artifacts_section)
-    html = html.replace("{{references}}", references_html)
+    html = html.replace("{{references}}", references_list_html)
     
     return html
 
@@ -990,11 +1363,31 @@ def generate_markdown_report() -> str:
     lines.append("---")
     lines.append("")
     
-    # Executive Summary
+    # Executive Summary with structured format
     lines.append("## Executive Summary")
     lines.append("")
-    lines.append(data.get("executive_summary", "This report presents findings from a security assessment."))
+    
+    # Description paragraphs
+    exec_summary = data.get("executive_summary", "This report presents findings from a security assessment.")
+    for paragraph in exec_summary.split('\n\n'):
+        if paragraph.strip():
+            lines.append(paragraph.strip())
+            lines.append("")
+    
+    # Key Findings bullet list
+    lines.append("### Key Findings")
     lines.append("")
+    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
+    sorted_findings = sorted(
+        data.get("findings", []),
+        key=lambda x: severity_order.index(x.get("severity", "Info")) if x.get("severity", "Info") in severity_order else 5
+    )
+    for f in sorted_findings[:10]:
+        sev = f.get("severity", "Info")
+        emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(sev, "⚪")
+        lines.append(f"- {emoji} **[{sev}]** {f['title']}")
+    lines.append("")
+    
     lines.append("### Findings Overview")
     lines.append("")
     lines.append(f"| Severity | Count |")
@@ -1008,17 +1401,47 @@ def generate_markdown_report() -> str:
     lines.append("---")
     lines.append("")
     
-    # Scope
+    # Scope with table format
     lines.append("## Scope & Methodology")
     lines.append("")
     lines.append("### Targets in Scope")
     lines.append("")
+    
     scope_items = data.get("scope", [])
     if scope_items:
-        for s in scope_items:
-            lines.append(f"- {s}")
+        # Classify scope items
+        fqdns_urls = []
+        subnets_ips = []
+        import re
+        for item in scope_items:
+            ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
+            if re.match(ip_pattern, item.strip()) or '-' in item and re.match(r'^(\d{1,3}\.){3}\d{1,3}', item):
+                subnets_ips.append(item)
+            else:
+                fqdns_urls.append(item)
+        
+        lines.append("| Type | Target | Description |")
+        lines.append("|------|--------|-------------|")
+        
+        if fqdns_urls:
+            lines.append(f"| **🌐 FQDNs / URLs** | | *{len(fqdns_urls)} items* |")
+            for item in fqdns_urls:
+                item_type = "URL" if item.startswith(("http://", "https://")) else "FQDN"
+                lines.append(f"| {item_type} | `{item}` | In scope |")
+        
+        if subnets_ips:
+            lines.append(f"| **🔢 Subnets / IPs** | | *{len(subnets_ips)} items* |")
+            for item in subnets_ips:
+                if "/" in item:
+                    item_type = "Subnet"
+                elif "-" in item:
+                    item_type = "Range"
+                else:
+                    item_type = "IP"
+                lines.append(f"| {item_type} | `{item}` | In scope |")
     else:
-        lines.append("- (No scope items specified)")
+        lines.append("*(No scope items specified)*")
+    
     lines.append("")
     lines.append("### Methodology")
     lines.append("")
@@ -1052,53 +1475,181 @@ def generate_markdown_report() -> str:
         lines.append("---")
         lines.append("")
     
-    # Findings
+    # Findings with improved structure
     lines.append("## Detailed Findings")
     lines.append("")
-    
-    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
-    sorted_findings = sorted(
-        data.get("findings", []),
-        key=lambda x: severity_order.index(x.get("severity", "Info")) if x.get("severity", "Info") in severity_order else 5
-    )
     
     for f in sorted_findings:
         sev_emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(f.get("severity"), "⚪")
         lines.append(f"### {sev_emoji} {f['id']}. {f['title']}")
         lines.append("")
-        lines.append(f"**Severity:** {f.get('severity', 'N/A')} | **OWASP:** {f.get('owasp_category', 'N/A')} | **CVSS:** {f.get('cvss_score', 'N/A')}")
+        
+        # Header with all identifiers
+        cwe_display = f" | **CWE:** {f.get('cwe_id')}" if f.get('cwe_id') and f.get('cwe_id') != 'N/A' else ""
+        lines.append(f"**Severity:** {f.get('severity', 'N/A')} | **OWASP:** {f.get('owasp_category', 'N/A')} | **CVSS:** {f.get('cvss_score', 'N/A')}{cwe_display}")
         lines.append("")
+        
         lines.append("#### Description")
         lines.append(f.get("description", ""))
         lines.append("")
+        
         lines.append("#### Affected Component")
-        lines.append(f.get("affected_component", "N/A"))
+        lines.append(f"`{f.get('affected_component', 'N/A')}`")
         lines.append("")
+        
         lines.append("#### Impact")
         lines.append(f.get("impact", ""))
         lines.append("")
+        
         if f.get("evidence"):
-            lines.append("#### Evidence / PoC")
+            lines.append("#### Evidence / Proof of Concept")
             lines.append("```")
             lines.append(f.get("evidence", ""))
             lines.append("```")
             lines.append("")
+        
+        # Structured steps to reproduce
         if f.get("steps_to_reproduce"):
             lines.append("#### Steps to Reproduce")
-            lines.append(f.get("steps_to_reproduce", ""))
+            steps = f.get("steps_to_reproduce", "")
+            step_lines = [s.strip() for s in steps.split('\n') if s.strip()]
+            for i, step in enumerate(step_lines, 1):
+                # Remove existing numbering if present
+                import re
+                cleaned = re.sub(r'^[\d]+[\.\)]\s*', '', step)
+                lines.append(f"{i}. {cleaned}")
             lines.append("")
+        
+        # Command used
+        if f.get("command_used"):
+            lines.append("#### Command Executed")
+            lines.append("```bash")
+            lines.append(f"# {f.get('tool_used', 'Tool')} command")
+            lines.append(f.get("command_used", ""))
+            lines.append("```")
+            lines.append("")
+        
         lines.append("#### Remediation")
         lines.append(f.get("remediation", ""))
         lines.append("")
+        
+        # References section
+        refs = []
+        owasp_cat = f.get("owasp_category", "")
+        if owasp_cat and owasp_cat != "N/A":
+            cat_id = owasp_cat.split(":")[0] if ":" in owasp_cat else owasp_cat
+            refs.append(f"- [OWASP Top 10 - {owasp_cat}](https://owasp.org/Top10/{cat_id}/)")
+        
+        cwe_id = f.get("cwe_id", "")
+        if cwe_id and cwe_id != "N/A":
+            cwe_num = cwe_id.replace("CWE-", "").replace("cwe-", "")
+            refs.append(f"- [{cwe_id}](https://cwe.mitre.org/data/definitions/{cwe_num}.html)")
+        
+        if f.get("references"):
+            for ref in f.get("references", "").split('\n'):
+                ref = ref.strip()
+                if ref:
+                    if ref.startswith(("http://", "https://")):
+                        refs.append(f"- [{ref}]({ref})")
+                    elif ref.startswith("CVE-"):
+                        refs.append(f"- [{ref}](https://nvd.nist.gov/vuln/detail/{ref})")
+                    else:
+                        refs.append(f"- {ref}")
+        
+        if refs:
+            lines.append("#### References")
+            lines.extend(refs)
+            lines.append("")
+        
         lines.append(f"*Tool Used: {f.get('tool_used', 'Manual Testing')}*")
         lines.append("")
         lines.append("---")
         lines.append("")
     
-    # Conclusion
+    # Professional Conclusion section
     lines.append("## Conclusion & Recommendations")
     lines.append("")
-    lines.append(data.get("conclusion", "Implement the recommended remediations to improve security posture."))
+    
+    # Risk level determination
+    total_findings = sum(severity_counts.values())
+    if severity_counts.get("Critical", 0) > 0:
+        risk_level = "🔴 **Critical**"
+        risk_text = "The assessment identified critical vulnerabilities that pose an immediate threat to the security of the system."
+    elif severity_counts.get("High", 0) > 0:
+        risk_level = "🟠 **High**"
+        risk_text = "The assessment identified high-severity vulnerabilities that should be addressed as a priority."
+    elif severity_counts.get("Medium", 0) > 0:
+        risk_level = "🟡 **Medium**"
+        risk_text = "The assessment identified vulnerabilities of moderate severity that should be remediated in a timely manner."
+    else:
+        risk_level = "🟢 **Low**"
+        risk_text = "The assessment found primarily low-severity or informational findings."
+    
+    lines.append(f"### Overall Risk Level: {risk_level}")
+    lines.append("")
+    lines.append(risk_text)
+    lines.append("")
+    lines.append(f"**Summary:** {total_findings} total findings ({severity_counts.get('Critical', 0)} Critical, {severity_counts.get('High', 0)} High, {severity_counts.get('Medium', 0)} Medium, {severity_counts.get('Low', 0)} Low, {severity_counts.get('Info', 0)} Informational)")
+    lines.append("")
+    
+    # Assessment summary (custom conclusion text)
+    lines.append("### Assessment Summary")
+    lines.append("")
+    conclusion = data.get("conclusion", "Based on the assessment, the recommendations in this report should be implemented to improve the security posture of the application.")
+    for paragraph in conclusion.split('\n\n'):
+        if paragraph.strip():
+            lines.append(paragraph.strip())
+            lines.append("")
+    
+    # Prioritized remediation roadmap
+    lines.append("### Prioritized Remediation Roadmap")
+    lines.append("")
+    
+    immediate = [f for f in sorted_findings if f.get("severity") == "Critical"]
+    short_term = [f for f in sorted_findings if f.get("severity") == "High"]
+    medium_term = [f for f in sorted_findings if f.get("severity") == "Medium"]
+    long_term = [f for f in sorted_findings if f.get("severity") in ["Low", "Info"]]
+    
+    if immediate:
+        lines.append("#### 🚨 Immediate Actions (0-48 hours)")
+        lines.append("*Critical issues requiring emergency response*")
+        lines.append("")
+        for f in immediate[:5]:
+            lines.append(f"- Fix: {f['title']}")
+        lines.append("")
+    
+    if short_term:
+        lines.append("#### ⚠️ Short-Term Actions (1-2 weeks)")
+        lines.append("*High priority issues for immediate sprint*")
+        lines.append("")
+        for f in short_term[:5]:
+            lines.append(f"- Fix: {f['title']}")
+        lines.append("")
+    
+    if medium_term:
+        lines.append("#### 📋 Medium-Term Actions (1-3 months)")
+        lines.append("*Moderate issues for planned remediation*")
+        lines.append("")
+        for f in medium_term[:5]:
+            lines.append(f"- Fix: {f['title']}")
+        lines.append("")
+    
+    if long_term:
+        lines.append("#### 📝 Long-Term Improvements (3-6 months)")
+        lines.append("*Low priority enhancements and best practices*")
+        lines.append("")
+        for f in long_term[:5]:
+            lines.append(f"- Fix: {f['title']}")
+        lines.append("")
+    
+    # General recommendations
+    lines.append("### General Recommendations")
+    lines.append("")
+    lines.append("- **Establish a Vulnerability Management Program:** Implement regular security assessments and vulnerability scanning")
+    lines.append("- **Security Awareness Training:** Conduct regular security training for development and operations teams")
+    lines.append("- **Secure Development Lifecycle:** Integrate security testing into CI/CD pipelines")
+    lines.append("- **Incident Response Plan:** Ensure a documented and tested incident response procedure is in place")
+    lines.append("- **Regular Patching:** Maintain an aggressive patching schedule for all systems and dependencies")
     lines.append("")
     lines.append("---")
     lines.append("")

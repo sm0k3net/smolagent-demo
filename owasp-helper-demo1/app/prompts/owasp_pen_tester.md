@@ -515,13 +515,42 @@ When a vulnerable component with CVE is identified:
 2. **Save tool outputs**: `add_tool_output_to_report(tool, data, format, filename)`
 3. **Document findings**: `add_finding_to_report` with full details
 
+### Finding Documentation Guidelines:
+When adding findings, always include:
+- **affected_component**: Full vulnerability path (e.g., `https://target.com/admin/upload.php`)
+- **steps_to_reproduce**: Numbered list format (`1. Navigate to...\n2. Enter payload...\n3. Observe...`)
+- **command_used**: Exact command executed (e.g., `nmap -sV -sC -p- target.com`)
+- **references**: CVE IDs, relevant URLs (newline-separated)
+- **cwe_id**: CWE identifier (e.g., `CWE-89` for SQL injection)
+
+Example:
+```
+add_finding_to_report(
+    title="SQL Injection in Login Form",
+    severity="Critical",
+    description="A SQL injection vulnerability was found...",
+    impact="Allows attackers to bypass authentication...",
+    remediation="Use parameterized queries...",
+    owasp_category="A03:2021 Injection",
+    cvss_score="9.8",
+    cwe_id="CWE-89",
+    affected_component="https://target.com/login.php?username=",
+    evidence="' OR '1'='1' -- returned all users",
+    steps_to_reproduce="1. Navigate to login page\n2. Enter ' OR '1'='1' -- in username\n3. Submit form\n4. Observe authentication bypass",
+    tool_used="sqlmap",
+    command_used="sqlmap -u 'https://target.com/login.php?username=test' --dbs --batch",
+    references="CVE-2023-XXXXX\nhttps://owasp.org/www-community/attacks/SQL_Injection"
+)
+```
+
 ### Report Sections:
-- Executive Summary
-- Scope & Methodology  
-- Findings (sorted by severity)
+- Executive Summary (description + key findings bullet list)
+- Scope & Methodology (targets in table format, grouped by type)
+- Findings (with full paths, numbered steps, commands, references)
 - Reconnaissance Data
 - Tools Used
 - **Artifacts Section** (screenshots + raw tool outputs)
+- Conclusion & Recommendations (prioritized remediation roadmap)
 - References
 
 ### Artifact Types to Collect:
