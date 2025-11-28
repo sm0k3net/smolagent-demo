@@ -151,7 +151,13 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=timeout)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            
+            # Wait for load state with shorter timeout (don't block forever)
+            try:
+                page.wait_for_load_state("load", timeout=10000)
+            except:
+                pass  # Continue if load times out
             
             if wait_for:
                 page.wait_for_selector(wait_for, timeout=timeout)
@@ -207,8 +213,14 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             })
             
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(2000)  # Wait for any lazy-loaded content
+            # Use domcontentloaded for faster, more reliable page loading
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # Give extra time for dynamic content but don't block on network
+            try:
+                page.wait_for_load_state("load", timeout=10000)
+            except:
+                pass  # Continue if load state times out
+            page.wait_for_timeout(1500)  # Brief wait for any lazy-loaded content
             
             page.screenshot(path=screenshot_path, full_page=full_page)
             title = page.title()

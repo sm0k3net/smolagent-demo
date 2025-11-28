@@ -172,30 +172,37 @@ def run_scheduler():
                 
                 # Check if it's time to run
                 if now >= schedule_time:
-                    # Mark as running
+                    # Mark as running immediately
                     task["status"] = "running"
                     task["last_run"] = now.isoformat()
                     save_scheduled_tasks_to_file()
                     
-                    # Execute the task with lock
-                    try:
-                        if agent:
-                            with agent_lock:
-                                result = agent.run(task["prompt"])
-                            task["last_result"] = str(result)[:5000]
-                    except Exception as e:
-                        task["last_result"] = f"Error: {str(e)}"
+                    # Execute in separate thread for true concurrency
+                    def execute_scheduled_task(tid, task_data):
+                        try:
+                            # Create dedicated agent for this task
+                            task_agent = build_owasp_agent()
+                            result = task_agent.run(task_data["prompt"])
+                            scheduled_tasks_store[tid]["last_result"] = str(result)[:5000]
+                        except Exception as e:
+                            scheduled_tasks_store[tid]["last_result"] = f"Error: {str(e)}"
+                        finally:
+                            # Handle recurring vs one-time
+                            if task_data.get("recurring") and task_data.get("interval_minutes"):
+                                next_run = datetime.now() + timedelta(minutes=task_data["interval_minutes"])
+                                scheduled_tasks_store[tid]["schedule_time"] = next_run.isoformat()
+                                scheduled_tasks_store[tid]["status"] = "active"
+                            else:
+                                scheduled_tasks_store[tid]["status"] = "completed"
+                            save_scheduled_tasks_to_file()
                     
-                    # Handle recurring vs one-time
-                    if task.get("recurring") and task.get("interval_minutes"):
-                        # Schedule next run
-                        next_run = now + timedelta(minutes=task["interval_minutes"])
-                        task["schedule_time"] = next_run.isoformat()
-                        task["status"] = "active"
-                    else:
-                        task["status"] = "completed"
+                    # Start task in separate thread
+                    threading.Thread(
+                        target=execute_scheduled_task,
+                        args=(task_id, dict(task)),
+                        daemon=True
+                    ).start()
                     
-                    save_scheduled_tasks_to_file()
         except Exception as e:
             print(f"Scheduler error: {e}")
         
@@ -674,6 +681,27 @@ HTML = """
   --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);
   --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+  --bg-primary: var(--darker);
+  --bg-secondary: var(--dark);
+  --text-primary: var(--light);
+  --text-secondary: var(--gray-300);
+  --border-color: rgba(255,255,255,0.1);
+}
+/* Light Theme */
+body.light-theme {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --border-color: rgba(0,0,0,0.1);
+  --dark: #f1f5f9;
+  --darker: #ffffff;
+  --light: #1e293b;
+  --gray-300: #64748b;
+  --gray-400: #475569;
+  --gray-500: #334155;
+  --gray-600: #e2e8f0;
+  --gradient-dark: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
@@ -1135,6 +1163,48 @@ h1 {
   color: var(--gray-200);
   white-space: pre-wrap;
   word-break: break-word;
+}
+/* Schedule Form Styles */
+.schedule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-group label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--gray-200);
+}
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group input[type="datetime-local"],
+.form-group textarea {
+  padding: 8px 10px;
+  background: var(--darker);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.form-group textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+.form-row {
+  display: flex;
+  gap: 10px;
 }
 .task-header {
   display: flex;
@@ -2084,6 +2154,7 @@ main {
     </div>
     <button class="btn btn-secondary" id="export-txt-btn">📥 Export</button>
     <button class="btn btn-secondary" id="clear-btn">🗑️ Clear</button>
+    <button class="btn btn-secondary" id="theme-toggle-btn" title="Toggle Light/Dark Theme">🌙</button>
   </div>
 </header>
 <div class="main-wrapper">
@@ -2256,40 +2327,40 @@ main {
   
   <!-- Schedule Task Modal -->
   <div class="task-modal" id="schedule-modal">
-    <div class="task-modal-content" style="max-width: 500px;">
+    <div class="task-modal-content" style="max-width: 480px;">
       <div class="task-modal-header">
         <span class="task-modal-title">⏰ Schedule New Task</span>
         <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
       </div>
-      <div class="task-modal-body">
-        <div style="margin-bottom: 15px;">
-          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Task Name</label>
-          <input type="text" id="schedule-name" placeholder="e.g., Daily security scan" 
-            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
+      <div class="task-modal-body" style="padding: 1rem;">
+        <div class="schedule-form">
+          <div class="form-group">
+            <label>Task Name</label>
+            <input type="text" id="schedule-name" placeholder="e.g., Daily security scan">
+          </div>
+          <div class="form-group">
+            <label>Task Prompt</label>
+            <textarea id="schedule-prompt" placeholder="e.g., Run a quick nmap scan on target.com..." rows="3"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label>📅 Schedule Time</label>
+              <input type="datetime-local" id="schedule-time">
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 8px;">
+            <label class="checkbox-wrapper" style="margin: 0;">
+              <input type="checkbox" id="schedule-recurring">
+              <span class="checkmark"></span>
+              <span class="checkbox-label">🔄 Recurring Task</span>
+            </label>
+          </div>
+          <div id="recurring-options" class="form-group" style="display: none;">
+            <label>Repeat Every (minutes)</label>
+            <input type="number" id="schedule-interval" value="60" min="5">
+          </div>
+          <button class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="createScheduledTask()">📅 Schedule Task</button>
         </div>
-        <div style="margin-bottom: 15px;">
-          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Task Prompt</label>
-          <textarea id="schedule-prompt" placeholder="e.g., Run a quick nmap scan on target.com and report findings..." 
-            style="width: 100%; height: 80px; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light); resize: vertical;"></textarea>
-        </div>
-        <div style="margin-bottom: 15px;">
-          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Schedule Time</label>
-          <input type="datetime-local" id="schedule-time" 
-            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
-        </div>
-        <div style="margin-bottom: 15px;">
-          <label class="checkbox-wrapper">
-            <input type="checkbox" id="schedule-recurring">
-            <span class="checkmark"></span>
-            <span class="checkbox-label">🔄 Recurring Task</span>
-          </label>
-        </div>
-        <div id="recurring-options" style="display: none; margin-bottom: 15px;">
-          <label style="display: block; margin-bottom: 5px; color: var(--gray-300);">Repeat Every (minutes)</label>
-          <input type="number" id="schedule-interval" value="60" min="5" 
-            style="width: 100%; padding: 10px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: var(--light);">
-        </div>
-        <button class="btn btn-primary" style="width: 100%;" onclick="createScheduledTask()">📅 Schedule Task</button>
       </div>
     </div>
   </div>
@@ -3037,6 +3108,26 @@ ws.onmessage = (event) => {
     return;
   }
   
+  // Check if message belongs to different chat - store for later
+  const msgChatId = data.chat_id;
+  if (msgChatId && msgChatId !== currentChatId) {
+    // Queue message for the correct chat (will be loaded when chat is switched)
+    // For now, skip showing in current chat
+    console.log(`Message for chat ${msgChatId} received while in chat ${currentChatId}`);
+    // Still process activity and stats updates
+    if (data.type === 'activity') {
+      if (typeof data.tool_count === 'number') {
+        toolCount = data.tool_count;
+        document.getElementById('stat-tools').textContent = toolCount;
+      }
+      if (typeof data.step_count === 'number') {
+        stepCount = data.step_count;
+        document.getElementById('stat-steps').textContent = stepCount;
+      }
+    }
+    return;
+  }
+  
   if (data.type === 'progress') {
     // Update existing progress message or add new one
     const existingProgress = messagesDiv.querySelector('.msg-progress:last-child');
@@ -3097,6 +3188,7 @@ async function sendMessage() {
   const payload = {
     content: content,
     session_id: sessionId,
+    chat_id: currentChatId,
     report_mode: reportCheckbox.checked,
     background_task: isBackgroundTask,
     files: attachedFiles.map(f => f.filename)
@@ -3192,6 +3284,23 @@ clearBtn.onclick = () => {
     document.getElementById('stat-duration').textContent = '0s';
     addMessage('system', '🧹 Chat cleared - Ready for new session');
   }
+};
+
+// ============== THEME TOGGLE ==============
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+
+// Load saved theme
+const savedTheme = localStorage.getItem('owasp-theme');
+if (savedTheme === 'light') {
+  document.body.classList.add('light-theme');
+  themeToggleBtn.textContent = '☀️';
+}
+
+themeToggleBtn.onclick = () => {
+  document.body.classList.toggle('light-theme');
+  const isLight = document.body.classList.contains('light-theme');
+  localStorage.setItem('owasp-theme', isLight ? 'light' : 'dark');
+  themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
 };
 
 // ============== CHAT MANAGEMENT ==============
@@ -3778,6 +3887,7 @@ async def ws_endpoint(ws: WebSocket):
             
             msg_content = msg_data.get("content", raw_msg)
             session_id = msg_data.get("session_id", "default")
+            chat_id = msg_data.get("chat_id", "default")
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
             background_task = msg_data.get("background_task", False)
@@ -3921,17 +4031,22 @@ The report should be comprehensive and professional, suitable for executive stak
             
             # Stream real agent execution with proper step callbacks
             async def run_with_real_streaming():
+                # Capture chat_id for this request
+                request_chat_id = chat_id
+                
                 # Send initial progress
                 await ws.send_text(json.dumps({
                     "type": "activity",
                     "activity_type": "step",
                     "title": "🚀 Task Started",
-                    "content": f"Processing: {msg_content[:100]}..."
+                    "content": f"Processing: {msg_content[:100]}...",
+                    "chat_id": request_chat_id
                 }))
                 
                 await ws.send_text(json.dumps({
                     "type": "progress",
-                    "content": "🔄 Agent analyzing your request..."
+                    "content": "🔄 Agent analyzing your request...",
+                    "chat_id": request_chat_id
                 }))
                 
                 # Queue for thread-safe communication between agent thread and async handler
@@ -4067,20 +4182,22 @@ The report should be comprehensive and professional, suitable for executive stak
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                # Send activity update with counts
+                                # Send activity update with counts and chat_id
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": event["activity_type"],
                                     "title": event["title"],
                                     "content": event["content"],
                                     "tool_count": last_tool_count,
-                                    "step_count": last_step_count
+                                    "step_count": last_step_count,
+                                    "chat_id": request_chat_id
                                 }))
                                 
                                 # Also send progress update for chat
                                 await ws.send_text(json.dumps({
                                     "type": "progress",
-                                    "content": event["title"]
+                                    "content": event["title"],
+                                    "chat_id": request_chat_id
                                 }))
                             
                             elif event["type"] == "complete":
@@ -4094,7 +4211,8 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "title": "✅ Task Completed",
                                     "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
                                     "tool_count": last_tool_count,
-                                    "step_count": last_step_count
+                                    "step_count": last_step_count,
+                                    "chat_id": request_chat_id
                                 }))
                                 break
                             
@@ -4103,11 +4221,13 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "type": "activity",
                                     "activity_type": "error",
                                     "title": "❌ Error Occurred",
-                                    "content": event["error"]
+                                    "content": event["error"],
+                                    "chat_id": request_chat_id
                                 }))
                                 await ws.send_text(json.dumps({
                                     "type": "final",
-                                    "content": f"Error: {event['error']}"
+                                    "content": f"Error: {event['error']}",
+                                    "chat_id": request_chat_id
                                 }))
                                 return
                         
@@ -4124,7 +4244,8 @@ The report should be comprehensive and professional, suitable for executive stak
                             "type": "activity",
                             "activity_type": "error", 
                             "title": "❌ Error",
-                            "content": str(e)
+                            "content": str(e),
+                            "chat_id": request_chat_id
                         }))
                         break
                 
@@ -4138,7 +4259,8 @@ The report should be comprehensive and professional, suitable for executive stak
                             "type": "activity",
                             "activity_type": "tool",
                             "title": "📋 Generating Report",
-                            "content": "Creating professional security report..."
+                            "content": "Creating professional security report...",
+                            "chat_id": request_chat_id
                         }))
                         
                         html_report = generate_html_report()
@@ -4146,21 +4268,24 @@ The report should be comprehensive and professional, suitable for executive stak
                         
                         await ws.send_text(json.dumps({
                             "type": "final",
-                            "content": str(final_response)
+                            "content": str(final_response),
+                            "chat_id": request_chat_id
                         }))
                         
                         await ws.send_text(json.dumps({
                             "type": "report",
                             "content": "📋 Professional security report has been generated.",
                             "html": html_report,
-                            "markdown": md_report
+                            "markdown": md_report,
+                            "chat_id": request_chat_id
                         }))
                         return
                 
                 # Send final response
                 await ws.send_text(json.dumps({
                     "type": "final",
-                    "content": str(final_response) if final_response else "Task completed"
+                    "content": str(final_response) if final_response else "Task completed",
+                    "chat_id": request_chat_id
                 }))
             
             await run_with_real_streaming()
