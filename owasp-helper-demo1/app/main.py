@@ -10,6 +10,10 @@ from app.tools.report_tools import (
     is_report_mode_enabled, get_report_data, add_recon_data,
     track_tool_usage, get_session_tools
 )
+from app.config import (
+    get_settings, update_runtime_settings, get_runtime_settings,
+    PROVIDER_CONFIGS
+)
 import asyncio
 import json
 import base64
@@ -20,7 +24,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 
 
 # Task management enums and models
