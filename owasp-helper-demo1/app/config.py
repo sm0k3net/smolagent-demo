@@ -3,12 +3,60 @@ import os
 from dotenv import load_dotenv  # type: ignore
 from functools import lru_cache
 from pydantic import BaseModel
+from typing import Literal
+
+# Available LLM providers
+LLMProvider = Literal["deepseek", "openrouter"]
+
+# Provider configurations with available models
+PROVIDER_CONFIGS = {
+    "deepseek": {
+        "name": "DeepSeek",
+        "api_base": "https://api.deepseek.com/v1",
+        "models": [
+            {"id": "deepseek-chat", "name": "DeepSeek Chat", "description": "General purpose chat model"},
+            {"id": "deepseek-coder", "name": "DeepSeek Coder", "description": "Optimized for code generation"},
+            {"id": "deepseek-reasoner", "name": "DeepSeek Reasoner", "description": "Enhanced reasoning capabilities"},
+        ],
+        "default_model": "deepseek-chat",
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "api_base": "https://openrouter.ai/api/v1",
+        "models": [
+            {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "description": "Anthropic's latest model"},
+            {"id": "anthropic/claude-3-opus", "name": "Claude 3 Opus", "description": "Most powerful Claude model"},
+            {"id": "openai/gpt-4-turbo", "name": "GPT-4 Turbo", "description": "OpenAI's GPT-4 Turbo"},
+            {"id": "openai/gpt-4o", "name": "GPT-4o", "description": "OpenAI's multimodal model"},
+            {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "description": "Smaller, faster GPT-4o"},
+            {"id": "google/gemini-pro-1.5", "name": "Gemini Pro 1.5", "description": "Google's Gemini Pro"},
+            {"id": "google/gemini-flash-1.5", "name": "Gemini Flash 1.5", "description": "Fast Gemini model"},
+            {"id": "meta-llama/llama-3.1-405b-instruct", "name": "Llama 3.1 405B", "description": "Meta's largest Llama"},
+            {"id": "meta-llama/llama-3.1-70b-instruct", "name": "Llama 3.1 70B", "description": "Meta's Llama 70B"},
+            {"id": "mistralai/mistral-large", "name": "Mistral Large", "description": "Mistral's flagship model"},
+            {"id": "qwen/qwen-2.5-72b-instruct", "name": "Qwen 2.5 72B", "description": "Alibaba's Qwen model"},
+            {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat (via OR)", "description": "DeepSeek via OpenRouter"},
+        ],
+        "default_model": "anthropic/claude-3.5-sonnet",
+    },
+}
+
 
 class Settings(BaseModel):
+    # LLM Provider settings
+    llm_provider: LLMProvider = "deepseek"
+    selected_model: str | None = None  # If None, uses provider's default
+    
+    # DeepSeek settings
     deepseek_api_key: str | None = None
     deepseek_api_url: str = "https://api.deepseek.com/v1/chat/completions"
     deepseek_api_base: str | None = os.getenv("DEEPSEEK_API_BASE")  # e.g. https://api.deepseek.com/v1
-    model: str = "deepseek-chat"
+    model: str = "deepseek-chat"  # Kept for backward compatibility
+    
+    # OpenRouter settings
+    openrouter_api_key: str | None = None
+    openrouter_api_base: str = "https://openrouter.ai/api/v1"
+    
     searxng_base_url: str | None = os.getenv("SEARXNG_BASE_URL")  # e.g. https://searxng.example.org
     searxng_headers: dict[str, str] = {}
     environment: str = os.getenv("ENV", "dev")
@@ -33,11 +81,59 @@ class Settings(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+    
+    def get_active_api_key(self) -> str | None:
+        """Get the API key for the currently selected provider."""
+        if self.llm_provider == "openrouter":
+            return self.openrouter_api_key
+        return self.deepseek_api_key
+    
+    def get_active_api_base(self) -> str:
+        """Get the API base URL for the currently selected provider."""
+        provider_config = PROVIDER_CONFIGS.get(self.llm_provider, PROVIDER_CONFIGS["deepseek"])
+        if self.llm_provider == "openrouter":
+            return self.openrouter_api_base or provider_config["api_base"]
+        return self.deepseek_api_base or provider_config["api_base"]
+    
+    def get_active_model(self) -> str:
+        """Get the model ID for the currently selected provider."""
+        if self.selected_model:
+            return self.selected_model
+        provider_config = PROVIDER_CONFIGS.get(self.llm_provider, PROVIDER_CONFIGS["deepseek"])
+        return provider_config["default_model"]
+
+
+# Mutable settings that can be changed at runtime
+_runtime_settings: dict = {}
+
+
+def update_runtime_settings(**kwargs):
+    """Update runtime settings (provider, model, etc.)."""
+    global _runtime_settings
+    _runtime_settings.update(kwargs)
+    # Clear the cached settings so next get_settings() returns updated values
+    get_settings.cache_clear()
+
+
+def get_runtime_settings() -> dict:
+    """Get current runtime settings."""
+    return _runtime_settings.copy()
+
 
 @lru_cache
 def get_settings() -> Settings:
     # load .env lazily (only first call)
     load_dotenv(override=False)
-    return Settings(
-        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
-    )
+    
+    # Build settings from environment and runtime overrides
+    settings_dict = {
+        "deepseek_api_key": os.getenv("DEEPSEEK_API_KEY"),
+        "openrouter_api_key": os.getenv("OPENROUTER_API_KEY"),
+        "llm_provider": os.getenv("LLM_PROVIDER", "deepseek"),
+        "selected_model": os.getenv("SELECTED_MODEL"),
+    }
+    
+    # Apply runtime overrides
+    settings_dict.update(_runtime_settings)
+    
+    return Settings(**{k: v for k, v in settings_dict.items() if v is not None})

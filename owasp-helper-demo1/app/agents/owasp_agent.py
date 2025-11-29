@@ -81,7 +81,7 @@ from app.tools.telegram_tool import (
     telegram_status,
     telegram_disconnect,
 )
-from app.config import get_settings
+from app.config import get_settings, PROVIDER_CONFIGS
 
 # DefectDojo tools are optional; import only if base URL is configured
 try:
@@ -122,19 +122,45 @@ def load_prompt_text() -> str:
             continue
     return DEFAULT_PROMPT
 
+
+def build_model():
+    """Build the LLM model based on current settings."""
+    settings = get_settings()
+    
+    # Get provider-specific configuration
+    provider = settings.llm_provider
+    api_key = settings.get_active_api_key()
+    api_base = settings.get_active_api_base()
+    model_id = settings.get_active_model()
+    
+    # Log provider info for debugging
+    provider_name = PROVIDER_CONFIGS.get(provider, {}).get("name", provider)
+    print(f"[Agent] Using {provider_name} provider with model: {model_id}")
+    
+    # OpenRouter requires additional headers for proper attribution
+    extra_headers = {}
+    if provider == "openrouter":
+        extra_headers = {
+            "HTTP-Referer": "https://github.com/owasp-helper",
+            "X-Title": "OWASP Security Helper",
+        }
+    
+    model = OpenAIServerModel(
+        model_id=model_id,
+        api_base=api_base,
+        api_key=api_key,
+        flatten_messages_as_text=True,
+        extra_headers=extra_headers if extra_headers else None,
+    )
+    
+    return model
+
+
 def build_owasp_agent() -> CodeAgent:
     settings = get_settings()
-    # Prefer OpenAI-compatible DeepSeek API via smolagents
-    api_base = settings.deepseek_api_base if hasattr(settings, "deepseek_api_base") else None
-    if not api_base:
-        # Fallback: derive base by stripping a trailing path if present
-        api_base = (settings.deepseek_api_url or "https://api.deepseek.com/v1").split("/v1")[0] + "/v1"
-    model = OpenAIServerModel(
-        model_id=settings.model,
-        api_base=api_base,
-        api_key=settings.deepseek_api_key,
-        flatten_messages_as_text=True,
-    )
+    
+    # Build the model using provider-aware configuration
+    model = build_model()
     
     # Core OWASP tools
     tools = [
