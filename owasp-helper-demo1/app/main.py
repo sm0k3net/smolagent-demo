@@ -26,6 +26,7 @@ from typing import Optional, Dict, Any
 # Task management enums and models
 class TaskStatus(str, Enum):
     pending = "pending"
+    waiting = "waiting"  # Waiting for dependent task to complete
     running = "running"
     paused = "paused"
     completed = "completed"
@@ -35,6 +36,7 @@ class TaskStatus(str, Enum):
 
 class Task(BaseModel):
     id: str
+    name: Optional[str] = None  # Human-readable task name
     prompt: str
     status: TaskStatus
     created_at: datetime
@@ -44,6 +46,23 @@ class Task(BaseModel):
     error: Optional[str] = None
     tool_count: int = 0
     step_count: int = 0
+    # Task chaining fields
+    depends_on: Optional[str] = None  # Task ID this task depends on
+    chain_id: Optional[str] = None  # Chain identifier for grouped tasks
+    chain_order: int = 0  # Order in the chain
+    use_previous_result: bool = False  # Whether to inject previous task result
+    chain_name: Optional[str] = None  # Human-readable chain name
+
+
+# Task chain management
+class TaskChain(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    status: TaskStatus
+    tasks: list[str] = []  # Ordered list of task IDs
+    current_task_index: int = 0
 
 
 app = FastAPI(title="OWASP SmolAgent")
@@ -59,6 +78,12 @@ file_store: dict[str, list[dict]] = {}
 task_store: Dict[str, Task] = {}
 tasks_store: Dict[str, Dict[str, Any]] = {}
 task_queues: Dict[str, queue.Queue] = {}
+
+# Task chain management
+chain_store: Dict[str, TaskChain] = {}
+CHAINS_FILE = os.path.join(os.path.dirname(__file__), ".task_chains.json")
+chain_monitor_thread = None
+chain_monitor_stop_event = threading.Event()
 
 # API Keys storage with file persistence
 API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
@@ -218,6 +243,189 @@ def start_scheduler():
         scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
         scheduler_thread.start()
 
+
+# ============================================
+# Task Chain Management Functions
+# ============================================
+
+def load_chains_from_file():
+    """Load task chains from file."""
+    global chain_store
+    if os.path.exists(CHAINS_FILE):
+        try:
+            with open(CHAINS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for chain_id, chain_data in data.items():
+                    chain_data['created_at'] = datetime.fromisoformat(chain_data['created_at'])
+                    chain_data['status'] = TaskStatus(chain_data['status'])
+                    chain_store[chain_id] = TaskChain(**chain_data)
+        except Exception as e:
+            print(f"Error loading chains: {e}")
+            chain_store = {}
+
+
+def save_chains_to_file():
+    """Save task chains to file."""
+    try:
+        data = {}
+        for chain_id, chain in chain_store.items():
+            chain_dict = chain.model_dump()
+            chain_dict['created_at'] = chain_dict['created_at'].isoformat()
+            chain_dict['status'] = chain_dict['status'].value
+            data[chain_id] = chain_dict
+        with open(CHAINS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving chains: {e}")
+
+
+def run_chained_task(task_id: str, prompt: str, previous_result: str = None):
+    """Run a chained task with optional previous result injection."""
+    try:
+        task_store[task_id].status = TaskStatus.running
+        task_store[task_id].started_at = datetime.now()
+        
+        # Create a dedicated agent for this task
+        task_agent = build_owasp_agent()
+        
+        # Inject previous result if available
+        full_prompt = prompt
+        if previous_result and task_store[task_id].use_previous_result:
+            full_prompt = f"""[CONTEXT FROM PREVIOUS TASK IN CHAIN]
+The previous task in this workflow has completed. Here are the results you should use:
+
+{previous_result}
+
+[END OF PREVIOUS TASK RESULTS]
+
+Now, proceed with the following task:
+
+{prompt}"""
+        
+        step_count = 0
+        tool_count = 0
+        final_result = None
+        all_outputs = []
+        
+        for event in task_agent.run(full_prompt, stream=True):
+            if task_store[task_id].status == TaskStatus.cancelled:
+                return
+            
+            step_count += 1
+            
+            if hasattr(event, 'tool_calls') and event.tool_calls:
+                for tc in event.tool_calls:
+                    tool_count += 1
+                    if hasattr(tc, 'name'):
+                        all_outputs.append(f"🔧 Tool: {tc.name}")
+            
+            if hasattr(event, 'tool_result') and event.tool_result:
+                result_str = str(event.tool_result)
+                if 'SCREENSHOT_IMAGE_DATA:' in result_str or 'base64,' in result_str:
+                    all_outputs.append(f"📤 Result: {result_str}")
+                else:
+                    all_outputs.append(f"📤 Result: {result_str[:2000]}")
+            
+            if hasattr(event, 'output') and event.output is not None:
+                final_result = event.output
+            
+            task_store[task_id].step_count = step_count
+            task_store[task_id].tool_count = tool_count
+        
+        # Build result
+        result_parts = []
+        screenshot_outputs = [o for o in all_outputs if 'SCREENSHOT_IMAGE_DATA:' in o or 'base64,' in o]
+        
+        if final_result:
+            result_parts.append(str(final_result))
+        
+        for screenshot in screenshot_outputs:
+            if screenshot not in str(final_result) if final_result else True:
+                result_parts.append(screenshot)
+        
+        if not result_parts and all_outputs:
+            result_parts.append("\\n".join(all_outputs[-10:]))
+        
+        task_store[task_id].status = TaskStatus.completed
+        task_store[task_id].completed_at = datetime.now()
+        task_store[task_id].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
+        
+        # Trigger next task in chain if any
+        check_and_start_dependent_tasks(task_id)
+        
+    except Exception as e:
+        task_store[task_id].status = TaskStatus.failed
+        task_store[task_id].error = str(e)
+        task_store[task_id].completed_at = datetime.now()
+        
+        # Mark chain as failed if this task fails
+        if task_store[task_id].chain_id:
+            chain_id = task_store[task_id].chain_id
+            if chain_id in chain_store:
+                chain_store[chain_id].status = TaskStatus.failed
+                save_chains_to_file()
+
+
+def check_and_start_dependent_tasks(completed_task_id: str):
+    """Check if any tasks are waiting for this task and start them."""
+    completed_task = task_store.get(completed_task_id)
+    if not completed_task or completed_task.status != TaskStatus.completed:
+        return
+    
+    # Find tasks waiting for this one
+    for task_id, task in task_store.items():
+        if task.depends_on == completed_task_id and task.status == TaskStatus.waiting:
+            print(f"Starting dependent task {task_id} after {completed_task_id} completed")
+            
+            # Start the dependent task with the result from completed task
+            threading.Thread(
+                target=run_chained_task,
+                args=(task_id, task.prompt, completed_task.result),
+                daemon=True
+            ).start()
+            
+            # Update chain progress
+            if task.chain_id and task.chain_id in chain_store:
+                chain = chain_store[task.chain_id]
+                chain.current_task_index += 1
+                
+                # Check if chain is complete
+                if chain.current_task_index >= len(chain.tasks):
+                    chain.status = TaskStatus.completed
+                
+                save_chains_to_file()
+
+
+def run_chain_monitor():
+    """Background thread to monitor task chain dependencies."""
+    while not chain_monitor_stop_event.is_set():
+        try:
+            # Check for tasks in 'waiting' status whose dependency has completed
+            for task_id, task in list(task_store.items()):
+                if task.status == TaskStatus.waiting and task.depends_on:
+                    dep_task = task_store.get(task.depends_on)
+                    if dep_task:
+                        if dep_task.status == TaskStatus.completed:
+                            check_and_start_dependent_tasks(task.depends_on)
+                        elif dep_task.status in [TaskStatus.failed, TaskStatus.cancelled]:
+                            # Mark waiting task as failed if dependency failed
+                            task_store[task_id].status = TaskStatus.failed
+                            task_store[task_id].error = f"Dependency task {task.depends_on} {dep_task.status.value}"
+                            task_store[task_id].completed_at = datetime.now()
+        except Exception as e:
+            print(f"Chain monitor error: {e}")
+        
+        chain_monitor_stop_event.wait(5)  # Check every 5 seconds
+
+
+def start_chain_monitor():
+    """Start the chain monitor background thread."""
+    global chain_monitor_thread, chain_monitor_stop_event
+    if chain_monitor_thread is None or not chain_monitor_thread.is_alive():
+        chain_monitor_stop_event.clear()
+        chain_monitor_thread = threading.Thread(target=run_chain_monitor, daemon=True)
+        chain_monitor_thread.start()
+
 def load_api_keys_from_file():
     """Load API keys from file."""
     global api_keys_store
@@ -306,8 +514,12 @@ async def startup():
             load_scheduled_tasks_from_file()
             # Load custom context
             load_custom_context()
+            # Load task chains
+            load_chains_from_file()
             # Start scheduler
             start_scheduler()
+            # Start chain monitor
+            start_chain_monitor()
             # Build agent
             agent = build_owasp_agent()
 
@@ -791,6 +1003,343 @@ async def get_task(task_id: str):
             task["completed_at"] = task["completed_at"].isoformat()
         return JSONResponse(task)
     return JSONResponse({"error": "Task not found"}, status_code=404)
+
+# =============================================
+# Task Chain Management Endpoints
+# =============================================
+
+class ChainTaskInput(BaseModel):
+    """Input for a task in a chain."""
+    prompt: str
+    name: Optional[str] = None
+    use_previous_result: bool = True
+
+
+class CreateChainRequest(BaseModel):
+    """Request to create a new task chain."""
+    name: str
+    description: Optional[str] = None
+    tasks: list[ChainTaskInput]  # Ordered list of tasks
+
+
+class AddChainTaskRequest(BaseModel):
+    """Request to add a task to an existing chain."""
+    prompt: str
+    name: Optional[str] = None
+    use_previous_result: bool = True
+    position: Optional[int] = None  # None = append to end
+
+
+@app.get("/api/chains")
+async def get_chains():
+    """Get all task chains."""
+    chains = []
+    for chain_id, chain in chain_store.items():
+        chain_data = chain.model_dump()
+        chain_data["created_at"] = chain_data["created_at"].isoformat()
+        
+        # Add task details
+        chain_data["task_details"] = []
+        for task_id in chain.tasks:
+            if task_id in task_store:
+                task = task_store[task_id]
+                chain_data["task_details"].append({
+                    "id": task_id,
+                    "name": task.name,
+                    "prompt": task.prompt[:100] + "..." if len(task.prompt) > 100 else task.prompt,
+                    "status": task.status.value,
+                    "chain_order": task.chain_order
+                })
+        
+        chains.append(chain_data)
+    
+    return JSONResponse(chains)
+
+
+@app.get("/api/chains/{chain_id}")
+async def get_chain(chain_id: str):
+    """Get a specific chain with full task details."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    chain_data = chain.model_dump()
+    chain_data["created_at"] = chain_data["created_at"].isoformat()
+    
+    # Add full task details
+    chain_data["task_details"] = []
+    for task_id in chain.tasks:
+        if task_id in task_store:
+            task = task_store[task_id].model_dump()
+            if task.get("created_at"):
+                task["created_at"] = task["created_at"].isoformat()
+            if task.get("started_at"):
+                task["started_at"] = task["started_at"].isoformat()
+            if task.get("completed_at"):
+                task["completed_at"] = task["completed_at"].isoformat()
+            chain_data["task_details"].append(task)
+    
+    return JSONResponse(chain_data)
+
+
+@app.post("/api/chains")
+async def create_chain(request: CreateChainRequest):
+    """Create a new task chain with multiple ordered tasks."""
+    chain_id = str(uuid.uuid4())
+    now = datetime.now()
+    
+    # Create chain object
+    chain = TaskChain(
+        id=chain_id,
+        name=request.name,
+        description=request.description,
+        created_at=now,
+        status=TaskStatus.pending,
+        tasks=[],
+        current_task_index=0
+    )
+    
+    # Create tasks for the chain
+    previous_task_id = None
+    for index, task_input in enumerate(request.tasks):
+        task_id = str(uuid.uuid4())
+        task_name = task_input.name or f"Step {index + 1}"
+        
+        task = Task(
+            id=task_id,
+            name=task_name,
+            prompt=task_input.prompt,
+            status=TaskStatus.waiting if index > 0 else TaskStatus.pending,
+            created_at=now,
+            depends_on=previous_task_id,
+            chain_id=chain_id,
+            chain_order=index,
+            use_previous_result=task_input.use_previous_result if index > 0 else False,
+            chain_name=request.name
+        )
+        
+        task_store[task_id] = task
+        chain.tasks.append(task_id)
+        previous_task_id = task_id
+    
+    chain_store[chain_id] = chain
+    save_chains_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "chain_id": chain_id,
+        "name": request.name,
+        "task_count": len(request.tasks),
+        "task_ids": chain.tasks
+    })
+
+
+@app.post("/api/chains/{chain_id}/start")
+async def start_chain(chain_id: str):
+    """Start executing a task chain."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    
+    if chain.status == TaskStatus.running:
+        return JSONResponse({"error": "Chain is already running"}, status_code=400)
+    
+    if not chain.tasks:
+        return JSONResponse({"error": "Chain has no tasks"}, status_code=400)
+    
+    # Start the chain monitor if not running
+    start_chain_monitor()
+    
+    # Get the first task
+    first_task_id = chain.tasks[0]
+    if first_task_id not in task_store:
+        return JSONResponse({"error": "First task not found"}, status_code=500)
+    
+    first_task = task_store[first_task_id]
+    
+    # Update chain status
+    chain.status = TaskStatus.running
+    chain.current_task_index = 0
+    save_chains_to_file()
+    
+    # Start the first task
+    threading.Thread(
+        target=run_chained_task,
+        args=(first_task_id, first_task.prompt, None),
+        daemon=True
+    ).start()
+    
+    return JSONResponse({
+        "success": True,
+        "chain_id": chain_id,
+        "started_task_id": first_task_id,
+        "status": "running"
+    })
+
+
+@app.post("/api/chains/{chain_id}/stop")
+async def stop_chain(chain_id: str):
+    """Stop a running task chain."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    
+    if chain.status != TaskStatus.running:
+        return JSONResponse({"error": "Chain is not running"}, status_code=400)
+    
+    # Cancel all pending/waiting tasks in the chain
+    cancelled_tasks = []
+    for task_id in chain.tasks:
+        if task_id in task_store:
+            task = task_store[task_id]
+            if task.status in [TaskStatus.pending, TaskStatus.waiting, TaskStatus.running]:
+                task.status = TaskStatus.cancelled
+                task.completed_at = datetime.now()
+                cancelled_tasks.append(task_id)
+    
+    chain.status = TaskStatus.cancelled
+    save_chains_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "chain_id": chain_id,
+        "cancelled_tasks": cancelled_tasks,
+        "status": "cancelled"
+    })
+
+
+@app.delete("/api/chains/{chain_id}")
+async def delete_chain(chain_id: str):
+    """Delete a task chain and optionally its tasks."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    
+    # Can't delete running chains
+    if chain.status == TaskStatus.running:
+        return JSONResponse({"error": "Cannot delete a running chain. Stop it first."}, status_code=400)
+    
+    # Delete all tasks in the chain
+    deleted_tasks = []
+    for task_id in chain.tasks:
+        if task_id in task_store:
+            del task_store[task_id]
+            deleted_tasks.append(task_id)
+    
+    # Delete the chain
+    del chain_store[chain_id]
+    save_chains_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "chain_id": chain_id,
+        "deleted_tasks": deleted_tasks
+    })
+
+
+@app.post("/api/chains/{chain_id}/tasks")
+async def add_task_to_chain(chain_id: str, request: AddChainTaskRequest):
+    """Add a task to an existing chain."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    
+    if chain.status == TaskStatus.running:
+        return JSONResponse({"error": "Cannot add tasks to a running chain"}, status_code=400)
+    
+    # Determine position
+    position = request.position if request.position is not None else len(chain.tasks)
+    position = max(0, min(position, len(chain.tasks)))
+    
+    # Create the new task
+    task_id = str(uuid.uuid4())
+    now = datetime.now()
+    
+    # Determine dependency
+    depends_on = None
+    if position > 0:
+        depends_on = chain.tasks[position - 1]
+    
+    task_name = request.name or f"Step {position + 1}"
+    
+    task = Task(
+        id=task_id,
+        name=task_name,
+        prompt=request.prompt,
+        status=TaskStatus.pending if position == 0 else TaskStatus.waiting,
+        created_at=now,
+        depends_on=depends_on,
+        chain_id=chain_id,
+        chain_order=position,
+        use_previous_result=request.use_previous_result if position > 0 else False,
+        chain_name=chain.name
+    )
+    
+    task_store[task_id] = task
+    
+    # Insert task at position
+    chain.tasks.insert(position, task_id)
+    
+    # Update chain_order and depends_on for subsequent tasks
+    for i, tid in enumerate(chain.tasks):
+        if tid in task_store:
+            task_store[tid].chain_order = i
+            if i > 0:
+                task_store[tid].depends_on = chain.tasks[i - 1]
+    
+    save_chains_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "task_id": task_id,
+        "chain_id": chain_id,
+        "position": position
+    })
+
+
+@app.delete("/api/chains/{chain_id}/tasks/{task_id}")
+async def remove_task_from_chain(chain_id: str, task_id: str):
+    """Remove a task from a chain."""
+    if chain_id not in chain_store:
+        return JSONResponse({"error": "Chain not found"}, status_code=404)
+    
+    chain = chain_store[chain_id]
+    
+    if chain.status == TaskStatus.running:
+        return JSONResponse({"error": "Cannot remove tasks from a running chain"}, status_code=400)
+    
+    if task_id not in chain.tasks:
+        return JSONResponse({"error": "Task not in this chain"}, status_code=404)
+    
+    # Remove the task
+    chain.tasks.remove(task_id)
+    
+    if task_id in task_store:
+        del task_store[task_id]
+    
+    # Update chain_order and depends_on for remaining tasks
+    for i, tid in enumerate(chain.tasks):
+        if tid in task_store:
+            task_store[tid].chain_order = i
+            if i > 0:
+                task_store[tid].depends_on = chain.tasks[i - 1]
+            else:
+                task_store[tid].depends_on = None
+                task_store[tid].status = TaskStatus.pending
+    
+    save_chains_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "removed_task_id": task_id,
+        "chain_id": chain_id,
+        "remaining_tasks": len(chain.tasks)
+    })
+
 
 @app.on_event("startup")
 async def startup():
@@ -1374,6 +1923,391 @@ h1 {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Task Chain Styles */
+.chain-section {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.chain-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.chain-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--primary-light);
+}
+.chain-item {
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  animation: slideIn 0.3s ease;
+}
+.chain-item.running {
+  border-color: var(--secondary);
+  background: rgba(14, 165, 233, 0.1);
+}
+.chain-item.completed {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+.chain-item.failed {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+.chain-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.chain-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--light);
+}
+.chain-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.chain-status.pending { background: rgba(100, 116, 139, 0.3); color: var(--gray-300); }
+.chain-status.running { background: rgba(14, 165, 233, 0.3); color: var(--secondary); }
+.chain-status.completed { background: rgba(16, 185, 129, 0.3); color: var(--success); }
+.chain-status.failed { background: rgba(239, 68, 68, 0.3); color: var(--danger); }
+.chain-status.cancelled { background: rgba(239, 68, 68, 0.2); color: var(--gray-400); }
+.chain-progress {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.chain-step {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-300);
+  border: 2px solid transparent;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.chain-step::after {
+  content: '';
+  position: absolute;
+  right: -12px;
+  width: 8px;
+  height: 2px;
+  background: var(--gray-600);
+}
+.chain-step:last-child::after {
+  display: none;
+}
+.chain-step.pending { background: rgba(100, 116, 139, 0.3); border-color: var(--gray-500); }
+.chain-step.waiting { background: rgba(245, 158, 11, 0.2); border-color: var(--warning); }
+.chain-step.running { background: rgba(14, 165, 233, 0.3); border-color: var(--secondary); animation: pulse 1.5s infinite; }
+.chain-step.completed { background: rgba(16, 185, 129, 0.3); border-color: var(--success); color: var(--success); }
+.chain-step.failed { background: rgba(239, 68, 68, 0.3); border-color: var(--danger); color: var(--danger); }
+.chain-step:hover {
+  transform: scale(1.1);
+}
+.chain-step-tooltip {
+  position: absolute;
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--darker);
+  color: var(--light);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 10;
+}
+.chain-step:hover .chain-step-tooltip {
+  opacity: 1;
+}
+.chain-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.chain-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+.chain-btn-start {
+  background: rgba(16, 185, 129, 0.3);
+  color: var(--success);
+}
+.chain-btn-start:hover {
+  background: var(--success);
+  color: white;
+}
+.chain-btn-stop {
+  background: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+.chain-btn-stop:hover {
+  background: var(--danger);
+  color: white;
+}
+.chain-btn-delete {
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-300);
+}
+.chain-btn-delete:hover {
+  background: var(--gray-500);
+  color: white;
+}
+.create-chain-btn {
+  width: 100%;
+  padding: 10px;
+  border: 2px dashed rgba(139, 92, 246, 0.4);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary-light);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.create-chain-btn:hover {
+  background: rgba(139, 92, 246, 0.1);
+  border-color: var(--primary-light);
+}
+
+/* Chain Builder Modal */
+.chain-builder-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.85);
+  z-index: 1001;
+  justify-content: center;
+  align-items: center;
+}
+.chain-builder-modal.active {
+  display: flex;
+}
+.chain-builder-content {
+  background: var(--dark);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 700px;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+}
+.chain-builder-header {
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(139, 92, 246, 0.1);
+}
+.chain-builder-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--primary-light);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chain-builder-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+.chain-input-group {
+  margin-bottom: 1rem;
+}
+.chain-input-group label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--gray-200);
+  margin-bottom: 0.4rem;
+}
+.chain-input-group input,
+.chain-input-group textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.3);
+  color: var(--light);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+.chain-input-group textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.chain-input-group input:focus,
+.chain-input-group textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+.chain-steps-list {
+  margin-top: 1rem;
+}
+.chain-step-item {
+  padding: 1rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+  position: relative;
+}
+.chain-step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.chain-step-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chain-step-remove {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chain-step-remove:hover {
+  background: var(--danger);
+  color: white;
+}
+.chain-step-input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.2);
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+  margin-bottom: 0.5rem;
+}
+.chain-step-textarea {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.2);
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: 'JetBrains Mono', monospace;
+  min-height: 60px;
+  resize: vertical;
+}
+.chain-step-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--gray-400);
+}
+.add-step-btn {
+  width: 100%;
+  padding: 10px;
+  border: 2px dashed rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary-light);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 0.5rem;
+}
+.add-step-btn:hover {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: var(--primary);
+}
+.chain-builder-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  background: rgba(0,0,0,0.2);
+}
+.chain-builder-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.chain-builder-btn-cancel {
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-300);
+}
+.chain-builder-btn-cancel:hover {
+  background: var(--gray-500);
+  color: white;
+}
+.chain-builder-btn-create {
+  background: var(--gradient-primary);
+  color: white;
+}
+.chain-builder-btn-create:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+}
+
 /* Schedule Form Styles */
 .schedule-form {
   display: flex;
@@ -2420,6 +3354,49 @@ main {
       <div id="tasks-list">
         <div class="no-tasks">No active tasks</div>
       </div>
+      
+      <!-- Task Chains Section -->
+      <div class="chain-section">
+        <div class="chain-section-header">
+          <span class="chain-section-title">🔗 Task Chains</span>
+        </div>
+        <button class="create-chain-btn" onclick="openChainBuilder()">
+          <span>➕</span> Create Task Chain
+        </button>
+        <div id="chains-list" style="margin-top: 0.75rem;">
+          <!-- Chains will be rendered here -->
+        </div>
+      </div>
+    </div>
+    
+    <!-- Chain Builder Modal -->
+    <div class="chain-builder-modal" id="chain-builder-modal">
+      <div class="chain-builder-content">
+        <div class="chain-builder-header">
+          <span class="chain-builder-title">🔗 Create Task Chain</span>
+          <button class="task-modal-close" onclick="closeChainBuilder()">&times;</button>
+        </div>
+        <div class="chain-builder-body">
+          <div class="chain-input-group">
+            <label>Chain Name</label>
+            <input type="text" id="chain-name-input" placeholder="e.g., Full OSINT + Pentest Workflow">
+          </div>
+          <div class="chain-input-group">
+            <label>Description (optional)</label>
+            <textarea id="chain-desc-input" placeholder="Describe what this chain does..."></textarea>
+          </div>
+          <div class="chain-steps-list" id="chain-steps-list">
+            <!-- Steps will be added here -->
+          </div>
+          <button class="add-step-btn" onclick="addChainStep()">
+            ➕ Add Step
+          </button>
+        </div>
+        <div class="chain-builder-footer">
+          <button class="chain-builder-btn chain-builder-btn-cancel" onclick="closeChainBuilder()">Cancel</button>
+          <button class="chain-builder-btn chain-builder-btn-create" onclick="createChain()">Create Chain</button>
+        </div>
+      </div>
     </div>
     
     <!-- Settings Tab Content -->
@@ -2877,10 +3854,281 @@ function closeTaskModal() {
   document.getElementById('task-modal').classList.remove('active');
 }
 
+// ======================================
+// Task Chain Management Functions
+// ======================================
+
+let chainStore = {};
+let chainSteps = [];
+
+async function loadChains() {
+  try {
+    const response = await fetch('/api/chains');
+    const chains = await response.json();
+    chainStore = {};
+    chains.forEach(c => chainStore[c.id] = c);
+    renderChains();
+  } catch (err) {
+    console.error('Failed to load chains:', err);
+  }
+}
+
+function renderChains() {
+  const chainsList = document.getElementById('chains-list');
+  const chains = Object.values(chainStore);
+  
+  if (chains.length === 0) {
+    chainsList.innerHTML = '';
+    return;
+  }
+  
+  // Sort by created_at descending
+  chains.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  
+  chainsList.innerHTML = chains.map(chain => {
+    const statusClass = chain.status || 'pending';
+    const taskCount = chain.tasks?.length || 0;
+    const currentIndex = chain.current_task_index || 0;
+    
+    // Create progress steps
+    const stepsHtml = (chain.task_details || []).map((task, i) => {
+      const stepStatus = task.status || 'pending';
+      const stepName = task.name || `Step ${i + 1}`;
+      return `
+        <div class="chain-step ${stepStatus}" title="${stepName}">
+          ${i + 1}
+          <div class="chain-step-tooltip">${stepName}: ${stepStatus}</div>
+        </div>
+      `;
+    }).join('');
+    
+    return `
+      <div class="chain-item ${statusClass}">
+        <div class="chain-header">
+          <span class="chain-name">🔗 ${escapeHtml(chain.name)}</span>
+          <span class="chain-status ${statusClass}">${statusClass}</span>
+        </div>
+        ${chain.description ? `<div style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 0.5rem;">${escapeHtml(chain.description)}</div>` : ''}
+        <div style="font-size: 0.75rem; color: var(--gray-400);">
+          ${taskCount} tasks | Progress: ${currentIndex}/${taskCount}
+        </div>
+        <div class="chain-progress">
+          ${stepsHtml || '<div style="color: var(--gray-500); font-size: 0.75rem;">No steps</div>'}
+        </div>
+        <div class="chain-actions">
+          ${statusClass === 'pending' || statusClass === 'cancelled' || statusClass === 'failed' ? `
+            <button class="chain-btn chain-btn-start" onclick="startChain('${chain.id}')">▶️ Start</button>
+          ` : ''}
+          ${statusClass === 'running' ? `
+            <button class="chain-btn chain-btn-stop" onclick="stopChain('${chain.id}')">⏹️ Stop</button>
+          ` : ''}
+          ${statusClass !== 'running' ? `
+            <button class="chain-btn chain-btn-delete" onclick="deleteChain('${chain.id}')">🗑️ Delete</button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openChainBuilder() {
+  chainSteps = [];
+  document.getElementById('chain-name-input').value = '';
+  document.getElementById('chain-desc-input').value = '';
+  document.getElementById('chain-steps-list').innerHTML = '';
+  addChainStep(); // Start with one step
+  document.getElementById('chain-builder-modal').classList.add('active');
+}
+
+function closeChainBuilder() {
+  document.getElementById('chain-builder-modal').classList.remove('active');
+}
+
+function addChainStep() {
+  const stepNum = chainSteps.length + 1;
+  const stepId = 'step-' + Date.now();
+  
+  chainSteps.push({ id: stepId, name: '', prompt: '', usePrevious: true });
+  
+  const stepHtml = `
+    <div class="chain-step-item" id="${stepId}">
+      <div class="chain-step-header">
+        <div class="chain-step-number">${stepNum}</div>
+        <button class="chain-step-remove" onclick="removeChainStep('${stepId}')">&times;</button>
+      </div>
+      <input type="text" class="chain-step-input" placeholder="Step name (e.g., OSINT Discovery)" 
+             onchange="updateChainStep('${stepId}', 'name', this.value)">
+      <textarea class="chain-step-textarea" placeholder="Prompt for this step (e.g., Perform OSINT on target.com and enumerate subdomains)"
+                onchange="updateChainStep('${stepId}', 'prompt', this.value)"></textarea>
+      ${stepNum > 1 ? `
+        <div class="chain-step-options">
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+            <input type="checkbox" checked onchange="updateChainStep('${stepId}', 'usePrevious', this.checked)">
+            Use results from previous step
+          </label>
+        </div>
+      ` : ''}
+    </div>
+  `;
+  
+  document.getElementById('chain-steps-list').insertAdjacentHTML('beforeend', stepHtml);
+}
+
+function removeChainStep(stepId) {
+  if (chainSteps.length <= 1) {
+    addMessage('system', '⚠️ Chain must have at least one step');
+    return;
+  }
+  
+  const index = chainSteps.findIndex(s => s.id === stepId);
+  if (index > -1) {
+    chainSteps.splice(index, 1);
+    document.getElementById(stepId).remove();
+    
+    // Renumber steps
+    document.querySelectorAll('.chain-step-item').forEach((el, i) => {
+      el.querySelector('.chain-step-number').textContent = i + 1;
+    });
+  }
+}
+
+function updateChainStep(stepId, field, value) {
+  const step = chainSteps.find(s => s.id === stepId);
+  if (step) {
+    step[field] = value;
+  }
+}
+
+async function createChain() {
+  const name = document.getElementById('chain-name-input').value.trim();
+  const description = document.getElementById('chain-desc-input').value.trim();
+  
+  if (!name) {
+    addMessage('system', '⚠️ Please enter a chain name');
+    return;
+  }
+  
+  // Collect step data from DOM
+  const steps = [];
+  document.querySelectorAll('.chain-step-item').forEach((el, i) => {
+    const inputs = el.querySelectorAll('input, textarea');
+    const stepName = inputs[0]?.value?.trim() || `Step ${i + 1}`;
+    const prompt = inputs[1]?.value?.trim();
+    const usePrevious = i > 0 ? (inputs[2]?.checked ?? true) : false;
+    
+    if (prompt) {
+      steps.push({
+        name: stepName,
+        prompt: prompt,
+        use_previous_result: usePrevious
+      });
+    }
+  });
+  
+  if (steps.length === 0) {
+    addMessage('system', '⚠️ Please add at least one step with a prompt');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/chains', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        description: description,
+        tasks: steps
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      addMessage('system', `✅ Chain "${name}" created with ${result.task_count} tasks`);
+      closeChainBuilder();
+      loadChains();
+    } else {
+      addMessage('system', `⚠️ Failed to create chain: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to create chain: ${err.message}`);
+  }
+}
+
+async function startChain(chainId) {
+  try {
+    const response = await fetch(`/api/chains/${chainId}/start`, {
+      method: 'POST'
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      addMessage('system', `✅ Chain started! First task is running.`);
+      loadChains();
+    } else {
+      addMessage('system', `⚠️ Failed to start chain: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to start chain: ${err.message}`);
+  }
+}
+
+async function stopChain(chainId) {
+  if (!confirm('Are you sure you want to stop this chain? All pending tasks will be cancelled.')) return;
+  
+  try {
+    const response = await fetch(`/api/chains/${chainId}/stop`, {
+      method: 'POST'
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      addMessage('system', `✅ Chain stopped. ${result.cancelled_tasks?.length || 0} tasks cancelled.`);
+      loadChains();
+    } else {
+      addMessage('system', `⚠️ Failed to stop chain: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to stop chain: ${err.message}`);
+  }
+}
+
+async function deleteChain(chainId) {
+  if (!confirm('Are you sure you want to delete this chain? All tasks will be removed.')) return;
+  
+  try {
+    const response = await fetch(`/api/chains/${chainId}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      addMessage('system', `✅ Chain deleted. ${result.deleted_tasks?.length || 0} tasks removed.`);
+      delete chainStore[chainId];
+      renderChains();
+    } else {
+      addMessage('system', `⚠️ Failed to delete chain: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to delete chain: ${err.message}`);
+  }
+}
+
+// Refresh chains along with tasks
+const originalRefreshTasks = refreshTasks;
+refreshTasks = async function() {
+  await originalRefreshTasks();
+  await loadChains();
+};
+
 // Close modal on escape key
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeTaskModal();
+    closeChainBuilder();
     document.getElementById('image-modal').classList.remove('active');
   }
 });
@@ -2888,6 +4136,10 @@ document.addEventListener('keydown', (e) => {
 // Close modal on clicking outside
 document.getElementById('task-modal').addEventListener('click', (e) => {
   if (e.target.id === 'task-modal') closeTaskModal();
+});
+
+document.getElementById('chain-builder-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'chain-builder-modal') closeChainBuilder();
 });
 
 // API Key management functions
@@ -4119,6 +5371,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 // ============== INITIALIZATION ==============
 // Load chats on startup
 loadChats();
+// Load chains on startup
+loadChains();
 
 // Update addMessage to support skipSave option
 const originalAddMessage = addMessage;
@@ -4151,6 +5405,16 @@ window.viewScheduledTaskResult = viewScheduledTaskResult;
 window.deleteTask = deleteTask;
 window.saveCustomContext = saveCustomContext;
 window.clearCustomContext = clearCustomContext;
+// Chain functions
+window.openChainBuilder = openChainBuilder;
+window.closeChainBuilder = closeChainBuilder;
+window.addChainStep = addChainStep;
+window.removeChainStep = removeChainStep;
+window.updateChainStep = updateChainStep;
+window.createChain = createChain;
+window.startChain = startChain;
+window.stopChain = stopChain;
+window.deleteChain = deleteChain;
 </script>
 </body>
 </html>
