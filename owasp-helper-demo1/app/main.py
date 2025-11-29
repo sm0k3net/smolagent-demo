@@ -311,6 +311,42 @@ async def startup():
             # Build agent
             agent = build_owasp_agent()
 
+
+# ============================================
+# Health Check Endpoint
+# ============================================
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for container orchestration."""
+    return JSONResponse({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.2.0",
+        "agent_ready": agent is not None
+    })
+
+
+@app.get("/api/health")
+async def api_health_check():
+    """Detailed health check with component status."""
+    components = {
+        "agent": agent is not None,
+        "scheduler": scheduler_thread is not None and scheduler_thread.is_alive() if 'scheduler_thread' in globals() else False,
+        "executor": executor is not None,
+    }
+    
+    # Check API key configuration
+    api_configured = bool(api_keys_store.get("DEEPSEEK_API_KEY"))
+    
+    return JSONResponse({
+        "status": "healthy" if all(components.values()) and api_configured else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.2.0",
+        "components": components,
+        "api_configured": api_configured
+    })
+
+
 # API Keys management endpoints
 @app.get("/api/keys")
 async def get_api_keys():

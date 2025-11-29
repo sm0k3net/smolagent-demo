@@ -1,0 +1,87 @@
+# ============================================
+# OWASP SmolAgent - Docker Ignore
+# ============================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Local development
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Reports and outputs (generated at runtime)
+reports/
+screenshots/
+*.pdf
+*.html
+
+# Secrets (never include)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# Docker
+Dockerfile.lite
+docker-compose*.yml
+.docker/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile

@@ -1,0 +1,140 @@
+# OWASP SmolAgent - Docker Compose Configuration
+# Usage:
+#   Build:     docker-compose build
+#   Start:     docker-compose up -d
+#   Logs:      docker-compose logs -f
+#   Stop:      docker-compose down
+#   Shell:     docker-compose exec owasp-agent bash
+
+version: '3.8'
+
+services:
+  # ============================================
+  # Main OWASP Agent Service
+  # ============================================
+  owasp-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: owasp-agent
+    hostname: owasp-agent
+    restart: unless-stopped
+    
+    # Port mapping
+    ports:
+      - "${PORT:-8000}:8000"
+    
+    # Environment configuration
+    environment:
+      # API Keys (set in .env file)
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_API_BASE=${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}
+      
+      # Search engine
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-}
+      
+      # OSINT API Keys (optional)
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
+      - SHODAN_API_KEY=${SHODAN_API_KEY:-}
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - SECURITYTRAILS_API_KEY=${SECURITYTRAILS_API_KEY:-}
+      - HIBP_API_KEY=${HIBP_API_KEY:-}
+      
+      # Telegram Bot (optional)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      
+      # DefectDojo Integration (optional)
+      - DEFECTDOJO_BASE_URL=${DEFECTDOJO_BASE_URL:-}
+      - DEFECTDOJO_API_KEY=${DEFECTDOJO_API_KEY:-}
+      - DEFECTDOJO_VERIFY_SSL=${DEFECTDOJO_VERIFY_SSL:-true}
+      - DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID=${DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID:-1}
+      
+      # Application settings
+      - ENV=${ENV:-production}
+      - PROMPT_PATH=app/prompts/owasp_pen_tester.md
+      - HOST=0.0.0.0
+      - PORT=8000
+    
+    # Volume mounts
+    volumes:
+      # Persist reports and screenshots
+      - owasp-reports:/app/reports
+      - owasp-screenshots:/app/screenshots
+      
+      # Optional: Mount custom prompts
+      # - ./custom-prompts:/app/custom-prompts:ro
+      
+      # Optional: Mount for development (hot reload)
+      # - ./app:/app/app:ro
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    
+    # Networking
+    networks:
+      - owasp-network
+
+  # ============================================
+  # Optional: SearXNG Search Engine
+  # ============================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    hostname: searxng
+    restart: unless-stopped
+    profiles:
+      - with-searxng
+    
+    ports:
+      - "8080:8080"
+    
+    volumes:
+      - searxng-data:/etc/searxng
+    
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    
+    networks:
+      - owasp-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  owasp-reports:
+    driver: local
+  owasp-screenshots:
+    driver: local
+  searxng-data:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  owasp-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
