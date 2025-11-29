@@ -3145,6 +3145,16 @@ body.light-theme .provider-select option {
   background: #f1f5f9;
   color: #1e293b;
 }
+.provider-select optgroup {
+  font-weight: 600;
+  color: var(--gray-400);
+  background: var(--dark);
+  padding: 8px 0;
+}
+body.light-theme .provider-select optgroup {
+  background: #e2e8f0;
+  color: #475569;
+}
 .api-key-btn {
   padding: 0.35rem 0.5rem;
   border: none;
@@ -4803,9 +4813,31 @@ function updateModelDropdown() {
   const provider = providersData.find(p => p.id === currentProvider);
   
   if (provider && provider.models) {
-    modelSelect.innerHTML = provider.models.map(m => 
-      `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name}</option>`
-    ).join('');
+    // Group models by category
+    const freeModels = provider.models.filter(m => m.category === 'free');
+    const paidModels = provider.models.filter(m => m.category === 'paid' || !m.category);
+    
+    let html = '';
+    
+    // Add free models group if any exist
+    if (freeModels.length > 0) {
+      html += '<optgroup label="🆓 Free Models">';
+      html += freeModels.map(m => 
+        `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name}</option>`
+      ).join('');
+      html += '</optgroup>';
+    }
+    
+    // Add paid models group
+    if (paidModels.length > 0) {
+      html += '<optgroup label="💳 Paid Models">';
+      html += paidModels.map(m => 
+        `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name}</option>`
+      ).join('');
+      html += '</optgroup>';
+    }
+    
+    modelSelect.innerHTML = html;
   }
 }
 
