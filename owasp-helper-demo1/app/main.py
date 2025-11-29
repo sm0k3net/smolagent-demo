@@ -93,6 +93,13 @@ chain_monitor_stop_event = threading.Event()
 API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
 api_keys_store: Dict[str, str] = {}
 
+# Provider settings storage with file persistence
+PROVIDER_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".provider_settings.json")
+provider_settings_store: Dict[str, Any] = {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+}
+
 # Chat history storage with file persistence
 CHATS_FILE = os.path.join(os.path.dirname(__file__), ".chats.json")
 chats_store: Dict[str, Dict[str, Any]] = {}  # chat_id -> {name, messages, created_at, updated_at}
@@ -434,6 +441,8 @@ def load_api_keys_from_file():
     """Load API keys from file."""
     global api_keys_store
     default_keys = {
+        "DEEPSEEK_API_KEY": "",
+        "OPENROUTER_API_KEY": "",
         "SHODAN_API_KEY": "",
         "VIRUSTOTAL_API_KEY": "",
         "HUNTER_API_KEY": "",
@@ -480,6 +489,56 @@ def save_api_keys_to_file():
         print(f"Error saving API keys: {e}")
         return False
 
+
+def load_provider_settings_from_file():
+    """Load provider settings from file."""
+    global provider_settings_store
+    
+    if os.path.exists(PROVIDER_SETTINGS_FILE):
+        try:
+            with open(PROVIDER_SETTINGS_FILE, 'r') as f:
+                saved_settings = json.load(f)
+                provider_settings_store.update(saved_settings)
+        except Exception as e:
+            print(f"Error loading provider settings: {e}")
+    
+    # Check environment variables (override file)
+    if os.getenv("LLM_PROVIDER"):
+        provider_settings_store["provider"] = os.getenv("LLM_PROVIDER")
+    if os.getenv("LLM_MODEL"):
+        provider_settings_store["model"] = os.getenv("LLM_MODEL")
+    if os.getenv("DEEPSEEK_API_KEY"):
+        provider_settings_store["deepseek_api_key"] = os.getenv("DEEPSEEK_API_KEY")
+    if os.getenv("OPENROUTER_API_KEY"):
+        provider_settings_store["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY")
+    
+    # Apply to runtime settings
+    update_runtime_settings(
+        llm_provider=provider_settings_store.get("provider", "deepseek"),
+        selected_model=provider_settings_store.get("model"),
+        deepseek_api_key=provider_settings_store.get("deepseek_api_key"),
+        openrouter_api_key=provider_settings_store.get("openrouter_api_key"),
+    )
+    
+    print(f"[Provider] Loaded settings: provider={provider_settings_store.get('provider')}, model={provider_settings_store.get('model')}")
+
+
+def save_provider_settings_to_file():
+    """Save provider settings to file."""
+    try:
+        # Don't save API keys to this file (they should be in .api_keys.json or env)
+        settings_to_save = {
+            "provider": provider_settings_store.get("provider", "deepseek"),
+            "model": provider_settings_store.get("model", "deepseek-chat"),
+        }
+        with open(PROVIDER_SETTINGS_FILE, 'w') as f:
+            json.dump(settings_to_save, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving provider settings: {e}")
+        return False
+
+
 class FileUpload(BaseModel):
     session_id: str
     filename: str
@@ -488,6 +547,10 @@ class FileUpload(BaseModel):
 class APIKeyUpdate(BaseModel):
     service: str
     api_key: str
+
+class ProviderUpdate(BaseModel):
+    provider: str  # "deepseek" or "openrouter"
+    model: str
 
 class ScheduledTaskCreate(BaseModel):
     prompt: str
@@ -512,6 +575,8 @@ async def startup():
         if agent is None:
             # Load API keys from file/environment
             load_api_keys_from_file()
+            # Load provider settings (before building agent)
+            load_provider_settings_from_file()
             # Load chat history
             load_chats_from_file()
             # Load scheduled tasks
@@ -545,21 +610,28 @@ async def health_check():
 @app.get("/api/health")
 async def api_health_check():
     """Detailed health check with component status."""
+    settings = get_settings()
     components = {
         "agent": agent is not None,
         "scheduler": scheduler_thread is not None and scheduler_thread.is_alive() if 'scheduler_thread' in globals() else False,
         "executor": executor is not None,
     }
     
-    # Check API key configuration
-    api_configured = bool(api_keys_store.get("DEEPSEEK_API_KEY"))
+    # Check API key configuration for current provider
+    current_provider = provider_settings_store.get("provider", "deepseek")
+    if current_provider == "openrouter":
+        api_configured = bool(provider_settings_store.get("openrouter_api_key") or os.getenv("OPENROUTER_API_KEY"))
+    else:
+        api_configured = bool(provider_settings_store.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY"))
     
     return JSONResponse({
         "status": "healthy" if all(components.values()) and api_configured else "degraded",
         "timestamp": datetime.now().isoformat(),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "components": components,
-        "api_configured": api_configured
+        "api_configured": api_configured,
+        "llm_provider": current_provider,
+        "llm_model": provider_settings_store.get("model", "deepseek-chat"),
     })
 
 
@@ -616,6 +688,134 @@ async def import_api_keys(keys: Dict[str, str]):
             os.environ[key] = value
     save_api_keys_to_file()
     return JSONResponse({"success": True, "imported": len(keys)})
+
+# ============== PROVIDER SETTINGS ENDPOINTS ==============
+
+@app.get("/api/providers")
+async def get_providers():
+    """Get list of available providers with their models."""
+    providers = []
+    for provider_id, config in PROVIDER_CONFIGS.items():
+        providers.append({
+            "id": provider_id,
+            "name": config["name"],
+            "models": config["models"],
+            "default_model": config["default_model"],
+        })
+    return JSONResponse(providers)
+
+@app.get("/api/provider/settings")
+async def get_provider_settings():
+    """Get current provider settings."""
+    current_provider = provider_settings_store.get("provider", "deepseek")
+    current_model = provider_settings_store.get("model", "deepseek-chat")
+    
+    has_deepseek = bool(provider_settings_store.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY"))
+    has_openrouter = bool(provider_settings_store.get("openrouter_api_key") or os.getenv("OPENROUTER_API_KEY"))
+    
+    return JSONResponse({
+        "provider": current_provider,
+        "model": current_model,
+        "has_deepseek_key": has_deepseek,
+        "has_openrouter_key": has_openrouter,
+    })
+
+@app.post("/api/provider/settings")
+async def update_provider_settings(update: ProviderUpdate):
+    """Update provider settings and reinitialize agent."""
+    global agent, provider_settings_store
+    
+    # Update stored settings
+    provider_settings_store["provider"] = update.provider
+    provider_settings_store["model"] = update.model
+    
+    # Apply to runtime settings
+    update_runtime_settings(
+        llm_provider=update.provider,
+        selected_model=update.model,
+    )
+    
+    # Save to file
+    save_provider_settings_to_file()
+    
+    # Rebuild the agent with new settings
+    try:
+        agent = build_owasp_agent()
+        return JSONResponse({
+            "success": True,
+            "provider": update.provider,
+            "model": update.model,
+            "message": f"Switched to {PROVIDER_CONFIGS[update.provider]['name']} with model {update.model}"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+@app.post("/api/provider/key")
+async def set_provider_api_key(data: Dict[str, str]):
+    """Set API key for a specific provider."""
+    global provider_settings_store
+    
+    provider = data.get("provider")
+    api_key = data.get("api_key", "")
+    
+    if provider not in ["deepseek", "openrouter"]:
+        return JSONResponse({"error": "Invalid provider"}, status_code=400)
+    
+    key_name = f"{provider}_api_key"
+    provider_settings_store[key_name] = api_key
+    
+    # Also set as environment variable
+    env_key = f"{provider.upper()}_API_KEY"
+    if api_key:
+        os.environ[env_key] = api_key
+    elif env_key in os.environ:
+        del os.environ[env_key]
+    
+    # Update runtime settings
+    update_runtime_settings(**{key_name: api_key})
+    
+    # Rebuild agent if this is the current provider
+    if provider_settings_store.get("provider") == provider:
+        try:
+            global agent
+            agent = build_owasp_agent()
+        except Exception as e:
+            print(f"Error rebuilding agent: {e}")
+    
+    return JSONResponse({
+        "success": True,
+        "provider": provider,
+        "has_key": bool(api_key)
+    })
+
+@app.get("/api/provider/key/{provider}")
+async def get_provider_api_key_status(provider: str):
+    """Check if a provider has an API key configured."""
+    if provider not in ["deepseek", "openrouter"]:
+        return JSONResponse({"error": "Invalid provider"}, status_code=400)
+    
+    key_name = f"{provider}_api_key"
+    env_key = f"{provider.upper()}_API_KEY"
+    
+    has_key = bool(
+        provider_settings_store.get(key_name) or 
+        os.getenv(env_key)
+    )
+    
+    # Mask the key if present
+    stored_key = provider_settings_store.get(key_name) or os.getenv(env_key, "")
+    masked = ""
+    if stored_key:
+        masked = stored_key[:4] + "..." + stored_key[-4:] if len(stored_key) > 8 else "****"
+    
+    return JSONResponse({
+        "provider": provider,
+        "has_key": has_key,
+        "masked_key": masked
+    })
 
 # ============== CHAT MANAGEMENT ENDPOINTS ==============
 
@@ -2890,6 +3090,61 @@ h1 {
   outline: none;
   border-color: var(--primary);
 }
+.provider-select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: var(--dark);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 32px;
+}
+.provider-select:hover {
+  border-color: var(--primary);
+}
+.provider-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+.provider-select option {
+  background: var(--dark-lighter);
+  color: var(--light);
+  padding: 8px;
+}
+.provider-status-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.provider-status-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.provider-status-info {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--primary);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+body.light-theme .provider-select {
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1e293b;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+body.light-theme .provider-select option {
+  background: #f1f5f9;
+  color: #1e293b;
+}
 .api-key-btn {
   padding: 0.35rem 0.5rem;
   border: none;
@@ -3637,6 +3892,56 @@ main {
     <div class="tab-content" id="tab-settings">
       <div class="sidebar-header"><span class="header-icon">⚙️</span> API Configuration</div>
       <div id="settings-content">
+        <!-- LLM Provider Settings -->
+        <div class="settings-section">
+          <div class="settings-section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px; vertical-align: middle;">
+              <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 9a7 7 0 1 0-14 0"/>
+              <path d="M12 12v10"/>
+              <path d="M8 18h8"/>
+            </svg>
+            LLM Provider
+          </div>
+          
+          <div class="provider-selector">
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Provider</label>
+              <select id="provider-select" class="provider-select" onchange="onProviderChange()">
+                <option value="deepseek">DeepSeek</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Model</label>
+              <select id="model-select" class="provider-select">
+                <!-- Populated dynamically -->
+              </select>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">
+                <span id="provider-key-label">DeepSeek</span> API Key
+              </label>
+              <div class="api-key-item" style="margin-bottom: 0;">
+                <input type="password" class="api-key-input" id="provider-api-key" placeholder="Enter API key...">
+                <button class="api-key-btn api-key-btn-save" onclick="saveProviderKey()">💾</button>
+              </div>
+              <div id="provider-key-status" style="font-size: 0.75rem; color: var(--gray-500); margin-top: 4px;"></div>
+            </div>
+            
+            <button class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="applyProviderSettings()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Apply Settings
+            </button>
+            
+            <div id="provider-status" style="margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+          </div>
+        </div>
+        
         <div class="settings-section">
           <div class="settings-section-title">🔑 API Keys</div>
           
@@ -3959,9 +4264,10 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       stopTaskPolling();
     }
     
-    // Load API keys when settings tab is opened
+    // Load API keys and provider settings when settings tab is opened
     if (tabId === 'settings') {
       loadApiKeys();
+      loadProviders();
     }
   };
 });
@@ -4450,6 +4756,188 @@ const API_KEY_MAP = {
 const API_KEY_REVERSE_MAP = Object.fromEntries(
   Object.entries(API_KEY_MAP).map(([k, v]) => [v, k])
 );
+
+// Provider management
+let providersData = [];
+let currentProvider = 'deepseek';
+let currentModel = 'deepseek-chat';
+
+async function loadProviders() {
+  try {
+    // Load available providers
+    const providersResponse = await fetch('/api/providers');
+    providersData = await providersResponse.json();
+    
+    // Load current settings
+    const settingsResponse = await fetch('/api/provider/settings');
+    const settings = await settingsResponse.json();
+    
+    currentProvider = settings.provider || 'deepseek';
+    currentModel = settings.model || 'deepseek-chat';
+    
+    // Populate provider dropdown
+    const providerSelect = document.getElementById('provider-select');
+    if (providerSelect) {
+      providerSelect.innerHTML = providersData.map(p => 
+        `<option value="${p.id}" ${p.id === currentProvider ? 'selected' : ''}>${p.name}</option>`
+      ).join('');
+    }
+    
+    // Populate model dropdown
+    updateModelDropdown();
+    
+    // Update key status
+    updateProviderKeyStatus();
+    
+    // Update key label
+    updateProviderKeyLabel();
+  } catch (err) {
+    console.error('Failed to load providers:', err);
+  }
+}
+
+function updateModelDropdown() {
+  const modelSelect = document.getElementById('model-select');
+  if (!modelSelect) return;
+  
+  const provider = providersData.find(p => p.id === currentProvider);
+  
+  if (provider && provider.models) {
+    modelSelect.innerHTML = provider.models.map(m => 
+      `<option value="${m.id}" ${m.id === currentModel ? 'selected' : ''}>${m.name}</option>`
+    ).join('');
+  }
+}
+
+function updateProviderKeyLabel() {
+  const label = document.getElementById('provider-key-label');
+  if (!label) return;
+  
+  const provider = providersData.find(p => p.id === currentProvider);
+  label.textContent = provider ? provider.name : currentProvider;
+}
+
+async function updateProviderKeyStatus() {
+  try {
+    const response = await fetch(`/api/provider/key/${currentProvider}`);
+    const data = await response.json();
+    
+    const statusEl = document.getElementById('provider-key-status');
+    const keyInput = document.getElementById('provider-api-key');
+    
+    if (!statusEl || !keyInput) return;
+    
+    if (data.has_key) {
+      statusEl.innerHTML = `<span style="color: var(--success);">✓ Key configured</span> <span style="opacity: 0.7;">(${data.masked_key})</span>`;
+      keyInput.value = '••••••••••••••••';
+      keyInput.setAttribute('data-configured', 'true');
+    } else {
+      statusEl.innerHTML = '<span style="color: var(--warning);">⚠ No API key configured</span>';
+      keyInput.value = '';
+      keyInput.removeAttribute('data-configured');
+    }
+  } catch (err) {
+    console.error('Failed to get key status:', err);
+  }
+}
+
+function onProviderChange() {
+  const providerSelect = document.getElementById('provider-select');
+  if (!providerSelect) return;
+  
+  currentProvider = providerSelect.value;
+  
+  // Update model dropdown with new provider's models
+  const provider = providersData.find(p => p.id === currentProvider);
+  if (provider) {
+    currentModel = provider.default_model;
+  }
+  
+  updateModelDropdown();
+  updateProviderKeyLabel();
+  updateProviderKeyStatus();
+}
+
+async function saveProviderKey() {
+  const keyInput = document.getElementById('provider-api-key');
+  if (!keyInput) return;
+  
+  const value = keyInput.value.trim();
+  
+  if (!value || value === '••••••••••••••••') {
+    showProviderStatus('Please enter a valid API key', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/provider/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: currentProvider, api_key: value })
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      keyInput.value = '••••••••••••••••';
+      keyInput.setAttribute('data-configured', 'true');
+      showProviderStatus('API key saved successfully', 'success');
+      updateProviderKeyStatus();
+    } else {
+      showProviderStatus(data.error || 'Failed to save key', 'error');
+    }
+  } catch (err) {
+    showProviderStatus(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function applyProviderSettings() {
+  const providerSelect = document.getElementById('provider-select');
+  const modelSelect = document.getElementById('model-select');
+  
+  if (!providerSelect || !modelSelect) return;
+  
+  const provider = providerSelect.value;
+  const model = modelSelect.value;
+  
+  showProviderStatus('Applying settings...', 'info');
+  
+  try {
+    const response = await fetch('/api/provider/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model })
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      currentProvider = provider;
+      currentModel = model;
+      showProviderStatus(data.message, 'success');
+      addMessage('system', `🔄 ${data.message}`);
+    } else {
+      showProviderStatus(data.error || 'Failed to apply settings', 'error');
+    }
+  } catch (err) {
+    showProviderStatus(`Error: ${err.message}`, 'error');
+  }
+}
+
+function showProviderStatus(message, type) {
+  const statusEl = document.getElementById('provider-status');
+  if (!statusEl) return;
+  
+  statusEl.textContent = message;
+  statusEl.className = `provider-status-${type}`;
+  statusEl.style.display = 'block';
+  
+  if (type === 'success' || type === 'info') {
+    setTimeout(() => {
+      statusEl.style.display = 'none';
+    }, 3000);
+  }
+}
 
 async function loadApiKeys() {
   try {
@@ -5703,6 +6191,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     
     if (tabId === 'settings') {
       loadApiKeys();
+      loadProviders();
       loadCustomContext();
       checkTelegramMonitoringStatus();
     }
@@ -5729,6 +6218,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 loadChats();
 // Load chains on startup
 loadChains();
+// Load provider settings on startup  
+loadProviders();
 
 // Update addMessage to support skipSave option
 const originalAddMessage = addMessage;
