@@ -3369,6 +3369,19 @@ main {
   border-bottom-left-radius: 4px;
   border-left: 3px solid var(--primary);
 }
+.message-timestamp {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  margin-top: 0.5rem;
+  text-align: right;
+  opacity: 0.7;
+}
+.msg-user .message-timestamp {
+  color: rgba(255,255,255,0.6);
+}
+.msg-agent .message-timestamp {
+  color: var(--gray-500);
+}
 .msg-agent pre {
   background: var(--darker);
   padding: 1rem;
@@ -5304,6 +5317,17 @@ function addMessage(type, content, meta = {}) {
       '<div class="screenshot-placeholder">📷 Screenshot saved: $2</div>');
     
     msgDiv.innerHTML = formattedContent;
+  }
+  
+  // Add timestamp to message (except progress messages)
+  if (type !== 'progress') {
+    const timestamp = meta.timestamp ? new Date(meta.timestamp) : new Date();
+    const timeStr = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = timestamp.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const timestampDiv = document.createElement('div');
+    timestampDiv.className = 'message-timestamp';
+    timestampDiv.textContent = `${dateStr}, ${timeStr}`;
+    msgDiv.appendChild(timestampDiv);
   }
   
   messagesDiv.appendChild(msgDiv);

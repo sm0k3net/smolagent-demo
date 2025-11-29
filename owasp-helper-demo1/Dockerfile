@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
     nikto \
     dirb \
+    gobuster \
+    xsser \
+    amass \
     # Git for exploitdb
     git \
     # Chromium dependencies for Playwright
@@ -90,7 +93,9 @@ ENV GOPATH="/root/go"
 RUN go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
     && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
     && go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
-    && go install github.com/ffuf/ffuf/v2@latest
+    && go install github.com/ffuf/ffuf/v2@latest \
+    && go install github.com/OJ/gobuster/v3@latest \
+    && go install github.com/owasp-amass/amass/v4/...@master
 
 # Install SQLMap
 RUN git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git /opt/sqlmap \
@@ -114,7 +119,7 @@ FROM security-tools AS production
 
 WORKDIR /app
 
-# Copy application code
+# Copy application code (includes embedded wordlists)
 COPY app ./app
 COPY scripts ./scripts
 
