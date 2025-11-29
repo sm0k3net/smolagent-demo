@@ -3195,111 +3195,160 @@ body.light-theme .provider-select optgroup {
 }
 .activity-item {
   padding: 0.875rem 1rem;
+  padding-left: 3rem;
   margin-bottom: 0.5rem;
   border-radius: 10px;
   font-size: 0.85rem;
   animation: slideIn 0.3s ease;
   position: relative;
   overflow: hidden;
+  backdrop-filter: blur(8px);
 }
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(-10px); }
   to { opacity: 1; transform: translateX(0); }
 }
+.activity-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.875rem;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+.activity-icon svg {
+  width: 14px;
+  height: 14px;
+}
+/* Task Started */
+.activity-start {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-left: 3px solid var(--primary);
+}
+.activity-start .activity-icon {
+  background: linear-gradient(135deg, var(--primary) 0%, #8b5cf6 100%);
+  color: white;
+}
+/* Thinking/Processing */
 .activity-thinking {
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(251, 191, 36, 0.08) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-left: 3px solid var(--warning);
 }
-.activity-thinking::before {
-  content: '🧠';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.1rem;
-  opacity: 0.5;
+.activity-thinking .activity-icon {
+  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+  color: white;
+  animation: pulse 1.5s ease-in-out infinite;
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.95); }
+}
+/* Tool Execution */
 .activity-tool {
-  background: rgba(14, 165, 233, 0.1);
-  border: 1px solid rgba(14, 165, 233, 0.3);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12) 0%, rgba(6, 182, 212, 0.08) 100%);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  border-left: 3px solid var(--secondary);
 }
-.activity-tool::before {
-  content: '🔧';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.1rem;
-  opacity: 0.5;
+.activity-tool .activity-icon {
+  background: linear-gradient(135deg, #0ea5e9 0%, #06b6d4 100%);
+  color: white;
 }
+/* Tool Result */
 .activity-tool-result {
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(52, 211, 153, 0.08) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-left: 3px solid var(--success);
 }
-.activity-tool-result::before {
-  content: '✅';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.1rem;
-  opacity: 0.5;
+.activity-tool-result .activity-icon {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  color: white;
 }
+/* Error */
 .activity-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.12) 0%, rgba(248, 113, 113, 0.08) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-left: 3px solid var(--danger);
 }
-.activity-error::before {
-  content: '❌';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.1rem;
-  opacity: 0.5;
+.activity-error .activity-icon {
+  background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+  color: white;
 }
+/* Step/Progress */
 .activity-step {
-  background: rgba(148, 163, 184, 0.1);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(100, 116, 139, 0.08) 100%);
   border: 1px solid rgba(148, 163, 184, 0.3);
+  border-left: 3px solid var(--gray-500);
 }
-.activity-step::before {
-  content: '📍';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 1.1rem;
-  opacity: 0.5;
+.activity-step .activity-icon {
+  background: linear-gradient(135deg, #64748b 0%, #94a3b8 100%);
+  color: white;
+}
+/* Complete/Success */
+.activity-complete {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(52, 211, 153, 0.1) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  border-left: 3px solid var(--success);
+}
+.activity-complete .activity-icon {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+}
+/* Warning */
+.activity-warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(217, 119, 6, 0.08) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-left: 3px solid var(--warning);
+}
+.activity-warning .activity-icon {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
 }
 .activity-title {
   font-weight: 600;
-  color: var(--gray-200);
+  color: var(--gray-100);
   margin-bottom: 0.35rem;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
+}
+.activity-title-text {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .activity-time {
   font-size: 0.7rem;
   color: var(--gray-500);
   font-weight: 400;
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(0,0,0,0.2);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
 }
 .activity-content {
   word-break: break-word;
-  color: var(--gray-400);
+  color: var(--gray-300);
   line-height: 1.5;
+  font-size: 0.8rem;
 }
 .activity-content pre {
-  background: var(--darker);
+  background: rgba(0, 0, 0, 0.3);
   color: var(--gray-300);
   padding: 0.75rem;
   border-radius: 6px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   overflow-x: auto;
   margin-top: 0.5rem;
   font-family: 'JetBrains Mono', monospace;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.08);
+  max-height: 150px;
 }
 
 /* Main content area */
@@ -5175,14 +5224,29 @@ function removeFile(index) {
   renderAttachedFiles();
 }
 
+// SVG icons for activity types
+const activityIcons = {
+  start: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
+  thinking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+  tool: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>',
+  'tool-result': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>',
+  step: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+  complete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+};
+
 function addActivity(type, title, content, details = null) {
   const item = document.createElement('div');
   item.className = `activity-item activity-${type}`;
   
   const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const icon = activityIcons[type] || activityIcons.step;
+  
   item.innerHTML = `
+    <div class="activity-icon">${icon}</div>
     <div class="activity-title">
-      ${title}
+      <span class="activity-title-text">${title}</span>
       <span class="activity-time">${time}</span>
     </div>
     <div class="activity-content">${content}${details ? '<pre>' + escapeHtml(details) + '</pre>' : ''}</div>
@@ -5532,7 +5596,7 @@ async function sendMessage() {
   addMessage('user', displayContent);
   
   startTimer();
-  addActivity('step', '🚀 Task Started', content.substring(0, 80) + (content.length > 80 ? '...' : ''));
+  addActivity('start', 'Task Started', content.substring(0, 100) + (content.length > 100 ? '...' : ''));
   
   // Prepare message payload
   const payload = {

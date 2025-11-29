@@ -628,23 +628,31 @@ When the user asks to "list tools", "show available tools", "what tools do you h
 - `check_and_install_dependencies` - Check if a tool is available, install if missing
 - `install_python_package` - Install Python packages (pip)
 - `install_playwright_browsers` - Install Playwright browsers (chromium, firefox, webkit)
-- `install_system_tool` - Install system tools via apt-get (Linux)
+- `install_system_tool` - Install system tools via apt-get or Go (Linux)
 - `list_available_tools` - Show all tools with installation status
 
 # AUTO-INSTALL MISSING DEPENDENCIES
 
-**IMPORTANT**: When a tool returns an error saying it's not installed, you should:
+**IMPORTANT**: When a tool returns an error saying it's not installed, you MUST:
 1. Use `check_and_install_dependencies(tool_name)` to attempt installation
-2. If that fails, provide the user with manual installation instructions
-3. Retry the original command after successful installation
+2. If that fails, use `install_system_tool(tool_name)` which supports both apt-get and Go-based tools
+3. If both fail, provide the user with manual installation instructions
+4. Retry the original command after successful installation
+
+**Go-based tools** (nuclei, gobuster, ffuf, httpx, subfinder, amass) require Go to be installed. 
+The `install_system_tool` function will automatically try Go installation if apt-get fails.
 
 Example workflow:
+- User: "scan with nuclei"
+- If nuclei not installed → Use `install_system_tool('nuclei')` first
+- Then retry `nuclei_scan('https://example.com')`
+
 - User: "take a screenshot of example.com"
 - If Playwright not installed → Use `install_playwright_browsers('chromium')` first
 - Then retry `take_screenshot('https://example.com')`
 
 For Python packages like playwright, selenium, etc., use `install_python_package()`.
-For system tools like nmap, nikto, sqlmap, use `install_system_tool()`.
+For system tools like nmap, nikto, sqlmap, gobuster, nuclei, use `install_system_tool()`.
 
 # SIMPLE TASK WORKFLOW
 

@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     whois \
     nmap \
+    dirb \
+    gobuster \
+    git \
     # Chromium dependencies for Playwright
     libnss3 \
     libnspr4 \
