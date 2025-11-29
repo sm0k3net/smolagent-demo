@@ -1812,22 +1812,52 @@ h1 {
 }
 .header-actions {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.5rem;
   align-items: center;
-  flex-wrap: wrap;
+  background: rgba(0,0,0,0.25);
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(8px);
+}
+.header-actions-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255,255,255,0.1);
+  margin: 0 0.25rem;
 }
 .btn {
-  padding: 0.6rem 1.2rem;
+  padding: 0.5rem 0.9rem;
   border: none;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: 0.8rem;
   cursor: pointer;
   transition: all 0.2s ease;
   font-weight: 500;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  position: relative;
+  overflow: hidden;
+}
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+  transition: left 0.4s ease;
+}
+.btn:hover::before {
+  left: 100%;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 .btn-primary {
   background: var(--gradient-primary);
@@ -1835,17 +1865,27 @@ h1 {
   box-shadow: var(--shadow-md);
 }
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg), 0 0 20px rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg), 0 0 15px rgba(99, 102, 241, 0.35);
 }
 .btn-secondary {
-  background: rgba(255,255,255,0.1);
-  color: var(--gray-200);
-  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: var(--gray-300);
+  border: 1px solid rgba(255,255,255,0.1);
 }
 .btn-secondary:hover {
-  background: rgba(255,255,255,0.15);
-  border-color: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.2);
+  color: white;
+}
+.btn-icon-only {
+  padding: 0.5rem;
+  width: 34px;
+  height: 34px;
+  justify-content: center;
+}
+.btn-icon-only svg {
+  margin: 0;
 }
 .btn-success {
   background: var(--success);
@@ -1855,25 +1895,45 @@ h1 {
   background: #059669;
 }
 
-/* Report Mode Toggle - Switch Style */
+/* Report Mode Toggle - Premium Switch Style */
 .toggle-switch-wrapper {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background: rgba(255,255,255,0.05);
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem 0.35rem 0.5rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.08) 100%);
+  border-radius: 8px;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.toggle-switch-wrapper:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.12) 100%);
+  border-color: rgba(99, 102, 241, 0.35);
 }
 .toggle-switch {
   position: relative;
-  width: 48px;
-  height: 26px;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
 }
 .toggle-switch input {
   opacity: 0;
   width: 0;
   height: 0;
+}
+.toggle-label {
+  font-size: 0.75rem;
+  color: var(--gray-300);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.toggle-label svg {
+  width: 13px;
+  height: 13px;
+  opacity: 0.8;
 }
 .toggle-slider {
   position: absolute;
@@ -2486,28 +2546,211 @@ h1 {
   word-break: break-word;
 }
 
-/* Collapsible Sections for Tasks/Chains */
+/* Schedule Modal - Premium Design */
+.schedule-modal-content {
+  max-width: 480px;
+  padding: 0;
+}
+.schedule-modal-header {
+  padding: 1.25rem 1.5rem;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(217, 119, 6, 0.05) 100%);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+}
+.schedule-modal-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.schedule-modal-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.15) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 10px;
+}
+.schedule-modal-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: var(--warning);
+}
+.schedule-modal-subtitle {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  font-weight: 400;
+  margin-top: 2px;
+}
+.schedule-modal-body {
+  padding: 1.25rem 1.5rem;
+}
+.schedule-form-section {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.schedule-timing-section {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.form-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gray-300);
+  margin-bottom: 0.5rem;
+}
+.form-label svg {
+  opacity: 0.7;
+}
+.schedule-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+.schedule-input:hover {
+  border-color: rgba(255,255,255,0.2);
+}
+.schedule-input:focus {
+  outline: none;
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+.schedule-input::placeholder {
+  color: var(--gray-500);
+}
+.schedule-textarea {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+  transition: all 0.2s ease;
+}
+.schedule-textarea:hover {
+  border-color: rgba(255,255,255,0.2);
+}
+.schedule-textarea:focus {
+  outline: none;
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+.schedule-datetime {
+  color-scheme: dark;
+}
+.schedule-recurring-toggle {
+  margin: 1rem 0;
+}
+.schedule-checkbox {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+.schedule-checkbox:hover {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.recurring-options {
+  display: none;
+  padding: 1rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  margin-top: 0.75rem;
+}
+.recurring-options.active {
+  display: block;
+}
+.recurring-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.interval-input {
+  width: 100px;
+  text-align: center;
+}
+.interval-label {
+  font-size: 0.85rem;
+  color: var(--gray-400);
+}
+.recurring-presets {
+  display: flex;
+  gap: 0.5rem;
+}
+.preset-btn {
+  padding: 0.4rem 0.8rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--gray-300);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.preset-btn:hover {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: var(--warning);
+}
+.schedule-submit-btn {
+  width: 100%;
+  margin-top: 1.25rem;
+  padding: 0.85rem;
+  font-size: 0.9rem;
+  justify-content: center;
+}
+
+/* Collapsible Sections for Tasks/Chains - Improved Scrollable Design */
 .tasks-chains-wrapper {
   display: flex;
   flex-direction: column;
   flex: 1;
-  overflow-y: auto;
-  padding: 0.75rem;
-  gap: 0.75rem;
+  overflow: hidden;
+  padding: 0.5rem;
+  gap: 0.5rem;
+  min-height: 0;
 }
 .collapsible-section {
-  background: rgba(0,0,0,0.2);
-  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.15) 100%);
+  border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 120px;
+  max-height: 50%;
+}
+.collapsible-section.collapsed {
+  flex: 0 0 auto;
+  min-height: auto;
+  max-height: none;
 }
 .section-toggle {
   width: 100%;
-  padding: 0.75rem 1rem;
-  background: transparent;
+  padding: 0.65rem 0.85rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 100%);
   border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
   color: var(--gray-200);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   display: flex;
@@ -2515,35 +2758,66 @@ h1 {
   gap: 0.5rem;
   transition: all 0.2s;
   font-family: inherit;
+  flex-shrink: 0;
 }
 .section-toggle:hover {
-  background: rgba(99, 102, 241, 0.1);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(99, 102, 241, 0.05) 100%);
   color: var(--primary-light);
 }
-.section-toggle svg {
-  transition: transform 0.2s;
+.section-toggle .section-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary) 0%, #8b5cf6 100%);
+  border-radius: 5px;
+  flex-shrink: 0;
 }
-.section-toggle[data-expanded="false"] svg {
+.section-toggle .section-icon svg {
+  width: 11px;
+  height: 11px;
+  stroke: white;
+}
+.section-toggle .chevron-icon {
+  transition: transform 0.2s;
+  opacity: 0.6;
+}
+.section-toggle[data-expanded="false"] .chevron-icon {
   transform: rotate(-90deg);
 }
 .section-toggle .section-count {
   margin-left: auto;
-  background: rgba(99, 102, 241, 0.3);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35) 0%, rgba(139, 92, 246, 0.25) 100%);
   color: var(--primary-light);
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.7rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  border: 1px solid rgba(99, 102, 241, 0.2);
 }
 .section-content {
-  padding: 0.75rem;
-  max-height: 400px;
+  flex: 1;
   overflow-y: auto;
-  transition: max-height 0.3s ease;
+  overflow-x: hidden;
+  padding: 0.5rem;
+  min-height: 0;
+}
+.section-content::-webkit-scrollbar {
+  width: 5px;
+}
+.section-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.section-content::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.section-content::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-500);
 }
 .section-content.collapsed {
-  max-height: 0;
-  padding: 0 0.75rem;
-  overflow: hidden;
+  display: none;
 }
 
 /* Task Chain Styles */
@@ -3114,6 +3388,117 @@ h1 {
   background: var(--primary-dark);
   transform: scale(1.1);
 }
+/* Scheduled Tasks - Premium Header & Empty State */
+.scheduled-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+}
+.scheduled-header .header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.header-icon-wrapper {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.header-icon-wrapper.scheduled-icon {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.15) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.header-icon-wrapper.scheduled-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: var(--warning);
+}
+.btn-add-scheduled {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.7rem;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.1) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 7px;
+  color: var(--warning);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-add-scheduled:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.18) 100%);
+  border-color: rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+.btn-add-scheduled svg {
+  width: 12px;
+  height: 12px;
+}
+.scheduled-list-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+.scheduled-list-container::-webkit-scrollbar {
+  width: 5px;
+}
+.scheduled-list-container::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.no-scheduled-tasks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+  color: var(--gray-500);
+  text-align: center;
+  gap: 0.5rem;
+}
+.no-scheduled-tasks svg {
+  width: 42px;
+  height: 42px;
+  opacity: 0.3;
+  margin-bottom: 0.5rem;
+}
+.no-scheduled-tasks span:first-of-type {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.no-scheduled-hint {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+/* Send Button - Premium Style */
+.btn-send {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.btn-send svg {
+  width: 20px;
+  height: 20px;
+}
+.btn-send:hover {
+  transform: scale(1.05);
+}
+.btn-send:active {
+  transform: scale(0.98);
+}
+
 /* Scheduled Tasks - Enhanced UI */
 .scheduled-item {
   padding: 1rem;
@@ -3821,34 +4206,53 @@ main {
 }
 .input-row {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.5rem;
   align-items: flex-end;
 }
 .input-wrapper {
   flex: 1;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 #message-input {
   width: 100%;
-  padding: 0.875rem 1rem;
-  border: 2px solid rgba(255,255,255,0.1);
-  border-radius: 12px;
+  min-height: 48px;
+  max-height: 180px;
+  padding: 0.85rem 1rem;
+  border: 2px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
   font-size: 0.9rem;
-  background: var(--dark);
+  background: linear-gradient(135deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.2) 100%);
   color: var(--light);
-  transition: all 0.2s;
+  transition: all 0.25s ease;
   font-family: inherit;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+#message-input::-webkit-scrollbar {
+  width: 4px;
+}
+#message-input::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 2px;
 }
 #message-input::placeholder {
   color: var(--gray-500);
+  font-size: 0.85rem;
+}
+#message-input:hover {
+  border-color: rgba(255,255,255,0.15);
 }
 #message-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(0,0,0,0.25) 100%);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15), 0 4px 20px rgba(0,0,0,0.2);
 }
 
-/* Background task checkbox */
+/* Background task checkbox - Premium Style */
 .background-task-toggle {
   display: flex;
   align-items: center;
@@ -3858,47 +4262,68 @@ main {
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--gray-400);
   user-select: none;
+  padding: 0.4rem 0.7rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.2s ease;
+}
+.checkbox-wrapper:hover {
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.2);
 }
 .checkbox-wrapper input[type="checkbox"] {
   display: none;
 }
 .checkmark {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border: 2px solid var(--gray-500);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 .checkbox-wrapper input:checked + .checkmark {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: linear-gradient(135deg, var(--secondary) 0%, #0284c7 100%);
+  border-color: var(--secondary);
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.4);
 }
 .checkbox-wrapper input:checked + .checkmark::after {
   content: '✓';
   color: white;
-  font-size: 0.75rem;
+  font-size: 0.65rem;
+  font-weight: bold;
 }
 .checkbox-wrapper:hover .checkmark {
-  border-color: var(--primary-light);
+  border-color: var(--secondary);
 }
 .checkbox-label {
   transition: color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.checkbox-label .label-icon {
+  font-size: 0.9rem;
 }
 .checkbox-wrapper:hover .checkbox-label {
   color: var(--gray-200);
 }
+.checkbox-wrapper input:checked ~ .checkbox-label {
+  color: var(--secondary);
+}
 
-/* File attachment */
+/* File attachment - Enhanced Design */
 .file-attachment-area {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 .file-input-wrapper {
@@ -3912,12 +4337,22 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.5rem 1rem;
-  background: rgba(255,255,255,0.1);
+  padding: 0.4rem 0.75rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(99, 102, 241, 0.08) 100%);
   color: var(--gray-300);
-  border: 1px dashed rgba(255,255,255,0.2);
+  border: 1px dashed rgba(139, 92, 246, 0.35);
   border-radius: 8px;
   cursor: pointer;
+  font-size: 0.78rem;
+  transition: all 0.2s ease;
+}
+.file-input-btn:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.18) 0%, rgba(99, 102, 241, 0.12) 100%);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: white;
+}
+.file-input-btn .attach-icon {
+  font-size: 0.9rem;
   font-size: 0.85rem;
   transition: all 0.2s;
 }
@@ -4058,16 +4493,26 @@ main {
     </span>
   </div>
   <div class="header-actions">
-    <div class="toggle-switch-wrapper" id="report-toggle">
+    <div class="toggle-switch-wrapper" id="report-toggle" title="Generate professional security report">
       <label class="toggle-switch">
         <input type="checkbox" id="report-mode-checkbox">
         <span class="toggle-slider"></span>
       </label>
-      <span class="toggle-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg> Report</span>
+      <span class="toggle-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg> Report</span>
     </div>
-    <button class="btn btn-secondary" id="export-txt-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export</button>
-    <button class="btn btn-secondary" id="clear-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Clear</button>
-    <button class="btn btn-secondary" id="theme-toggle-btn" title="Toggle Light/Dark Theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></button>
+    <div class="header-actions-divider"></div>
+    <button class="btn btn-secondary" id="export-txt-btn" title="Export chat history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      <span>Export</span>
+    </button>
+    <button class="btn btn-secondary" id="clear-btn" title="Clear chat history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      <span>Clear</span>
+    </button>
+    <div class="header-actions-divider"></div>
+    <button class="btn btn-secondary btn-icon-only" id="theme-toggle-btn" title="Toggle Light/Dark Theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
   </div>
 </header>
 <div class="main-wrapper">
@@ -4138,10 +4583,11 @@ main {
     <div class="tab-content" id="tab-tasks">
       <div class="sidebar-header"><span class="header-title"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg> Tasks & Chains</span></div>
       <div class="tasks-chains-wrapper">
-        <div class="collapsible-section">
+        <div class="collapsible-section" id="section-tasks">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
-            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v10M1 12h6m6 0h10"></path></svg></span>
             <span>Background Tasks</span>
+            <svg class="chevron-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
             <span class="section-count" id="tasks-count">0</span>
           </button>
           <div class="section-content" id="tasks-list">
@@ -4149,18 +4595,19 @@ main {
           </div>
         </div>
         
-        <div class="collapsible-section">
+        <div class="collapsible-section" id="section-chains">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
-            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span>
             <span>Task Chains</span>
+            <svg class="chevron-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
             <span class="section-count" id="chains-count">0</span>
           </button>
-          <div class="section-content">
+          <div class="section-content" id="chains-section-content">
             <button class="create-chain-btn" onclick="openChainBuilder()">
               <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               Create Task Chain
             </button>
-            <div id="chains-list" style="margin-top: 0.75rem;">
+            <div id="chains-list" style="margin-top: 0.5rem;">
               <!-- Chains will be rendered here -->
             </div>
           </div>
@@ -4366,51 +4813,137 @@ main {
     
     <!-- Scheduled Tasks Tab Content -->
     <div class="tab-content" id="tab-scheduled">
-      <div class="sidebar-header">
-        <span class="header-icon">⏰</span> Scheduled Tasks
-        <button class="btn-new-chat" onclick="showScheduleModal()" title="New Scheduled Task">➕</button>
+      <div class="sidebar-header scheduled-header">
+        <span class="header-title">
+          <span class="header-icon-wrapper scheduled-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </span>
+          Scheduled Tasks
+        </span>
+        <button class="btn-add-scheduled" onclick="showScheduleModal()" title="Create New Scheduled Task">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>New</span>
+        </button>
       </div>
-      <div id="scheduled-list">
-        <div class="no-tasks">No scheduled tasks</div>
+      <div class="scheduled-list-container">
+        <div id="scheduled-list">
+          <div class="no-scheduled-tasks">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span>No scheduled tasks</span>
+            <span class="no-scheduled-hint">Schedule recurring security scans</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
   
-  <!-- Schedule Task Modal -->
+  <!-- Schedule Task Modal - Premium Design -->
   <div class="task-modal" id="schedule-modal">
-    <div class="task-modal-content" style="max-width: 480px;">
-      <div class="task-modal-header">
-        <span class="task-modal-title">⏰ Schedule New Task</span>
+    <div class="task-modal-content schedule-modal-content">
+      <div class="task-modal-header schedule-modal-header">
+        <div class="schedule-modal-title-wrapper">
+          <span class="schedule-modal-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </span>
+          <div>
+            <span class="task-modal-title">Schedule Task</span>
+            <span class="schedule-modal-subtitle">Automate recurring security scans</span>
+          </div>
+        </div>
         <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
       </div>
-      <div class="task-modal-body" style="padding: 1rem;">
+      <div class="task-modal-body schedule-modal-body">
         <div class="schedule-form">
-          <div class="form-group">
-            <label>Task Name</label>
-            <input type="text" id="schedule-name" placeholder="e.g., Daily security scan">
-          </div>
-          <div class="form-group">
-            <label>Task Prompt</label>
-            <textarea id="schedule-prompt" placeholder="e.g., Run a quick nmap scan on target.com..." rows="3"></textarea>
-          </div>
-          <div class="form-row">
-            <div class="form-group" style="flex: 1;">
-              <label>📅 Schedule Time</label>
-              <input type="datetime-local" id="schedule-time">
+          <div class="schedule-form-section">
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+                Task Name
+              </label>
+              <input type="text" id="schedule-name" class="schedule-input" placeholder="e.g., Daily security scan">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                  <polyline points="2 17 12 22 22 17"></polyline>
+                  <polyline points="2 12 12 17 22 12"></polyline>
+                </svg>
+                Task Prompt
+              </label>
+              <textarea id="schedule-prompt" class="schedule-textarea" placeholder="e.g., Run nmap -sV scan on target.com and report findings..." rows="3"></textarea>
             </div>
           </div>
-          <div class="form-group" style="margin-bottom: 8px;">
-            <label class="checkbox-wrapper" style="margin: 0;">
-              <input type="checkbox" id="schedule-recurring">
-              <span class="checkmark"></span>
-              <span class="checkbox-label">🔄 Recurring Task</span>
-            </label>
+          
+          <div class="schedule-form-section schedule-timing-section">
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="16" y1="2" x2="16" y2="6"></line>
+                  <line x1="8" y1="2" x2="8" y2="6"></line>
+                  <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
+                Schedule Time
+              </label>
+              <input type="datetime-local" id="schedule-time" class="schedule-input schedule-datetime">
+            </div>
+            
+            <div class="schedule-recurring-toggle">
+              <label class="checkbox-wrapper schedule-checkbox">
+                <input type="checkbox" id="schedule-recurring">
+                <span class="checkmark"></span>
+                <span class="checkbox-label">
+                  <span class="label-icon">🔄</span>
+                  <span>Make this a recurring task</span>
+                </span>
+              </label>
+            </div>
+            
+            <div id="recurring-options" class="recurring-options">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                Repeat Interval
+              </label>
+              <div class="recurring-interval-row">
+                <input type="number" id="schedule-interval" class="schedule-input interval-input" value="60" min="5">
+                <span class="interval-label">minutes</span>
+              </div>
+              <div class="recurring-presets">
+                <button type="button" class="preset-btn" onclick="setInterval(30)">30m</button>
+                <button type="button" class="preset-btn" onclick="setInterval(60)">1h</button>
+                <button type="button" class="preset-btn" onclick="setInterval(360)">6h</button>
+                <button type="button" class="preset-btn" onclick="setInterval(1440)">24h</button>
+              </div>
+            </div>
           </div>
-          <div id="recurring-options" class="form-group" style="display: none;">
-            <label>Repeat Every (minutes)</label>
-            <input type="number" id="schedule-interval" value="60" min="5">
-          </div>
-          <button class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="createScheduledTask()">📅 Schedule Task</button>
+          
+          <button class="btn btn-primary schedule-submit-btn" onclick="createScheduledTask()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            Schedule Task
+          </button>
         </div>
       </div>
     </div>
@@ -4440,7 +4973,10 @@ main {
           <div class="file-attachment-area">
             <div class="file-input-wrapper">
               <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini">
-              <label for="file-input" class="file-input-btn">📎 Attach Files</label>
+              <label for="file-input" class="file-input-btn">
+                <span class="attach-icon">📎</span>
+                <span>Attach</span>
+              </label>
             </div>
             <div id="attached-files"></div>
           </div>
@@ -4448,17 +4984,22 @@ main {
             <label class="checkbox-wrapper">
               <input type="checkbox" id="background-task-checkbox">
               <span class="checkmark"></span>
-              <span class="checkbox-label">🔄 Run as Background Task</span>
+              <span class="checkbox-label">
+                <span class="label-icon">🔄</span>
+                <span>Background Task</span>
+              </span>
             </label>
           </div>
         </div>
         <div class="input-row">
           <div class="input-wrapper">
-            <input type="text" id="message-input" placeholder="Ask about OWASP, run security scans, use specific tools (e.g., 'run nmap against target.com')..." autocomplete="off">
+            <textarea id="message-input" placeholder="Ask about OWASP, run security scans, use specific tools (e.g., 'run nmap against target.com')..." rows="1"></textarea>
           </div>
-          <button class="btn btn-primary" id="send-btn">
-            <span>Send</span>
-            <span>➤</span>
+          <button class="btn btn-primary btn-send" id="send-btn" title="Send message">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
           </button>
         </div>
       </div>
@@ -6189,10 +6730,21 @@ async function sendMessage() {
 }
 
 sendBtn.onclick = sendMessage;
-messageInput.onkeypress = (e) => {
+
+// Auto-resize textarea
+function autoResizeTextarea() {
+  messageInput.style.height = 'auto';
+  const newHeight = Math.min(messageInput.scrollHeight, 180);
+  messageInput.style.height = newHeight + 'px';
+}
+messageInput.addEventListener('input', autoResizeTextarea);
+
+messageInput.onkeydown = (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+    // Reset textarea height after send
+    messageInput.style.height = 'auto';
   }
 };
 
@@ -6455,7 +7007,15 @@ function renderScheduledTasks() {
   const tasks = Object.values(scheduledTasksStore);
   
   if (tasks.length === 0) {
-    list.innerHTML = '<div class="no-tasks">No scheduled tasks. Click + to create one.</div>';
+    list.innerHTML = `
+      <div class="no-scheduled-tasks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <span>No scheduled tasks</span>
+        <span class="no-scheduled-hint">Schedule recurring security scans</span>
+      </div>`;
     return;
   }
   
@@ -6559,12 +7119,13 @@ function showScheduleModal(taskId = null) {
   const submitBtn = modal.querySelector('button.btn-primary');
   
   editingScheduledTaskId = taskId;
+  const recurringOptions = document.getElementById('recurring-options');
   
   if (taskId && scheduledTasksStore[taskId]) {
     // Editing existing task
     const task = scheduledTasksStore[taskId];
-    title.textContent = '✏️ Edit Scheduled Task';
-    submitBtn.textContent = '💾 Save Changes';
+    title.textContent = 'Edit Scheduled Task';
+    submitBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save Changes';
     
     document.getElementById('schedule-name').value = task.name || '';
     document.getElementById('schedule-prompt').value = task.prompt || '';
@@ -6575,17 +7136,21 @@ function showScheduleModal(taskId = null) {
     document.getElementById('schedule-time').value = localDateTime;
     
     document.getElementById('schedule-recurring').checked = task.recurring || false;
-    document.getElementById('recurring-options').style.display = task.recurring ? 'block' : 'none';
+    if (task.recurring) {
+      recurringOptions.classList.add('active');
+    } else {
+      recurringOptions.classList.remove('active');
+    }
     document.getElementById('schedule-interval').value = task.interval_minutes || 60;
   } else {
     // New task
-    title.textContent = '⏰ Schedule New Task';
-    submitBtn.textContent = '📅 Schedule Task';
+    title.textContent = 'Schedule Task';
+    submitBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> Schedule Task';
     
     document.getElementById('schedule-name').value = '';
     document.getElementById('schedule-prompt').value = '';
     document.getElementById('schedule-recurring').checked = false;
-    document.getElementById('recurring-options').style.display = 'none';
+    recurringOptions.classList.remove('active');
     document.getElementById('schedule-interval').value = 60;
     
     // Set default time to now + 1 hour
@@ -6649,13 +7214,23 @@ function closeScheduleModal() {
   document.getElementById('schedule-name').value = '';
   document.getElementById('schedule-prompt').value = '';
   document.getElementById('schedule-recurring').checked = false;
-  document.getElementById('recurring-options').style.display = 'none';
+  document.getElementById('recurring-options').classList.remove('active');
 }
 
 // Toggle recurring options visibility
 document.getElementById('schedule-recurring')?.addEventListener('change', (e) => {
-  document.getElementById('recurring-options').style.display = e.target.checked ? 'block' : 'none';
+  const recurringOptions = document.getElementById('recurring-options');
+  if (e.target.checked) {
+    recurringOptions.classList.add('active');
+  } else {
+    recurringOptions.classList.remove('active');
+  }
 });
+
+// Set interval preset
+function setInterval(minutes) {
+  document.getElementById('schedule-interval').value = minutes;
+}
 
 async function createScheduledTask() {
   const name = document.getElementById('schedule-name').value.trim();
