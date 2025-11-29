@@ -709,6 +709,32 @@ async def clear_chat_messages(chat_id: str):
     save_chats_to_file()
     return JSONResponse({"success": True})
 
+class ChatSaveRequest(BaseModel):
+    """Request to bulk save chat messages."""
+    messages: list[dict]
+
+@app.post("/api/chats/{chat_id}/save")
+async def save_chat_bulk(chat_id: str, request: ChatSaveRequest):
+    """Bulk save all messages for a chat (used by beforeunload)."""
+    if chat_id not in chats_store:
+        chats_store[chat_id] = {
+            "name": f"Chat {chat_id}",
+            "messages": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+    
+    # Replace all messages
+    chats_store[chat_id]["messages"] = request.messages
+    chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
+    
+    # Keep only last 500 messages
+    if len(chats_store[chat_id]["messages"]) > 500:
+        chats_store[chat_id]["messages"] = chats_store[chat_id]["messages"][-500:]
+    
+    save_chats_to_file()
+    return JSONResponse({"success": True})
+
 # ============== SCHEDULED TASKS ENDPOINTS ==============
 
 @app.get("/api/scheduled")
@@ -1416,6 +1442,7 @@ HTML = """
   --gray-500: #64748b;
   --gray-600: #475569;
   --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+  --gradient-accent: linear-gradient(135deg, #0ea5e9 0%, #06b6d4 100%);
   --gradient-dark: linear-gradient(135deg, #1e293b 0%, #334155 100%);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
   --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
@@ -1426,6 +1453,9 @@ HTML = """
   --text-primary: var(--light);
   --text-secondary: var(--gray-300);
   --border-color: rgba(255,255,255,0.1);
+  --sidebar-width: 420px;
+  --sidebar-min-width: 320px;
+  --sidebar-max-width: 600px;
 }
 /* Light Theme */
 body.light-theme {
@@ -1496,12 +1526,17 @@ header {
   width: 48px;
   height: 48px;
   background: var(--gradient-primary);
-  border-radius: 12px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5rem;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-lg), 0 0 20px rgba(99, 102, 241, 0.3);
+  color: white;
+}
+.logo-icon svg {
+  width: 26px;
+  height: 26px;
+  stroke: white;
 }
 h1 {
   font-size: 1.5rem;
@@ -1512,9 +1547,10 @@ h1 {
   background-clip: text;
 }
 .header-subtitle {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--gray-400);
   font-weight: 400;
+  letter-spacing: 0.3px;
 }
 .status-badge {
   display: inline-flex;
@@ -1664,13 +1700,46 @@ h1 {
   border-right: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 #sidebar.expanded {
-  width: 400px;
-  min-width: 400px;
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-min-width);
+  max-width: var(--sidebar-max-width);
+}
+/* Sidebar Resize Handle */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 100;
+  background: transparent;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+  background: var(--primary);
+}
+.sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 40px;
+  background: var(--gray-500);
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.sidebar-resize-handle:hover::after {
+  opacity: 1;
 }
 /* Hide all content except toggle when collapsed */
 #sidebar:not(.expanded) .sidebar-tabs,
@@ -1685,41 +1754,71 @@ h1 {
   color: var(--gray-400);
   border: none;
   cursor: pointer;
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   transition: all 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  gap: 0.5rem;
 }
 .sidebar-toggle:hover {
   color: var(--primary-light);
   background: rgba(99, 102, 241, 0.1);
+}
+.sidebar-toggle svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+#sidebar.expanded .sidebar-toggle {
+  justify-content: flex-start;
+  padding: 1rem 1.25rem;
+}
+#sidebar.expanded .sidebar-toggle::after {
+  content: 'Collapse';
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-left: 0.5rem;
 }
 /* Sidebar Tabs */
 .sidebar-tabs {
   display: none;
   border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
+  flex-wrap: wrap;
+  background: rgba(0,0,0,0.2);
 }
 #sidebar.expanded .sidebar-tabs {
   display: flex;
 }
 .sidebar-tab {
   flex: 1;
-  padding: 0.75rem 1rem;
+  min-width: 60px;
+  padding: 0.6rem 0.5rem;
   background: transparent;
   border: none;
   color: var(--gray-400);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   font-weight: 500;
   transition: all 0.2s;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
+  gap: 0.25rem;
   font-family: inherit;
+  border-bottom: 2px solid transparent;
+}
+.sidebar-tab svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  fill: none;
 }
 .sidebar-tab:hover {
   background: rgba(99, 102, 241, 0.1);
@@ -1730,20 +1829,37 @@ h1 {
   color: var(--primary-light);
   border-bottom: 2px solid var(--primary);
 }
+.sidebar-tab .tab-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
 .sidebar-header {
-  padding: 1rem 1.25rem;
-  background: rgba(99, 102, 241, 0.1);
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding: 0.85rem 1rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
   font-weight: 600;
   color: var(--primary-light);
   display: none;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   flex-shrink: 0;
+  justify-content: space-between;
 }
 #sidebar.expanded .sidebar-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+.sidebar-header .header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.sidebar-header svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
 }
 .header-icon {
   font-size: 1.1rem;
@@ -1796,25 +1912,25 @@ h1 {
   border-radius: 3px;
 }
 .task-item {
-  padding: 1rem;
-  margin-bottom: 0.75rem;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
+  padding: 0.85rem;
+  margin-bottom: 0.6rem;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
   animation: slideIn 0.3s ease;
   position: relative;
 }
 .task-delete-btn {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: none;
-  background: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.2);
   color: var(--danger);
-  font-size: 18px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
   opacity: 0.6;
@@ -1831,15 +1947,18 @@ h1 {
 }
 .task-item.running {
   border-color: var(--secondary);
-  background: rgba(14, 165, 233, 0.1);
+  background: rgba(14, 165, 233, 0.08);
+  border-left: 3px solid var(--secondary);
 }
 .task-item.completed {
   border-color: var(--success);
-  background: rgba(16, 185, 129, 0.1);
+  background: rgba(16, 185, 129, 0.08);
+  border-left: 3px solid var(--success);
 }
 .task-item.paused {
   border-color: var(--warning);
-  background: rgba(245, 158, 11, 0.1);
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--warning);
 }
 .task-item.cancelled, .task-item.failed {
   border-color: var(--danger);
@@ -1924,29 +2043,73 @@ h1 {
   word-break: break-word;
 }
 
-/* Task Chain Styles */
-.chain-section {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid rgba(255,255,255,0.1);
-}
-.chain-section-header {
+/* Collapsible Sections for Tasks/Chains */
+.tasks-chains-wrapper {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.75rem;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  gap: 0.75rem;
 }
-.chain-section-title {
-  font-size: 0.9rem;
+.collapsible-section {
+  background: rgba(0,0,0,0.2);
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.section-toggle {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--gray-200);
+  font-size: 0.8rem;
   font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.section-toggle:hover {
+  background: rgba(99, 102, 241, 0.1);
   color: var(--primary-light);
 }
-.chain-item {
-  padding: 1rem;
-  margin-bottom: 0.75rem;
+.section-toggle svg {
+  transition: transform 0.2s;
+}
+.section-toggle[data-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+.section-toggle .section-count {
+  margin-left: auto;
+  background: rgba(99, 102, 241, 0.3);
+  color: var(--primary-light);
+  padding: 2px 8px;
   border-radius: 10px;
-  background: rgba(139, 92, 246, 0.1);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  font-size: 0.7rem;
+}
+.section-content {
+  padding: 0.75rem;
+  max-height: 400px;
+  overflow-y: auto;
+  transition: max-height 0.3s ease;
+}
+.section-content.collapsed {
+  max-height: 0;
+  padding: 0 0.75rem;
+  overflow: hidden;
+}
+
+/* Task Chain Styles */
+.chain-item {
+  padding: 0.85rem;
+  margin-bottom: 0.6rem;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
   animation: slideIn 0.3s ease;
 }
 .chain-item.running {
@@ -3267,21 +3430,57 @@ main {
 }
 
 /* Responsive */
+@media (max-width: 1200px) {
+  :root {
+    --sidebar-width: 380px;
+    --sidebar-min-width: 280px;
+  }
+}
+@media (max-width: 992px) {
+  :root {
+    --sidebar-width: 340px;
+    --sidebar-min-width: 260px;
+  }
+  .sidebar-tabs {
+    flex-wrap: wrap;
+  }
+  .sidebar-tab {
+    min-width: 50px;
+    padding: 0.5rem 0.4rem;
+  }
+  .sidebar-tab .tab-label {
+    font-size: 0.6rem;
+  }
+}
 @media (max-width: 768px) {
-  header { padding: 1rem; }
-  .header-actions { width: 100%; justify-content: center; }
-  #sidebar.expanded { width: 100%; min-width: 100%; position: absolute; z-index: 50; height: 100%; }
+  header { padding: 0.75rem 1rem; }
+  .header-actions { width: 100%; justify-content: center; flex-wrap: wrap; }
+  .header-actions .btn { padding: 0.4rem 0.6rem; font-size: 0.75rem; }
+  #sidebar.expanded { 
+    width: 100% !important; 
+    min-width: 100% !important; 
+    position: absolute; 
+    z-index: 50; 
+    height: 100%; 
+  }
   main { padding: 1rem; }
+  .logo-icon { width: 40px; height: 40px; }
+  h1 { font-size: 1.2rem; }
 }
 </style>
 </head>
 <body>
 <header>
   <div class="logo-section">
-    <div class="logo-icon">🛡️</div>
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </div>
     <div>
       <h1>OWASP SmolAgent</h1>
-      <div class="header-subtitle">Professional Security Testing Assistant</div>
+      <div class="header-subtitle">AI-Powered Security Testing Platform</div>
     </div>
     <span class="status-badge disconnected" id="status-badge">
       <span class="status-dot"></span>
@@ -3294,32 +3493,50 @@ main {
         <input type="checkbox" id="report-mode-checkbox">
         <span class="toggle-slider"></span>
       </label>
-      <span class="toggle-label">📋 Report Mode</span>
+      <span class="toggle-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg> Report</span>
     </div>
-    <button class="btn btn-secondary" id="export-txt-btn">📥 Export</button>
-    <button class="btn btn-secondary" id="clear-btn">🗑️ Clear</button>
-    <button class="btn btn-secondary" id="theme-toggle-btn" title="Toggle Light/Dark Theme">🌙</button>
+    <button class="btn btn-secondary" id="export-txt-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export</button>
+    <button class="btn btn-secondary" id="clear-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Clear</button>
+    <button class="btn btn-secondary" id="theme-toggle-btn" title="Toggle Light/Dark Theme"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></button>
   </div>
 </header>
 <div class="main-wrapper">
   <!-- Expandable Sidebar with Tabs -->
   <div id="sidebar">
-    <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Sidebar">📊</button>
+    <div class="sidebar-resize-handle" id="sidebar-resize"></div>
+    <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Sidebar">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+    </button>
     
     <!-- Sidebar Tabs -->
     <div class="sidebar-tabs">
-      <button class="sidebar-tab" data-tab="chats">💬 Chats</button>
-      <button class="sidebar-tab active" data-tab="activity">🔍 Activity</button>
-      <button class="sidebar-tab" data-tab="tasks">📋 Tasks</button>
-      <button class="sidebar-tab" data-tab="scheduled">⏰ Scheduled</button>
-      <button class="sidebar-tab" data-tab="settings">⚙️ Settings</button>
+      <button class="sidebar-tab" data-tab="chats">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span class="tab-label">Chats</span>
+      </button>
+      <button class="sidebar-tab active" data-tab="activity">
+        <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        <span class="tab-label">Activity</span>
+      </button>
+      <button class="sidebar-tab" data-tab="tasks">
+        <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+        <span class="tab-label">Tasks</span>
+      </button>
+      <button class="sidebar-tab" data-tab="scheduled">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span class="tab-label">Schedule</span>
+      </button>
+      <button class="sidebar-tab" data-tab="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span class="tab-label">Settings</span>
+      </button>
     </div>
     
     <!-- Chats Tab Content -->
     <div class="tab-content" id="tab-chats">
       <div class="sidebar-header">
-        <span class="header-icon">💬</span> Conversations
-        <button class="btn-new-chat" onclick="createNewChat()" title="New Chat">➕</button>
+        <span class="header-title"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Conversations</span>
+        <button class="btn-new-chat" onclick="createNewChat()" title="New Chat"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
       </div>
       <div id="chats-list">
         <div class="chat-loading">Loading chats...</div>
@@ -3328,7 +3545,7 @@ main {
     
     <!-- Activity Tab Content -->
     <div class="tab-content active" id="tab-activity">
-      <div class="sidebar-header"><span class="header-icon">🔍</span> Agent Activity Monitor</div>
+      <div class="sidebar-header"><span class="header-title"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> Activity Monitor</span></div>
       <div id="activity-log"></div>
       <div class="sidebar-stats">
         <div class="stats-grid">
@@ -3350,21 +3567,34 @@ main {
     
     <!-- Tasks Tab Content -->
     <div class="tab-content" id="tab-tasks">
-      <div class="sidebar-header"><span class="header-icon">📋</span> Running Tasks</div>
-      <div id="tasks-list">
-        <div class="no-tasks">No active tasks</div>
-      </div>
-      
-      <!-- Task Chains Section -->
-      <div class="chain-section">
-        <div class="chain-section-header">
-          <span class="chain-section-title">🔗 Task Chains</span>
+      <div class="sidebar-header"><span class="header-title"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg> Tasks & Chains</span></div>
+      <div class="tasks-chains-wrapper">
+        <div class="collapsible-section">
+          <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <span>Background Tasks</span>
+            <span class="section-count" id="tasks-count">0</span>
+          </button>
+          <div class="section-content" id="tasks-list">
+            <div class="no-tasks">No active tasks</div>
+          </div>
         </div>
-        <button class="create-chain-btn" onclick="openChainBuilder()">
-          <span>➕</span> Create Task Chain
-        </button>
-        <div id="chains-list" style="margin-top: 0.75rem;">
-          <!-- Chains will be rendered here -->
+        
+        <div class="collapsible-section">
+          <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <span>Task Chains</span>
+            <span class="section-count" id="chains-count">0</span>
+          </button>
+          <div class="section-content">
+            <button class="create-chain-btn" onclick="openChainBuilder()">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Create Task Chain
+            </button>
+            <div id="chains-list" style="margin-top: 0.75rem;">
+              <!-- Chains will be rendered here -->
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3626,6 +3856,7 @@ const exportTxtBtn = document.getElementById('export-txt-btn');
 const clearBtn = document.getElementById('clear-btn');
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
+const sidebarResize = document.getElementById('sidebar-resize');
 const activityLog = document.getElementById('activity-log');
 const reportToggle = document.getElementById('report-toggle');
 const reportCheckbox = document.getElementById('report-mode-checkbox');
@@ -3654,8 +3885,56 @@ let taskRefreshInterval = null;
 // Sidebar toggle
 sidebarToggle.onclick = () => {
   sidebar.classList.toggle('expanded');
-  sidebarToggle.textContent = sidebar.classList.contains('expanded') ? '◀' : '📊';
 };
+
+// Sidebar resize functionality
+let isResizing = false;
+let startX = 0;
+let startWidth = 0;
+
+sidebarResize.addEventListener('mousedown', (e) => {
+  if (!sidebar.classList.contains('expanded')) return;
+  isResizing = true;
+  startX = e.clientX;
+  startWidth = parseInt(getComputedStyle(sidebar).width, 10);
+  sidebarResize.classList.add('dragging');
+  document.body.style.cursor = 'ew-resize';
+  document.body.style.userSelect = 'none';
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isResizing) return;
+  const newWidth = startWidth + (e.clientX - startX);
+  const minWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-min-width'), 10) || 320;
+  const maxWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-max-width'), 10) || 600;
+  
+  if (newWidth >= minWidth && newWidth <= maxWidth) {
+    document.documentElement.style.setProperty('--sidebar-width', newWidth + 'px');
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (isResizing) {
+    isResizing = false;
+    sidebarResize.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
+});
+
+// Section toggle for collapsible sections
+function toggleSection(btn) {
+  const isExpanded = btn.getAttribute('data-expanded') === 'true';
+  const content = btn.nextElementSibling;
+  
+  if (isExpanded) {
+    content.classList.add('collapsed');
+    btn.setAttribute('data-expanded', 'false');
+  } else {
+    content.classList.remove('collapsed');
+    btn.setAttribute('data-expanded', 'true');
+  }
+}
 
 // Sidebar tabs
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
@@ -3711,7 +3990,11 @@ async function refreshTasks() {
 
 function renderTasks() {
   const tasksList = document.getElementById('tasks-list');
-  const tasks = Object.values(taskStore);
+  const tasksCount = document.getElementById('tasks-count');
+  const tasks = Object.values(taskStore).filter(t => !t.chain_id); // Only show non-chain tasks
+  
+  // Update count
+  if (tasksCount) tasksCount.textContent = tasks.length;
   
   if (tasks.length === 0) {
     tasksList.innerHTML = '<div class="no-tasks">No active tasks</div>';
@@ -3875,10 +4158,14 @@ async function loadChains() {
 
 function renderChains() {
   const chainsList = document.getElementById('chains-list');
+  const chainsCount = document.getElementById('chains-count');
   const chains = Object.values(chainStore);
   
+  // Update count
+  if (chainsCount) chainsCount.textContent = chains.length;
+  
   if (chains.length === 0) {
-    chainsList.innerHTML = '';
+    chainsList.innerHTML = '<div class="no-tasks" style="text-align: center; padding: 1rem; color: var(--gray-500);">No chains created</div>';
     return;
   }
   
@@ -4498,7 +4785,45 @@ function addMessage(type, content, meta = {}) {
   messagesDiv.appendChild(msgDiv);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
   
-  chatHistory.push({ type, content, timestamp: new Date().toISOString(), ...meta });
+  // Add to chat history
+  const msgData = { type, content, timestamp: new Date().toISOString() };
+  chatHistory.push(msgData);
+  
+  // Auto-save message to backend (unless skipSave is set)
+  if (!meta.skipSave && type !== 'progress') {
+    saveMessageToBackend(msgData);
+  }
+}
+
+// Debounced save to prevent too many API calls
+let saveMessageTimeout = null;
+let pendingMessages = [];
+
+async function saveMessageToBackend(msgData) {
+  pendingMessages.push(msgData);
+  
+  // Debounce: wait 500ms before saving
+  if (saveMessageTimeout) clearTimeout(saveMessageTimeout);
+  saveMessageTimeout = setTimeout(async () => {
+    const messagesToSave = [...pendingMessages];
+    pendingMessages = [];
+    
+    for (const msg of messagesToSave) {
+      try {
+        await fetch(`/api/chats/${currentChatId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp
+          })
+        });
+      } catch (err) {
+        console.error('Failed to save message:', err);
+      }
+    }
+  }, 500);
 }
 
 function escapeForRegex(string) {
@@ -4770,14 +5095,17 @@ const themeToggleBtn = document.getElementById('theme-toggle-btn');
 const savedTheme = localStorage.getItem('owasp-theme');
 if (savedTheme === 'light') {
   document.body.classList.add('light-theme');
-  themeToggleBtn.textContent = '☀️';
+  themeToggleBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>';
 }
+
+const moonIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
+const sunIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>';
 
 themeToggleBtn.onclick = () => {
   document.body.classList.toggle('light-theme');
   const isLight = document.body.classList.contains('light-theme');
   localStorage.setItem('owasp-theme', isLight ? 'light' : 'dark');
-  themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
+  themeToggleBtn.innerHTML = isLight ? sunIcon : moonIcon;
 };
 
 // ============== CHAT MANAGEMENT ==============
@@ -4812,8 +5140,12 @@ function renderChats() {
         <div class="chat-item-meta">${chat.message_count || 0} messages</div>
       </div>
       <div class="chat-item-actions">
-        <button class="chat-item-btn" onclick="event.stopPropagation(); renameChat('${chat.id}')" title="Rename">✏️</button>
-        ${chat.id !== 'default' ? `<button class="chat-item-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')" title="Delete">🗑️</button>` : ''}
+        <button class="chat-item-btn" onclick="event.stopPropagation(); renameChat('${chat.id}')" title="Rename">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+        </button>
+        ${chat.id !== 'default' ? `<button class="chat-item-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')" title="Delete">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        </button>` : ''}
       </div>
     </div>
   `).join('');
@@ -4840,8 +5172,31 @@ async function createNewChat() {
 }
 
 async function switchChat(chatId) {
-  // Save current chat messages first
-  await saveChatMessages();
+  // Flush any pending message saves
+  if (saveMessageTimeout) {
+    clearTimeout(saveMessageTimeout);
+    saveMessageTimeout = null;
+  }
+  
+  // Save any remaining pending messages immediately
+  if (pendingMessages.length > 0) {
+    for (const msg of pendingMessages) {
+      try {
+        await fetch(`/api/chats/${currentChatId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp
+          })
+        });
+      } catch (err) {
+        console.error('Failed to save pending message:', err);
+      }
+    }
+    pendingMessages = [];
+  }
   
   currentChatId = chatId;
   sessionId = chatId;  // Update session ID to match chat
@@ -4855,7 +5210,7 @@ async function switchChat(chatId) {
     const response = await fetch(`/api/chats/${chatId}`);
     const chat = await response.json();
     
-    if (chat.messages) {
+    if (chat.messages && chat.messages.length > 0) {
       chat.messages.forEach(msg => {
         addMessage(msg.type, msg.content, { skipSave: true });
       });
@@ -4873,28 +5228,25 @@ async function switchChat(chatId) {
 }
 
 async function saveChatMessages() {
-  if (chatHistory.length === 0) return;
-  
-  try {
-    // Save all messages at once by clearing and re-adding
-    await fetch(`/api/chats/${currentChatId}/messages`, {
-      method: 'DELETE'
-    });
-    
-    for (const msg of chatHistory) {
-      await fetch(`/api/chats/${currentChatId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: currentChatId,
-          type: msg.type,
-          content: msg.content,
-          timestamp: msg.timestamp
-        })
-      });
+  // This is now handled by auto-save in addMessage
+  // Keeping for backward compatibility with page unload
+  if (pendingMessages.length > 0) {
+    for (const msg of pendingMessages) {
+      try {
+        await fetch(`/api/chats/${currentChatId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp
+          })
+        });
+      } catch (err) {
+        console.error('Failed to save message:', err);
+      }
     }
-  } catch (err) {
-    console.error('Failed to save chat messages:', err);
+    pendingMessages = [];
   }
 }
 
@@ -5415,6 +5767,7 @@ window.createChain = createChain;
 window.startChain = startChain;
 window.stopChain = stopChain;
 window.deleteChain = deleteChain;
+window.toggleSection = toggleSection;
 </script>
 </body>
 </html>
