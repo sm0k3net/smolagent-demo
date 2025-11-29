@@ -24,18 +24,38 @@ PROVIDER_CONFIGS = {
         "name": "OpenRouter",
         "api_base": "https://openrouter.ai/api/v1",
         "models": [
-            # Free models
-            {"id": "google/gemma-2-9b-it:free", "name": "Gemma 2 9B", "description": "Google's Gemma 2 9B (Free)", "category": "free"},
-            {"id": "meta-llama/llama-3.2-3b-instruct:free", "name": "Llama 3.2 3B", "description": "Meta's Llama 3.2 3B (Free)", "category": "free"},
-            {"id": "meta-llama/llama-3.1-8b-instruct:free", "name": "Llama 3.1 8B", "description": "Meta's Llama 3.1 8B (Free)", "category": "free"},
-            {"id": "microsoft/phi-3-mini-128k-instruct:free", "name": "Phi-3 Mini 128K", "description": "Microsoft's Phi-3 Mini (Free)", "category": "free"},
-            {"id": "microsoft/phi-3-medium-128k-instruct:free", "name": "Phi-3 Medium 128K", "description": "Microsoft's Phi-3 Medium (Free)", "category": "free"},
-            {"id": "qwen/qwen-2-7b-instruct:free", "name": "Qwen 2 7B", "description": "Alibaba's Qwen 2 7B (Free)", "category": "free"},
-            {"id": "mistralai/mistral-7b-instruct:free", "name": "Mistral 7B", "description": "Mistral 7B Instruct (Free)", "category": "free"},
-            {"id": "openchat/openchat-7b:free", "name": "OpenChat 7B", "description": "OpenChat 7B (Free)", "category": "free"},
-            {"id": "huggingfaceh4/zephyr-7b-beta:free", "name": "Zephyr 7B", "description": "HuggingFace Zephyr 7B (Free)", "category": "free"},
-            {"id": "nousresearch/nous-capybara-7b:free", "name": "Nous Capybara 7B", "description": "Nous Research Capybara (Free)", "category": "free"},
-            # Paid models
+            # ========== FREE MODELS (27 models) ==========
+            # Top-tier free models
+            {"id": "x-ai/grok-4.1-fast:free", "name": "Grok 4.1 Fast", "description": "xAI's best agentic model, 2M context", "category": "free"},
+            {"id": "qwen/qwen3-coder:free", "name": "Qwen3 Coder 480B", "description": "Qwen's MoE code model, 262K context", "category": "free"},
+            {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B", "description": "Google's latest, 128K context, multimodal", "category": "free"},
+            {"id": "tngtech/deepseek-r1t2-chimera:free", "name": "DeepSeek R1T2 Chimera", "description": "TNG's 671B MoE reasoning model", "category": "free"},
+            {"id": "kwaipilot/kat-coder-pro:free", "name": "KAT-Coder-Pro V1", "description": "Kwai's agentic coding model, 256K context", "category": "free"},
+            {"id": "tngtech/deepseek-r1t-chimera:free", "name": "DeepSeek R1T Chimera", "description": "TNG's R1+V3 merge model", "category": "free"},
+            {"id": "z-ai/glm-4.5-air:free", "name": "GLM 4.5 Air", "description": "Z.AI's MoE model with thinking mode", "category": "free"},
+            {"id": "nvidia/nemotron-nano-12b-v2-vl:free", "name": "Nemotron Nano 12B VL", "description": "NVIDIA's multimodal reasoning model", "category": "free"},
+            # Mid-tier free models
+            {"id": "google/gemma-2-9b-it:free", "name": "Gemma 2 9B", "description": "Google's efficient Gemma 2", "category": "free"},
+            {"id": "meta-llama/llama-3.2-3b-instruct:free", "name": "Llama 3.2 3B", "description": "Meta's compact Llama 3.2", "category": "free"},
+            {"id": "meta-llama/llama-3.1-8b-instruct:free", "name": "Llama 3.1 8B", "description": "Meta's Llama 3.1 8B", "category": "free"},
+            {"id": "microsoft/phi-3-mini-128k-instruct:free", "name": "Phi-3 Mini 128K", "description": "Microsoft's compact Phi-3", "category": "free"},
+            {"id": "microsoft/phi-3-medium-128k-instruct:free", "name": "Phi-3 Medium 128K", "description": "Microsoft's Phi-3 Medium", "category": "free"},
+            {"id": "qwen/qwen-2-7b-instruct:free", "name": "Qwen 2 7B", "description": "Alibaba's Qwen 2 7B", "category": "free"},
+            {"id": "qwen/qwen-2.5-7b-instruct:free", "name": "Qwen 2.5 7B", "description": "Alibaba's Qwen 2.5 7B", "category": "free"},
+            {"id": "mistralai/mistral-7b-instruct:free", "name": "Mistral 7B", "description": "Mistral 7B Instruct", "category": "free"},
+            {"id": "openchat/openchat-7b:free", "name": "OpenChat 7B", "description": "OpenChat 7B model", "category": "free"},
+            {"id": "huggingfaceh4/zephyr-7b-beta:free", "name": "Zephyr 7B", "description": "HuggingFace Zephyr 7B", "category": "free"},
+            {"id": "nousresearch/nous-capybara-7b:free", "name": "Nous Capybara 7B", "description": "Nous Research Capybara", "category": "free"},
+            {"id": "deepseek/deepseek-r1:free", "name": "DeepSeek R1", "description": "DeepSeek's reasoning model", "category": "free"},
+            {"id": "deepseek/deepseek-chat-v3-0324:free", "name": "DeepSeek V3 0324", "description": "DeepSeek Chat V3", "category": "free"},
+            {"id": "moonshotai/moonlight-16b-a3b-instruct:free", "name": "Moonlight 16B", "description": "Moonshot AI's model", "category": "free"},
+            {"id": "bytedance-research/ui-tars-72b:free", "name": "UI-TARS 72B", "description": "ByteDance's UI model", "category": "free"},
+            {"id": "allenai/olmo-2-0325-32b-instruct:free", "name": "OLMo 2 32B", "description": "Allen AI's OLMo 2", "category": "free"},
+            {"id": "featherless/qwerky-72b:free", "name": "Qwerky 72B", "description": "Featherless Qwerky model", "category": "free"},
+            {"id": "open-r1/olympiccoder-32b:free", "name": "OlympicCoder 32B", "description": "Open-R1 coding model", "category": "free"},
+            {"id": "rekaai/reka-flash-3:free", "name": "Reka Flash 3", "description": "Reka AI's Flash model", "category": "free"},
+            
+            # ========== PAID MODELS ==========
             {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "description": "Anthropic's latest model", "category": "paid"},
             {"id": "anthropic/claude-3-opus", "name": "Claude 3 Opus", "description": "Most powerful Claude model", "category": "paid"},
             {"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku", "description": "Fast, affordable Claude", "category": "paid"},
@@ -53,7 +73,7 @@ PROVIDER_CONFIGS = {
             {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat (via OR)", "description": "DeepSeek via OpenRouter", "category": "paid"},
             {"id": "deepseek/deepseek-coder", "name": "DeepSeek Coder (via OR)", "description": "DeepSeek Coder via OpenRouter", "category": "paid"},
         ],
-        "default_model": "google/gemma-2-9b-it:free",
+        "default_model": "x-ai/grok-4.1-fast:free",
     },
 }
 
