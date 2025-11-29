@@ -1234,6 +1234,28 @@ async def get_task(task_id: str):
         return JSONResponse(task)
     return JSONResponse({"error": "Task not found"}, status_code=404)
 
+# Active session tracking for cancel requests
+active_sessions: Dict[str, bool] = {}  # session_id/task_id -> cancelled flag
+
+@app.post("/api/cancel")
+async def cancel_activity_session(request: dict):
+    """Cancel an active activity session/task by marking it as cancelled.
+    
+    This is used by the frontend Activity Monitor to stop running tasks.
+    """
+    session_id = request.get("session_id")
+    if not session_id:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+    
+    # Mark session as cancelled - the agent thread should check this
+    active_sessions[session_id] = True
+    
+    # Also try to cancel if it's in task_store
+    if session_id in task_store:
+        task_store[session_id].status = TaskStatus.cancelled
+    
+    return JSONResponse({"success": True, "session_id": session_id, "status": "cancelled"})
+
 # =============================================
 # Task Chain Management Endpoints
 # =============================================
@@ -2079,6 +2101,223 @@ h1 {
   display: flex;
   flex-direction: column;
 }
+/* Activity Monitor Task Tabs */
+.activity-tabs-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.activity-tabs-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.activity-tabs-header::-webkit-scrollbar {
+  height: 4px;
+}
+.activity-tabs-header::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 2px;
+}
+.activity-task-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  color: var(--gray-400);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  max-width: 160px;
+}
+.activity-task-tab:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-200);
+}
+.activity-task-tab.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(139, 92, 246, 0.2) 100%);
+  border-color: var(--primary);
+  color: white;
+}
+.activity-task-tab.running {
+  border-color: var(--secondary);
+}
+.activity-task-tab.running::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--secondary);
+  border-radius: 50%;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.activity-task-tab.completed {
+  border-color: var(--success);
+}
+.activity-task-tab.completed::before {
+  content: '✓';
+  font-size: 0.65rem;
+  color: var(--success);
+}
+.activity-task-tab.failed {
+  border-color: var(--danger);
+}
+.activity-task-tab.failed::before {
+  content: '✗';
+  font-size: 0.65rem;
+  color: var(--danger);
+}
+.activity-task-tab .tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+.activity-task-tab .tab-close {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-400);
+  font-size: 0.65rem;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+.activity-task-tab:hover .tab-close {
+  opacity: 1;
+}
+.activity-task-tab .tab-close:hover {
+  background: var(--danger);
+  color: white;
+}
+.activity-panels {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+.activity-panel {
+  display: none;
+  flex-direction: column;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+.activity-panel.active {
+  display: flex;
+}
+.activity-panel-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  min-height: 0;
+}
+#sidebar.expanded .activity-panel-log {
+  padding: 0.75rem;
+}
+.activity-panel-log::-webkit-scrollbar {
+  width: 6px;
+}
+.activity-panel-log::-webkit-scrollbar-track {
+  background: transparent;
+}
+.activity-panel-log::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.activity-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.activity-panel-stats {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.7rem;
+  color: var(--gray-400);
+}
+.activity-panel-stats .stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.activity-panel-stats .stat-value {
+  color: var(--gray-200);
+  font-weight: 600;
+}
+.activity-panel-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.activity-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.6rem;
+  border: none;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.activity-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.activity-btn-kill {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+.activity-btn-kill:hover {
+  background: var(--danger);
+  color: white;
+}
+.activity-btn-download {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary-light);
+}
+.activity-btn-download:hover {
+  background: var(--primary);
+  color: white;
+}
+.no-tasks-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--gray-500);
+  font-size: 0.85rem;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+}
+.no-tasks-message svg {
+  width: 48px;
+  height: 48px;
+  opacity: 0.3;
+}
+/* Legacy activity-log for backwards compatibility */
 #activity-log {
   flex: 1;
   overflow-y: auto;
@@ -3876,21 +4115,20 @@ main {
     
     <!-- Activity Tab Content -->
     <div class="tab-content active" id="tab-activity">
-      <div class="sidebar-header"><span class="header-title"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> Activity Monitor</span></div>
-      <div id="activity-log"></div>
-      <div class="sidebar-stats">
-        <div class="stats-grid">
-          <div class="stat-item">
-            <div class="stat-value" id="stat-steps">0</div>
-            <div class="stat-label">Steps</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value" id="stat-tools">0</div>
-            <div class="stat-label">Tools</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value" id="stat-duration">0s</div>
-            <div class="stat-label">Duration</div>
+      <div class="sidebar-header">
+        <span class="header-title"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> Activity Monitor</span>
+      </div>
+      <div class="activity-tabs-container">
+        <div class="activity-tabs-header" id="activity-tabs-header">
+          <!-- Task tabs will be added here dynamically -->
+        </div>
+        <div class="activity-panels" id="activity-panels">
+          <div class="no-tasks-message" id="no-activity-message">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+            <span>No active tasks</span>
+            <span style="font-size: 0.75rem; opacity: 0.7;">Send a message to start a task</span>
           </div>
         </div>
       </div>
@@ -4238,14 +4476,20 @@ const clearBtn = document.getElementById('clear-btn');
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarResize = document.getElementById('sidebar-resize');
-const activityLog = document.getElementById('activity-log');
+const activityTabsHeader = document.getElementById('activity-tabs-header');
+const activityPanels = document.getElementById('activity-panels');
+const noActivityMessage = document.getElementById('no-activity-message');
 const reportToggle = document.getElementById('report-toggle');
 const reportCheckbox = document.getElementById('report-mode-checkbox');
 const fileInput = document.getElementById('file-input');
 const attachedFilesDiv = document.getElementById('attached-files');
 const backgroundTaskCheckbox = document.getElementById('background-task-checkbox');
 
-// Stats
+// Activity Monitor - Multi-task management
+const activityTasks = {};  // taskId -> { logs: [], status: 'running'|'completed'|'failed', startTime, stepCount, toolCount, prompt }
+let currentActivityTaskId = null;
+
+// Stats (legacy compatibility)
 let stepCount = 0;
 let toolCount = 0;
 let startTime = null;
@@ -5236,12 +5480,257 @@ const activityIcons = {
   warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
 };
 
-function addActivity(type, title, content, details = null) {
-  const item = document.createElement('div');
-  item.className = `activity-item activity-${type}`;
+// ============================================
+// Activity Monitor - Multi-Task Management
+// ============================================
+
+function createActivityTask(taskId, prompt) {
+  const shortPrompt = prompt.length > 40 ? prompt.substring(0, 40) + '...' : prompt;
   
+  activityTasks[taskId] = {
+    id: taskId,
+    prompt: prompt,
+    shortPrompt: shortPrompt,
+    logs: [],
+    status: 'running',
+    startTime: Date.now(),
+    stepCount: 0,
+    toolCount: 0,
+    durationInterval: null
+  };
+  
+  // Hide no-tasks message
+  noActivityMessage.style.display = 'none';
+  
+  // Create tab
+  const tab = document.createElement('div');
+  tab.className = 'activity-task-tab active running';
+  tab.id = `activity-tab-${taskId}`;
+  tab.onclick = (e) => {
+    if (!e.target.classList.contains('tab-close')) {
+      switchActivityTask(taskId);
+    }
+  };
+  tab.innerHTML = `
+    <span class="tab-label" title="${escapeHtml(prompt)}">${escapeHtml(shortPrompt)}</span>
+    <span class="tab-close" onclick="closeActivityTask('${taskId}')" title="Close tab">✕</span>
+  `;
+  
+  // Deactivate other tabs
+  document.querySelectorAll('.activity-task-tab').forEach(t => t.classList.remove('active'));
+  activityTabsHeader.appendChild(tab);
+  
+  // Create panel
+  const panel = document.createElement('div');
+  panel.className = 'activity-panel active';
+  panel.id = `activity-panel-${taskId}`;
+  panel.innerHTML = `
+    <div class="activity-panel-log" id="activity-log-${taskId}"></div>
+    <div class="activity-panel-footer">
+      <div class="activity-panel-stats">
+        <div class="stat"><span>Steps:</span> <span class="stat-value" id="stat-steps-${taskId}">0</span></div>
+        <div class="stat"><span>Tools:</span> <span class="stat-value" id="stat-tools-${taskId}">0</span></div>
+        <div class="stat"><span>Time:</span> <span class="stat-value" id="stat-duration-${taskId}">0s</span></div>
+      </div>
+      <div class="activity-panel-actions">
+        <button class="activity-btn activity-btn-kill" id="kill-btn-${taskId}" onclick="killActivityTask('${taskId}')" title="Stop task">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+          Stop
+        </button>
+        <button class="activity-btn activity-btn-download" onclick="downloadActivityLogs('${taskId}')" title="Download logs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Logs
+        </button>
+      </div>
+    </div>
+  `;
+  
+  // Deactivate other panels
+  document.querySelectorAll('.activity-panel').forEach(p => p.classList.remove('active'));
+  activityPanels.appendChild(panel);
+  
+  currentActivityTaskId = taskId;
+  
+  // Start duration timer
+  activityTasks[taskId].durationInterval = setInterval(() => {
+    updateTaskDuration(taskId);
+  }, 1000);
+  
+  return activityTasks[taskId];
+}
+
+function switchActivityTask(taskId) {
+  if (!activityTasks[taskId]) return;
+  
+  // Update tabs
+  document.querySelectorAll('.activity-task-tab').forEach(t => t.classList.remove('active'));
+  const tab = document.getElementById(`activity-tab-${taskId}`);
+  if (tab) tab.classList.add('active');
+  
+  // Update panels
+  document.querySelectorAll('.activity-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById(`activity-panel-${taskId}`);
+  if (panel) panel.classList.add('active');
+  
+  currentActivityTaskId = taskId;
+}
+
+function closeActivityTask(taskId) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  // Clear timer
+  if (task.durationInterval) {
+    clearInterval(task.durationInterval);
+  }
+  
+  // Remove tab and panel
+  const tab = document.getElementById(`activity-tab-${taskId}`);
+  const panel = document.getElementById(`activity-panel-${taskId}`);
+  if (tab) tab.remove();
+  if (panel) panel.remove();
+  
+  delete activityTasks[taskId];
+  
+  // Switch to another task or show no-tasks message
+  const remainingTasks = Object.keys(activityTasks);
+  if (remainingTasks.length > 0) {
+    switchActivityTask(remainingTasks[remainingTasks.length - 1]);
+  } else {
+    currentActivityTaskId = null;
+    noActivityMessage.style.display = 'flex';
+  }
+}
+
+async function killActivityTask(taskId) {
+  const task = activityTasks[taskId];
+  if (!task || task.status !== 'running') return;
+  
+  if (!confirm('Are you sure you want to stop this task?')) return;
+  
+  try {
+    // Send cancel request to backend
+    const response = await fetch('/api/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: taskId })
+    });
+    
+    if (response.ok) {
+      updateTaskStatus(taskId, 'cancelled');
+      addActivity('error', 'Task Cancelled', 'Task was stopped by user', null, taskId);
+    } else {
+      addActivity('warning', 'Cancel Failed', 'Could not cancel task - it may have already completed', null, taskId);
+    }
+  } catch (err) {
+    console.error('Failed to cancel task:', err);
+    addActivity('warning', 'Cancel Error', 'Failed to send cancel request', null, taskId);
+  }
+}
+
+function downloadActivityLogs(taskId) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  const logs = task.logs.map(log => {
+    return `[${log.time}] [${log.type.toUpperCase()}] ${log.title}\\n${log.content}${log.details ? '\\n' + log.details : ''}`;
+  }).join('\\n\\n' + '='.repeat(60) + '\\n\\n');
+  
+  const header = `Activity Log Export
+==================
+Task: ${task.prompt}
+Status: ${task.status}
+Started: ${new Date(task.startTime).toISOString()}
+Steps: ${task.stepCount}
+Tools: ${task.toolCount}
+Duration: ${formatDuration(Date.now() - task.startTime)}
+
+${'='.repeat(60)}
+
+`;
+  
+  const content = header + logs;
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `activity-log-${taskId}-${new Date().toISOString().slice(0,10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function updateTaskStatus(taskId, status) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  task.status = status;
+  
+  const tab = document.getElementById(`activity-tab-${taskId}`);
+  if (tab) {
+    tab.classList.remove('running', 'completed', 'failed', 'cancelled');
+    tab.classList.add(status === 'cancelled' ? 'failed' : status);
+  }
+  
+  const killBtn = document.getElementById(`kill-btn-${taskId}`);
+  if (killBtn && status !== 'running') {
+    killBtn.style.display = 'none';
+  }
+  
+  if (status !== 'running' && task.durationInterval) {
+    clearInterval(task.durationInterval);
+  }
+}
+
+function updateTaskDuration(taskId) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  const elapsed = Math.floor((Date.now() - task.startTime) / 1000);
+  const durationEl = document.getElementById(`stat-duration-${taskId}`);
+  if (durationEl) {
+    durationEl.textContent = formatDuration(elapsed * 1000);
+  }
+}
+
+function formatDuration(ms) {
+  const secs = Math.floor(ms / 1000);
+  const mins = Math.floor(secs / 60);
+  const remainingSecs = secs % 60;
+  return mins > 0 ? `${mins}m ${remainingSecs}s` : `${secs}s`;
+}
+
+function updateTaskStats(taskId, stepCount, toolCount) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  task.stepCount = stepCount;
+  task.toolCount = toolCount;
+  
+  const stepsEl = document.getElementById(`stat-steps-${taskId}`);
+  const toolsEl = document.getElementById(`stat-tools-${taskId}`);
+  if (stepsEl) stepsEl.textContent = stepCount;
+  if (toolsEl) toolsEl.textContent = toolCount;
+}
+
+function addActivity(type, title, content, details = null, taskId = null) {
+  // Use current task if not specified
+  const targetTaskId = taskId || currentActivityTaskId;
+  
+  // If no task exists, create one
+  if (!targetTaskId || !activityTasks[targetTaskId]) {
+    return; // No active task to add activity to
+  }
+  
+  const task = activityTasks[targetTaskId];
   const time = new Date().toLocaleTimeString('en-US', { hour12: false });
   const icon = activityIcons[type] || activityIcons.step;
+  
+  // Store in task logs
+  task.logs.push({ type, title, content, details, time });
+  
+  // Create DOM element
+  const item = document.createElement('div');
+  item.className = `activity-item activity-${type}`;
   
   item.innerHTML = `
     <div class="activity-icon">${icon}</div>
@@ -5252,10 +5741,11 @@ function addActivity(type, title, content, details = null) {
     <div class="activity-content">${content}${details ? '<pre>' + escapeHtml(details) + '</pre>' : ''}</div>
   `;
   
-  activityLog.appendChild(item);
-  activityLog.scrollTop = activityLog.scrollHeight;
-  
-  // Note: Counts are now updated from server data in ws.onmessage
+  const logEl = document.getElementById(`activity-log-${targetTaskId}`);
+  if (logEl) {
+    logEl.appendChild(item);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 }
 
 function escapeHtml(text) {
@@ -5266,22 +5756,25 @@ function escapeHtml(text) {
   return div.innerHTML + (str.length > 1000 ? '\\n... (truncated)' : '');
 }
 
-function startTimer() {
+// Legacy timer functions (for backwards compatibility)
+function startTimer(taskId = null) {
+  const id = taskId || currentActivityTaskId;
+  if (id && activityTasks[id]) {
+    activityTasks[id].startTime = Date.now();
+    activityTasks[id].stepCount = 0;
+    activityTasks[id].toolCount = 0;
+  }
+  // Also update legacy variables
   startTime = Date.now();
   stepCount = 0;
   toolCount = 0;
-  activityLog.innerHTML = '';
-  
-  if (durationInterval) clearInterval(durationInterval);
-  durationInterval = setInterval(() => {
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const mins = Math.floor(elapsed / 60);
-    const secs = elapsed % 60;
-    document.getElementById('stat-duration').textContent = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-  }, 1000);
 }
 
-function stopTimer() {
+function stopTimer(taskId = null) {
+  const id = taskId || currentActivityTaskId;
+  if (id && activityTasks[id] && activityTasks[id].durationInterval) {
+    clearInterval(activityTasks[id].durationInterval);
+  }
   if (durationInterval) clearInterval(durationInterval);
 }
 
@@ -5522,21 +6015,20 @@ ws.onmessage = (event) => {
     return;
   }
   
+  // Get task_id from message for activity routing
+  const msgTaskId = data.task_id;
+  
   // Check if message belongs to different chat - store for later
   const msgChatId = data.chat_id;
   if (msgChatId && msgChatId !== currentChatId) {
     // Queue message for the correct chat (will be loaded when chat is switched)
     // For now, skip showing in current chat
     console.log(`Message for chat ${msgChatId} received while in chat ${currentChatId}`);
-    // Still process activity and stats updates
-    if (data.type === 'activity') {
-      if (typeof data.tool_count === 'number') {
-        toolCount = data.tool_count;
-        document.getElementById('stat-tools').textContent = toolCount;
-      }
-      if (typeof data.step_count === 'number') {
-        stepCount = data.step_count;
-        document.getElementById('stat-steps').textContent = stepCount;
+    // Still process activity and stats updates for the correct task
+    if (data.type === 'activity' && msgTaskId && activityTasks[msgTaskId]) {
+      addActivity(data.activity_type, data.title || '', data.content, data.details, msgTaskId);
+      if (typeof data.tool_count === 'number' || typeof data.step_count === 'number') {
+        updateTaskStats(msgTaskId, data.step_count || 0, data.tool_count || 0);
       }
     }
     return;
@@ -5551,10 +6043,18 @@ ws.onmessage = (event) => {
       addMessage('progress', data.content);
     }
   } else if (data.type === 'activity') {
-    // Activity log update from agent steps - use server-provided counts
-    addActivity(data.activity_type, data.title || '', data.content, data.details);
+    // Activity log update from agent steps - route to correct task
+    const targetTaskId = msgTaskId || currentActivityTaskId;
+    addActivity(data.activity_type, data.title || '', data.content, data.details, targetTaskId);
     
-    // Update counters from server if provided
+    // Update task-specific stats if provided
+    if (targetTaskId && activityTasks[targetTaskId]) {
+      if (typeof data.tool_count === 'number' || typeof data.step_count === 'number') {
+        updateTaskStats(targetTaskId, data.step_count || 0, data.tool_count || 0);
+      }
+    }
+    
+    // Update legacy global counters
     if (typeof data.tool_count === 'number') {
       toolCount = data.tool_count;
       document.getElementById('stat-tools').textContent = toolCount;
@@ -5564,14 +6064,30 @@ ws.onmessage = (event) => {
       document.getElementById('stat-steps').textContent = stepCount;
     }
   } else if (data.type === 'final') {
-    stopTimer();
+    const targetTaskId = msgTaskId || currentActivityTaskId;
+    stopTimer(targetTaskId);
+    
+    // Update task status to completed
+    if (targetTaskId && activityTasks[targetTaskId]) {
+      updateTaskStatus(targetTaskId, 'completed');
+      addActivity('complete', 'Task Completed', 'Agent finished processing', null, targetTaskId);
+    }
+    
     // Remove progress message if exists
     const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
     if (progressMsg) progressMsg.remove();
     addMessage('agent', data.content);
+  } else if (data.type === 'error') {
+    const targetTaskId = msgTaskId || currentActivityTaskId;
+    if (targetTaskId && activityTasks[targetTaskId]) {
+      updateTaskStatus(targetTaskId, 'failed');
+      addActivity('error', 'Task Failed', data.content || 'An error occurred', null, targetTaskId);
+    }
+    addMessage('agent', data.content || 'An error occurred');
   } else if (data.type === 'report') {
     addMessage('report', data.content, { html: data.html, markdown: data.markdown });
-    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download');
+    const targetTaskId = msgTaskId || currentActivityTaskId;
+    addActivity('tool-result', '📋 Report Generated', 'Professional security report is ready for download', null, targetTaskId);
   } else if (data.type === 'report_mode') {
     addMessage('system', data.content);
   } else {
@@ -5595,14 +6111,19 @@ async function sendMessage() {
   }
   addMessage('user', displayContent);
   
-  startTimer();
-  addActivity('start', 'Task Started', content.substring(0, 100) + (content.length > 100 ? '...' : ''));
+  // Create a new activity task for this message
+  const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  createActivityTask(taskId, content);
   
-  // Prepare message payload
+  startTimer(taskId);
+  addActivity('start', 'Task Started', content.substring(0, 100) + (content.length > 100 ? '...' : ''), null, taskId);
+  
+  // Prepare message payload with task_id for activity tracking
   const payload = {
     content: content,
     session_id: sessionId,
     chat_id: currentChatId,
+    task_id: taskId,
     report_mode: reportCheckbox.checked,
     background_task: isBackgroundTask,
     files: attachedFiles.map(f => f.filename)
@@ -5610,7 +6131,7 @@ async function sendMessage() {
   
   // Upload files first if any
   if (attachedFiles.length > 0) {
-    addActivity('tool', '📤 Uploading Files', `Uploading ${attachedFiles.length} file(s) for analysis`);
+    addActivity('tool', '📤 Uploading Files', `Uploading ${attachedFiles.length} file(s) for analysis`, null, taskId);
     
     for (const file of attachedFiles) {
       try {
@@ -5628,11 +6149,11 @@ async function sendMessage() {
           throw new Error('Upload failed');
         }
       } catch (err) {
-        addActivity('error', '❌ Upload Error', `Failed to upload ${file.filename}`);
+        addActivity('error', '❌ Upload Error', `Failed to upload ${file.filename}`, null, taskId);
       }
     }
     
-    addActivity('tool-result', '✅ Files Uploaded', 'Files ready for analysis');
+    addActivity('tool-result', '✅ Files Uploaded', 'Files ready for analysis', null, taskId);
   }
   
   // Send message via WebSocket
@@ -5652,6 +6173,12 @@ async function sendMessage() {
     document.querySelector('.sidebar-tab[data-tab="tasks"]').classList.add('active');
     document.getElementById('tab-tasks').classList.add('active');
     startTaskPolling();
+  } else {
+    // Switch to Activity tab to show the real-time progress
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('.sidebar-tab[data-tab="activity"]').classList.add('active');
+    document.getElementById('tab-activity').classList.add('active');
   }
   
   // Auto-expand sidebar when task starts
@@ -6413,6 +6940,7 @@ async def ws_endpoint(ws: WebSocket):
             msg_content = msg_data.get("content", raw_msg)
             session_id = msg_data.get("session_id", "default")
             chat_id = msg_data.get("chat_id", "default")
+            task_id = msg_data.get("task_id")  # Activity task tracking ID
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
             background_task = msg_data.get("background_task", False)
@@ -6568,8 +7096,9 @@ The report should be comprehensive and professional, suitable for executive stak
             
             # Stream real agent execution with proper step callbacks
             async def run_with_real_streaming():
-                # Capture chat_id for this request
+                # Capture chat_id and task_id for this request
                 request_chat_id = chat_id
+                request_task_id = task_id
                 
                 # Send initial progress
                 await ws.send_text(json.dumps({
@@ -6577,13 +7106,15 @@ The report should be comprehensive and professional, suitable for executive stak
                     "activity_type": "step",
                     "title": "🚀 Task Started",
                     "content": f"Processing: {msg_content[:100]}...",
-                    "chat_id": request_chat_id
+                    "chat_id": request_chat_id,
+                    "task_id": request_task_id
                 }))
                 
                 await ws.send_text(json.dumps({
                     "type": "progress",
                     "content": "🔄 Agent analyzing your request...",
-                    "chat_id": request_chat_id
+                    "chat_id": request_chat_id,
+                    "task_id": request_task_id
                 }))
                 
                 # Queue for thread-safe communication between agent thread and async handler
@@ -6719,7 +7250,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                # Send activity update with counts and chat_id
+                                # Send activity update with counts, chat_id and task_id
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": event["activity_type"],
@@ -6727,14 +7258,16 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "content": event["content"],
                                     "tool_count": last_tool_count,
                                     "step_count": last_step_count,
-                                    "chat_id": request_chat_id
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
                                 }))
                                 
                                 # Also send progress update for chat
                                 await ws.send_text(json.dumps({
                                     "type": "progress",
                                     "content": event["title"],
-                                    "chat_id": request_chat_id
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
                                 }))
                             
                             elif event["type"] == "complete":
@@ -6749,7 +7282,8 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
                                     "tool_count": last_tool_count,
                                     "step_count": last_step_count,
-                                    "chat_id": request_chat_id
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
                                 }))
                                 break
                             
@@ -6759,12 +7293,14 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "activity_type": "error",
                                     "title": "❌ Error Occurred",
                                     "content": event["error"],
-                                    "chat_id": request_chat_id
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
                                 }))
                                 await ws.send_text(json.dumps({
-                                    "type": "final",
+                                    "type": "error",
                                     "content": f"Error: {event['error']}",
-                                    "chat_id": request_chat_id
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
                                 }))
                                 return
                         
@@ -6782,7 +7318,8 @@ The report should be comprehensive and professional, suitable for executive stak
                             "activity_type": "error", 
                             "title": "❌ Error",
                             "content": str(e),
-                            "chat_id": request_chat_id
+                            "chat_id": request_chat_id,
+                            "task_id": request_task_id
                         }))
                         break
                 
@@ -6797,7 +7334,8 @@ The report should be comprehensive and professional, suitable for executive stak
                             "activity_type": "tool",
                             "title": "📋 Generating Report",
                             "content": "Creating professional security report...",
-                            "chat_id": request_chat_id
+                            "chat_id": request_chat_id,
+                            "task_id": request_task_id
                         }))
                         
                         html_report = generate_html_report()
@@ -6806,7 +7344,8 @@ The report should be comprehensive and professional, suitable for executive stak
                         await ws.send_text(json.dumps({
                             "type": "final",
                             "content": str(final_response),
-                            "chat_id": request_chat_id
+                            "chat_id": request_chat_id,
+                            "task_id": request_task_id
                         }))
                         
                         await ws.send_text(json.dumps({
@@ -6814,7 +7353,8 @@ The report should be comprehensive and professional, suitable for executive stak
                             "content": "📋 Professional security report has been generated.",
                             "html": html_report,
                             "markdown": md_report,
-                            "chat_id": request_chat_id
+                            "chat_id": request_chat_id,
+                            "task_id": request_task_id
                         }))
                         return
                 
@@ -6822,7 +7362,8 @@ The report should be comprehensive and professional, suitable for executive stak
                 await ws.send_text(json.dumps({
                     "type": "final",
                     "content": str(final_response) if final_response else "Task completed",
-                    "chat_id": request_chat_id
+                    "chat_id": request_chat_id,
+                    "task_id": request_task_id
                 }))
             
             await run_with_real_streaming()
