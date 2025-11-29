@@ -26,6 +26,365 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Literal
 
+# Database storage support (optional)
+try:
+    import psycopg2
+    from psycopg2 import sql
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
+    psycopg2 = None
+
+
+class DatabaseStorage:
+    """PostgreSQL/Supabase storage backend for command history and agent memory."""
+    
+    def __init__(self):
+        self.connection = None
+        self.config = {}
+        self.enabled = False
+        self.tables_initialized = False
+    
+    def configure(self, config: Dict[str, Any]) -> bool:
+        """Configure database connection settings."""
+        self.config = {
+            "host": config.get("host", "localhost"),
+            "port": config.get("port", 5432),
+            "database": config.get("database", "owasp_agent"),
+            "user": config.get("user", "postgres"),
+            "password": config.get("password", ""),
+            "ssl_mode": config.get("ssl_mode", "prefer"),
+            "connection_type": config.get("connection_type", "local"),  # local, supabase
+        }
+        return True
+    
+    def get_connection_string(self) -> str:
+        """Generate PostgreSQL connection string."""
+        ssl_param = ""
+        if self.config.get("ssl_mode") and self.config["ssl_mode"] != "disable":
+            ssl_param = f"?sslmode={self.config['ssl_mode']}"
+        
+        return f"postgresql://{self.config['user']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}{ssl_param}"
+    
+    def connect(self) -> tuple[bool, str]:
+        """Establish database connection."""
+        if not HAS_PSYCOPG2:
+            return False, "psycopg2 not installed. Run: pip install psycopg2-binary"
+        
+        try:
+            ssl_mode = self.config.get("ssl_mode", "prefer")
+            self.connection = psycopg2.connect(
+                host=self.config["host"],
+                port=self.config["port"],
+                database=self.config["database"],
+                user=self.config["user"],
+                password=self.config["password"],
+                sslmode=ssl_mode,
+                connect_timeout=10
+            )
+            self.connection.autocommit = True
+            self.enabled = True
+            return True, "Connected successfully"
+        except Exception as e:
+            self.enabled = False
+            return False, str(e)
+    
+    def disconnect(self):
+        """Close database connection."""
+        if self.connection:
+            try:
+                self.connection.close()
+            except:
+                pass
+            self.connection = None
+        self.enabled = False
+    
+    def test_connection(self) -> tuple[bool, str]:
+        """Test database connection without persisting."""
+        if not HAS_PSYCOPG2:
+            return False, "psycopg2 not installed. Run: pip install psycopg2-binary"
+        
+        try:
+            ssl_mode = self.config.get("ssl_mode", "prefer")
+            conn = psycopg2.connect(
+                host=self.config["host"],
+                port=self.config["port"],
+                database=self.config["database"],
+                user=self.config["user"],
+                password=self.config["password"],
+                sslmode=ssl_mode,
+                connect_timeout=10
+            )
+            
+            # Test with a simple query
+            with conn.cursor() as cur:
+                cur.execute("SELECT version();")
+                version = cur.fetchone()[0]
+            
+            conn.close()
+            return True, f"Connected! PostgreSQL {version.split(',')[0].replace('PostgreSQL ', '')}"
+        except Exception as e:
+            return False, str(e)
+    
+    def initialize_tables(self) -> tuple[bool, str]:
+        """Create necessary tables if they don't exist."""
+        if not self.connection or not self.enabled:
+            return False, "Not connected to database"
+        
+        try:
+            with self.connection.cursor() as cur:
+                # Command history table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS command_history (
+                        id SERIAL PRIMARY KEY,
+                        session_id VARCHAR(50),
+                        task_id VARCHAR(50),
+                        command TEXT NOT NULL,
+                        command_type VARCHAR(50),
+                        tool_name VARCHAR(100),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Command outputs table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS command_outputs (
+                        id SERIAL PRIMARY KEY,
+                        command_id INTEGER REFERENCES command_history(id) ON DELETE CASCADE,
+                        output TEXT,
+                        output_type VARCHAR(50),
+                        status VARCHAR(20),
+                        execution_time_ms INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Agent memory/context table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_memory (
+                        id SERIAL PRIMARY KEY,
+                        session_id VARCHAR(50),
+                        key VARCHAR(255) NOT NULL,
+                        value TEXT,
+                        memory_type VARCHAR(50),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(session_id, key)
+                    );
+                """)
+                
+                # Task history table  
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS task_history (
+                        id SERIAL PRIMARY KEY,
+                        task_id VARCHAR(50) UNIQUE NOT NULL,
+                        prompt TEXT NOT NULL,
+                        result TEXT,
+                        status VARCHAR(20),
+                        tool_count INTEGER DEFAULT 0,
+                        step_count INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        started_at TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        error TEXT
+                    );
+                """)
+                
+                # Chat history table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS chat_history (
+                        id SERIAL PRIMARY KEY,
+                        chat_id VARCHAR(50) NOT NULL,
+                        message_role VARCHAR(20) NOT NULL,
+                        message_content TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Create indexes
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_command_history_session ON command_history(session_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_command_history_task ON command_history(task_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_memory_session ON agent_memory(session_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_task_history_status ON task_history(status);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_chat ON chat_history(chat_id);")
+                
+            self.tables_initialized = True
+            return True, "Tables initialized successfully"
+        except Exception as e:
+            return False, str(e)
+    
+    def log_command(self, session_id: str, task_id: str, command: str, 
+                    command_type: str = "prompt", tool_name: str = None) -> Optional[int]:
+        """Log a command to the database."""
+        if not self.enabled or not self.connection:
+            return None
+        
+        try:
+            with self.connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO command_history (session_id, task_id, command, command_type, tool_name)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id;
+                """, (session_id, task_id, command, command_type, tool_name))
+                return cur.fetchone()[0]
+        except Exception as e:
+            print(f"Error logging command: {e}")
+            return None
+    
+    def log_output(self, command_id: int, output: str, output_type: str = "text",
+                   status: str = "success", execution_time_ms: int = None) -> bool:
+        """Log command output to the database."""
+        if not self.enabled or not self.connection or not command_id:
+            return False
+        
+        try:
+            with self.connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO command_outputs (command_id, output, output_type, status, execution_time_ms)
+                    VALUES (%s, %s, %s, %s, %s);
+                """, (command_id, output, output_type, status, execution_time_ms))
+            return True
+        except Exception as e:
+            print(f"Error logging output: {e}")
+            return False
+    
+    def save_memory(self, session_id: str, key: str, value: str, memory_type: str = "context") -> bool:
+        """Save or update agent memory."""
+        if not self.enabled or not self.connection:
+            return False
+        
+        try:
+            with self.connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_memory (session_id, key, value, memory_type, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (session_id, key) 
+                    DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP;
+                """, (session_id, key, value, memory_type))
+            return True
+        except Exception as e:
+            print(f"Error saving memory: {e}")
+            return False
+    
+    def get_memory(self, session_id: str, key: str = None) -> Optional[Dict]:
+        """Retrieve agent memory."""
+        if not self.enabled or not self.connection:
+            return None
+        
+        try:
+            with self.connection.cursor(cursor_factory=RealDictCursor) as cur:
+                if key:
+                    cur.execute("""
+                        SELECT * FROM agent_memory WHERE session_id = %s AND key = %s;
+                    """, (session_id, key))
+                    return cur.fetchone()
+                else:
+                    cur.execute("""
+                        SELECT * FROM agent_memory WHERE session_id = %s;
+                    """, (session_id,))
+                    return cur.fetchall()
+        except Exception as e:
+            print(f"Error getting memory: {e}")
+            return None
+    
+    def get_command_history(self, session_id: str = None, task_id: str = None, 
+                            limit: int = 100) -> list:
+        """Retrieve command history."""
+        if not self.enabled or not self.connection:
+            return []
+        
+        try:
+            with self.connection.cursor(cursor_factory=RealDictCursor) as cur:
+                query = "SELECT * FROM command_history"
+                params = []
+                conditions = []
+                
+                if session_id:
+                    conditions.append("session_id = %s")
+                    params.append(session_id)
+                if task_id:
+                    conditions.append("task_id = %s")
+                    params.append(task_id)
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY created_at DESC LIMIT %s"
+                params.append(limit)
+                
+                cur.execute(query, params)
+                return cur.fetchall()
+        except Exception as e:
+            print(f"Error getting command history: {e}")
+            return []
+    
+    def save_task(self, task_data: Dict) -> bool:
+        """Save task to database."""
+        if not self.enabled or not self.connection:
+            return False
+        
+        try:
+            with self.connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO task_history (task_id, prompt, result, status, tool_count, step_count, 
+                                            created_at, started_at, completed_at, error)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (task_id) 
+                    DO UPDATE SET 
+                        result = EXCLUDED.result,
+                        status = EXCLUDED.status,
+                        tool_count = EXCLUDED.tool_count,
+                        step_count = EXCLUDED.step_count,
+                        started_at = EXCLUDED.started_at,
+                        completed_at = EXCLUDED.completed_at,
+                        error = EXCLUDED.error;
+                """, (
+                    task_data.get("id"),
+                    task_data.get("prompt"),
+                    task_data.get("result"),
+                    task_data.get("status"),
+                    task_data.get("tool_count", 0),
+                    task_data.get("step_count", 0),
+                    task_data.get("created_at"),
+                    task_data.get("started_at"),
+                    task_data.get("completed_at"),
+                    task_data.get("error")
+                ))
+            return True
+        except Exception as e:
+            print(f"Error saving task: {e}")
+            return False
+    
+    def get_stats(self) -> Dict:
+        """Get database statistics."""
+        if not self.enabled or not self.connection:
+            return {"enabled": False}
+        
+        try:
+            with self.connection.cursor() as cur:
+                stats = {"enabled": True}
+                
+                cur.execute("SELECT COUNT(*) FROM command_history;")
+                stats["total_commands"] = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM task_history;")
+                stats["total_tasks"] = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM agent_memory;")
+                stats["total_memories"] = cur.fetchone()[0]
+                
+                cur.execute("SELECT COUNT(*) FROM chat_history;")
+                stats["total_messages"] = cur.fetchone()[0]
+                
+                return stats
+        except Exception as e:
+            return {"enabled": True, "error": str(e)}
+
+
+# Global database storage instance
+db_storage = DatabaseStorage()
+
 
 # Task management enums and models
 class TaskStatus(str, Enum):
@@ -113,6 +472,53 @@ scheduler_stop_event = threading.Event()
 # Custom context/instructions storage
 CUSTOM_CONTEXT_FILE = os.path.join(os.path.dirname(__file__), ".custom_context.txt")
 custom_context: str = ""
+
+# Database storage settings with file persistence
+DATABASE_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".database_settings.json")
+database_settings_store: Dict[str, Any] = {
+    "enabled": False,
+    "connection_type": "local",  # local, supabase
+    "host": "localhost",
+    "port": 5432,
+    "database": "owasp_agent",
+    "user": "postgres",
+    "password": "",
+    "ssl_mode": "prefer",
+    "auto_connect": False,
+}
+
+def load_database_settings_from_file():
+    """Load database settings from file."""
+    global database_settings_store
+    if os.path.exists(DATABASE_SETTINGS_FILE):
+        try:
+            with open(DATABASE_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+                database_settings_store.update(loaded)
+        except Exception as e:
+            print(f"Error loading database settings: {e}")
+
+def save_database_settings_to_file():
+    """Save database settings to file."""
+    try:
+        with open(DATABASE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(database_settings_store, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving database settings: {e}")
+        return False
+
+def initialize_database_connection():
+    """Initialize database connection from saved settings if auto-connect is enabled."""
+    global db_storage
+    if database_settings_store.get("auto_connect") and database_settings_store.get("enabled"):
+        db_storage.configure(database_settings_store)
+        success, msg = db_storage.connect()
+        if success:
+            db_storage.initialize_tables()
+            print(f"Database connected: {msg}")
+        else:
+            print(f"Database connection failed: {msg}")
 
 def load_chats_from_file():
     """Load chat history from file."""
@@ -585,6 +991,10 @@ async def startup():
             load_custom_context()
             # Load task chains
             load_chains_from_file()
+            # Load database settings
+            load_database_settings_from_file()
+            # Initialize database connection if enabled
+            initialize_database_connection()
             # Start scheduler
             start_scheduler()
             # Start chain monitor
@@ -816,6 +1226,141 @@ async def get_provider_api_key_status(provider: str):
         "has_key": has_key,
         "masked_key": masked
     })
+
+# ============== DATABASE STORAGE ENDPOINTS ==============
+
+class DatabaseConfig(BaseModel):
+    enabled: bool = False
+    connection_type: str = "local"  # local, supabase
+    host: str = "localhost"
+    port: int = 5432
+    database: str = "owasp_agent"
+    user: str = "postgres"
+    password: str = ""
+    ssl_mode: str = "prefer"
+    auto_connect: bool = False
+
+@app.get("/api/database/settings")
+async def get_database_settings():
+    """Get current database settings (password masked)."""
+    settings = database_settings_store.copy()
+    if settings.get("password"):
+        settings["password"] = "••••••••"
+        settings["has_password"] = True
+    else:
+        settings["has_password"] = False
+    settings["connected"] = db_storage.enabled
+    settings["psycopg2_available"] = HAS_PSYCOPG2
+    return JSONResponse(settings)
+
+@app.post("/api/database/settings")
+async def update_database_settings(config: DatabaseConfig):
+    """Update database settings."""
+    global database_settings_store
+    
+    # Update settings
+    database_settings_store["enabled"] = config.enabled
+    database_settings_store["connection_type"] = config.connection_type
+    database_settings_store["host"] = config.host
+    database_settings_store["port"] = config.port
+    database_settings_store["database"] = config.database
+    database_settings_store["user"] = config.user
+    database_settings_store["ssl_mode"] = config.ssl_mode
+    database_settings_store["auto_connect"] = config.auto_connect
+    
+    # Only update password if provided (not masked placeholder)
+    if config.password and config.password != "••••••••":
+        database_settings_store["password"] = config.password
+    
+    # Save to file
+    save_database_settings_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "message": "Database settings updated"
+    })
+
+@app.post("/api/database/test")
+async def test_database_connection():
+    """Test database connection without persisting."""
+    if not HAS_PSYCOPG2:
+        return JSONResponse({
+            "success": False,
+            "error": "psycopg2 not installed. Run: pip install psycopg2-binary"
+        })
+    
+    # Configure with current settings
+    db_storage.configure(database_settings_store)
+    success, message = db_storage.test_connection()
+    
+    return JSONResponse({
+        "success": success,
+        "message": message
+    })
+
+@app.post("/api/database/connect")
+async def connect_database():
+    """Connect to the database."""
+    if not HAS_PSYCOPG2:
+        return JSONResponse({
+            "success": False,
+            "error": "psycopg2 not installed. Run: pip install psycopg2-binary"
+        })
+    
+    # Configure with current settings
+    db_storage.configure(database_settings_store)
+    success, message = db_storage.connect()
+    
+    if success:
+        database_settings_store["enabled"] = True
+        save_database_settings_to_file()
+    
+    return JSONResponse({
+        "success": success,
+        "message": message
+    })
+
+@app.post("/api/database/disconnect")
+async def disconnect_database():
+    """Disconnect from the database."""
+    db_storage.disconnect()
+    database_settings_store["enabled"] = False
+    save_database_settings_to_file()
+    
+    return JSONResponse({
+        "success": True,
+        "message": "Disconnected from database"
+    })
+
+@app.post("/api/database/setup")
+async def setup_database():
+    """Initialize database tables."""
+    if not db_storage.enabled:
+        return JSONResponse({
+            "success": False,
+            "error": "Not connected to database"
+        })
+    
+    success, message = db_storage.initialize_tables()
+    
+    return JSONResponse({
+        "success": success,
+        "message": message
+    })
+
+@app.get("/api/database/stats")
+async def get_database_stats():
+    """Get database statistics."""
+    stats = db_storage.get_stats()
+    return JSONResponse(stats)
+
+@app.get("/api/database/history")
+async def get_command_history(session_id: Optional[str] = None, 
+                               task_id: Optional[str] = None,
+                               limit: int = 100):
+    """Get command history from database."""
+    history = db_storage.get_command_history(session_id, task_id, limit)
+    return JSONResponse({"history": history})
 
 # ============== CHAT MANAGEMENT ENDPOINTS ==============
 
@@ -3657,8 +4202,10 @@ h1 {
 #settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 #settings-content::-webkit-scrollbar {
   width: 6px;
@@ -3669,6 +4216,239 @@ h1 {
 #settings-content::-webkit-scrollbar-thumb {
   background: var(--gray-600);
   border-radius: 3px;
+}
+
+/* Settings Sub-Tabs Navigation */
+.settings-subtabs {
+  display: flex;
+  gap: 0;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding: 0;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.settings-subtabs::-webkit-scrollbar {
+  height: 3px;
+}
+.settings-subtabs::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+.settings-subtab {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--gray-400);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  position: relative;
+}
+.settings-subtab::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+.settings-subtab:hover {
+  color: var(--gray-200);
+  background: rgba(255,255,255,0.05);
+}
+.settings-subtab.active {
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+}
+.settings-subtab.active::after {
+  background: var(--primary);
+}
+.settings-subtab svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Settings Sub-Tab Content */
+.settings-subtab-content {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  min-height: 0;
+}
+.settings-subtab-content.active {
+  display: flex;
+  flex-direction: column;
+}
+.settings-subtab-content::-webkit-scrollbar {
+  width: 6px;
+}
+.settings-subtab-content::-webkit-scrollbar-thumb {
+  background: var(--gray-600);
+  border-radius: 3px;
+}
+
+/* Database Storage Section */
+.db-connection-form {
+  background: rgba(0,0,0,0.2);
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.db-connection-type {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.db-type-btn {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--gray-400);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.db-type-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-200);
+}
+.db-type-btn.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.db-type-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.db-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.db-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.db-form-group.full-width {
+  grid-column: span 2;
+}
+.db-form-label {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  font-weight: 500;
+}
+.db-form-input {
+  padding: 0.5rem 0.75rem;
+  background: var(--darker);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.2s ease;
+}
+.db-form-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+.db-form-input::placeholder {
+  color: var(--gray-500);
+}
+.db-form-select {
+  padding: 0.5rem 0.75rem;
+  background: var(--darker);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.db-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.db-status {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.db-status.connected {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--success);
+}
+.db-status.disconnected {
+  background: rgba(156, 163, 175, 0.15);
+  border: 1px solid rgba(156, 163, 175, 0.3);
+  color: var(--gray-400);
+}
+.db-status.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+.db-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.db-stat-item {
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.05);
+  text-align: center;
+}
+.db-stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--light);
+}
+.db-stat-label {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.db-auto-connect {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+}
+.db-auto-connect .checkbox-label {
+  font-size: 0.8rem;
+  color: var(--gray-300);
 }
 .settings-section {
   margin-bottom: 1.5rem;
@@ -4647,166 +5427,344 @@ main {
     
     <!-- Settings Tab Content -->
     <div class="tab-content" id="tab-settings">
-      <div class="sidebar-header"><span class="header-icon">⚙️</span> API Configuration</div>
+      <div class="sidebar-header"><span class="header-icon">⚙️</span> Settings</div>
       <div id="settings-content">
-        <!-- LLM Provider Settings -->
-        <div class="settings-section">
-          <div class="settings-section-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px; vertical-align: middle;">
+        <!-- Settings Sub-Tabs Navigation -->
+        <div class="settings-subtabs">
+          <button class="settings-subtab active" data-subtab="llm" onclick="switchSettingsSubtab('llm')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
               <path d="M19 9a7 7 0 1 0-14 0"/>
               <path d="M12 12v10"/>
               <path d="M8 18h8"/>
             </svg>
-            LLM Provider
-          </div>
-          
-          <div class="provider-selector">
-            <div class="form-group" style="margin-bottom: 12px;">
-              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Provider</label>
-              <select id="provider-select" class="provider-select" onchange="onProviderChange()">
-                <option value="deepseek">DeepSeek</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-            </div>
-            
-            <div class="form-group" style="margin-bottom: 12px;">
-              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Model</label>
-              <select id="model-select" class="provider-select">
-                <!-- Populated dynamically -->
-              </select>
-            </div>
-            
-            <div class="form-group" style="margin-bottom: 12px;">
-              <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">
-                <span id="provider-key-label">DeepSeek</span> API Key
-              </label>
-              <div class="api-key-item" style="margin-bottom: 0;">
-                <input type="password" class="api-key-input" id="provider-api-key" placeholder="Enter API key...">
-                <button class="api-key-btn api-key-btn-save" onclick="saveProviderKey()">💾</button>
-              </div>
-              <div id="provider-key-status" style="font-size: 0.75rem; color: var(--gray-500); margin-top: 4px;"></div>
-            </div>
-            
-            <button class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="applyProviderSettings()">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
-                <path d="M20 6L9 17l-5-5"/>
+            LLM Config
+          </button>
+          <button class="settings-subtab" data-subtab="storage" onclick="switchSettingsSubtab('storage')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+            Storage
+          </button>
+          <button class="settings-subtab" data-subtab="api" onclick="switchSettingsSubtab('api')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            Public APIs
+          </button>
+          <button class="settings-subtab" data-subtab="comm" onclick="switchSettingsSubtab('comm')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+            Communication
+          </button>
+        </div>
+        
+        <!-- LLM Config Sub-Tab -->
+        <div class="settings-subtab-content active" id="settings-llm">
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                <path d="M19 9a7 7 0 1 0-14 0"/>
+                <path d="M12 12v10"/>
+                <path d="M8 18h8"/>
               </svg>
-              Apply Settings
-            </button>
+              LLM Provider
+            </div>
             
-            <div id="provider-status" style="margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+            <div class="provider-selector">
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Provider</label>
+                <select id="provider-select" class="provider-select" onchange="onProviderChange()">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+              </div>
+              
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">Model</label>
+                <select id="model-select" class="provider-select">
+                  <!-- Populated dynamically -->
+                </select>
+              </div>
+              
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 6px; display: block;">
+                  <span id="provider-key-label">DeepSeek</span> API Key
+                </label>
+                <div class="api-key-item" style="margin-bottom: 0;">
+                  <input type="password" class="api-key-input" id="provider-api-key" placeholder="Enter API key...">
+                  <button class="api-key-btn api-key-btn-save" onclick="saveProviderKey()">💾</button>
+                </div>
+                <div id="provider-key-status" style="font-size: 0.75rem; color: var(--gray-500); margin-top: 4px;"></div>
+              </div>
+              
+              <button class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="applyProviderSettings()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M20 6L9 17l-5-5"/>
+                </svg>
+                Apply Settings
+              </button>
+              
+              <div id="provider-status" style="margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+            </div>
+          </div>
+          
+          <div class="settings-section">
+            <div class="settings-section-title">📋 Custom Context / Instructions</div>
+            <textarea id="custom-context-input" placeholder="Add custom instructions for the agent (e.g., preferred reporting format, specific rules)..." 
+              style="width: 100%; height: 120px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px; color: var(--light); font-family: inherit; font-size: 0.85rem; resize: vertical;"></textarea>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+              <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="saveCustomContext()">💾 Save Context</button>
+              <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="clearCustomContext()">🗑️ Clear</button>
+            </div>
+            <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
+              These instructions will be included with every request to the agent.
+            </p>
           </div>
         </div>
         
-        <div class="settings-section">
-          <div class="settings-section-title">🔑 API Keys</div>
-          
-          <div class="api-key-item">
-            <span class="api-key-label">Shodan</span>
-            <input type="password" class="api-key-input" id="api-key-shodan" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('shodan')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('shodan')">🗑️</button>
+        <!-- Storage Config Sub-Tab -->
+        <div class="settings-subtab-content" id="settings-storage">
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+              </svg>
+              Database Storage
+            </div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 1rem; line-height: 1.5;">
+              Enable PostgreSQL/Supabase database to persist command history and agent memory. 
+              All commands and outputs will be saved for history tracking.
+            </p>
+            
+            <div class="db-connection-form">
+              <div class="db-connection-type">
+                <button class="db-type-btn active" id="db-type-local" onclick="setDbType('local')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                    <line x1="6" y1="6" x2="6.01" y2="6"/>
+                    <line x1="6" y1="18" x2="6.01" y2="18"/>
+                  </svg>
+                  Local PostgreSQL
+                </button>
+                <button class="db-type-btn" id="db-type-supabase" onclick="setDbType('supabase')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                  </svg>
+                  Supabase
+                </button>
+              </div>
+              
+              <div class="db-form-grid">
+                <div class="db-form-group">
+                  <label class="db-form-label">Host</label>
+                  <input type="text" class="db-form-input" id="db-host" placeholder="localhost or db.xxx.supabase.co">
+                </div>
+                <div class="db-form-group">
+                  <label class="db-form-label">Port</label>
+                  <input type="number" class="db-form-input" id="db-port" value="5432" placeholder="5432">
+                </div>
+                <div class="db-form-group">
+                  <label class="db-form-label">Database</label>
+                  <input type="text" class="db-form-input" id="db-database" value="postgres" placeholder="postgres">
+                </div>
+                <div class="db-form-group">
+                  <label class="db-form-label">User</label>
+                  <input type="text" class="db-form-input" id="db-user" value="postgres" placeholder="postgres">
+                </div>
+                <div class="db-form-group full-width">
+                  <label class="db-form-label">Password</label>
+                  <input type="password" class="db-form-input" id="db-password" placeholder="Enter database password">
+                </div>
+                <div class="db-form-group">
+                  <label class="db-form-label">SSL Mode</label>
+                  <select class="db-form-select" id="db-ssl-mode">
+                    <option value="prefer">Prefer</option>
+                    <option value="require">Require</option>
+                    <option value="verify-ca">Verify CA</option>
+                    <option value="disable">Disable</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div class="db-form-actions">
+                <button class="btn btn-secondary" onclick="testDbConnection()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                  Test Connection
+                </button>
+                <button class="btn btn-primary" onclick="connectDatabase()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+                    <line x1="12" y1="2" x2="12" y2="12"/>
+                  </svg>
+                  Connect
+                </button>
+                <button class="btn btn-secondary" onclick="disconnectDatabase()">
+                  Disconnect
+                </button>
+              </div>
+              
+              <div id="db-status" class="db-status disconnected" style="display: none;">
+                <span id="db-status-icon">⚪</span>
+                <span id="db-status-text">Not connected</span>
+              </div>
+              
+              <div class="db-auto-connect">
+                <label class="checkbox-wrapper">
+                  <input type="checkbox" id="db-auto-connect">
+                  <span class="checkmark"></span>
+                  <span class="checkbox-label">Auto-connect on startup</span>
+                </label>
+              </div>
+            </div>
+            
+            <div id="db-stats" class="db-stats" style="display: none;">
+              <div class="db-stat-item">
+                <div class="db-stat-value" id="db-stat-commands">0</div>
+                <div class="db-stat-label">Commands</div>
+              </div>
+              <div class="db-stat-item">
+                <div class="db-stat-value" id="db-stat-tasks">0</div>
+                <div class="db-stat-label">Tasks</div>
+              </div>
+              <div class="db-stat-item">
+                <div class="db-stat-value" id="db-stat-memory">0</div>
+                <div class="db-stat-label">Memories</div>
+              </div>
+              <div class="db-stat-item">
+                <div class="db-stat-value" id="db-stat-messages">0</div>
+                <div class="db-stat-label">Messages</div>
+              </div>
+            </div>
           </div>
           
-          <div class="api-key-item">
-            <span class="api-key-label">VirusTotal</span>
-            <input type="password" class="api-key-input" id="api-key-virustotal" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('virustotal')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('virustotal')">🗑️</button>
-          </div>
-          
-          <div class="api-key-item">
-            <span class="api-key-label">Hunter.io</span>
-            <input type="password" class="api-key-input" id="api-key-hunter" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('hunter')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('hunter')">🗑️</button>
-          </div>
-          
-          <div class="api-key-item">
-            <span class="api-key-label">SecurityTrails</span>
-            <input type="password" class="api-key-input" id="api-key-securitytrails" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('securitytrails')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('securitytrails')">🗑️</button>
-          </div>
-          
-          <div class="api-key-item">
-            <span class="api-key-label">Censys</span>
-            <input type="password" class="api-key-input" id="api-key-censys" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('censys')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('censys')">🗑️</button>
-          </div>
-          
-          <div class="api-key-item">
-            <span class="api-key-label">AlienVault OTX</span>
-            <input type="password" class="api-key-input" id="api-key-alienvault" placeholder="Enter API key...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('alienvault')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('alienvault')">🗑️</button>
+          <div class="settings-section">
+            <div class="settings-section-title">📁 File Storage</div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
+              Local file storage is always enabled as a fallback. Settings, API keys, and chat history 
+              are stored in <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">app/</code> directory.
+            </p>
           </div>
         </div>
         
-        <div class="settings-section">
-          <div class="settings-section-title">📤 Export / Import</div>
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="exportApiKeys()">📤 Export Keys</button>
-            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="importApiKeysDialog()">📥 Import Keys</button>
-            <input type="file" id="import-keys-input" accept=".json" style="display: none;" onchange="importApiKeys(this)">
+        <!-- Public APIs Sub-Tab -->
+        <div class="settings-subtab-content" id="settings-api">
+          <div class="settings-section">
+            <div class="settings-section-title">🔑 Security API Keys</div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">Shodan</span>
+              <input type="password" class="api-key-input" id="api-key-shodan" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('shodan')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('shodan')">🗑️</button>
+            </div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">VirusTotal</span>
+              <input type="password" class="api-key-input" id="api-key-virustotal" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('virustotal')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('virustotal')">🗑️</button>
+            </div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">Hunter.io</span>
+              <input type="password" class="api-key-input" id="api-key-hunter" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('hunter')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('hunter')">🗑️</button>
+            </div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">SecurityTrails</span>
+              <input type="password" class="api-key-input" id="api-key-securitytrails" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('securitytrails')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('securitytrails')">🗑️</button>
+            </div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">Censys</span>
+              <input type="password" class="api-key-input" id="api-key-censys" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('censys')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('censys')">🗑️</button>
+            </div>
+            
+            <div class="api-key-item">
+              <span class="api-key-label">AlienVault OTX</span>
+              <input type="password" class="api-key-input" id="api-key-alienvault" placeholder="Enter API key...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('alienvault')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('alienvault')">🗑️</button>
+            </div>
           </div>
-        </div>
-        
-        <div class="settings-section">
-          <div class="settings-section-title">📝 Note</div>
-          <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
-            API keys are now persisted to disk and will survive server restarts.
-            Use Export/Import to backup or transfer your keys between installations.
-          </p>
-        </div>
-        
-        <div class="settings-section">
-          <div class="settings-section-title">📱 Telegram Integration</div>
-          <div class="api-key-item">
-            <span class="api-key-label">Bot Token</span>
-            <input type="password" class="api-key-input" id="api-key-telegram_bot" placeholder="Enter Telegram bot token...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_bot')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_bot')">🗑️</button>
-          </div>
-          <div class="api-key-item">
-            <span class="api-key-label">Chat ID</span>
-            <input type="text" class="api-key-input" id="api-key-telegram_chat" placeholder="Enter chat/group ID...">
-            <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_chat')">💾</button>
-            <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_chat')">🗑️</button>
-          </div>
-          <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
-            Create a bot via @BotFather on Telegram. Use the agent's telegram_connect tool to link.
-          </p>
-          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-              <span style="font-size: 0.85rem; font-weight: 500;">🎧 Group Monitoring</span>
-              <label class="checkbox-wrapper" style="margin: 0;">
-                <input type="checkbox" id="telegram-monitoring-toggle">
-                <span class="checkmark"></span>
-                <span class="checkbox-label">Enable</span>
-              </label>
+          
+          <div class="settings-section">
+            <div class="settings-section-title">📤 Export / Import</div>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+              <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="exportApiKeys()">📤 Export Keys</button>
+              <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="importApiKeysDialog()">📥 Import Keys</button>
+              <input type="file" id="import-keys-input" accept=".json" style="display: none;" onchange="importApiKeys(this)">
             </div>
             <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.4;">
-              When enabled, the agent monitors Telegram group chats for commands.<br>
-              Mention the bot to execute commands: <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">@bot_name scan example.com</code>
+              API keys are persisted to disk. Use Export/Import to backup or transfer your keys.
             </p>
-            <div id="telegram-monitoring-status" style="margin-top: 8px; font-size: 0.8rem; color: var(--gray-400);">Status: Not monitoring</div>
           </div>
         </div>
         
-        <div class="settings-section">
-          <div class="settings-section-title">📋 Custom Context / Instructions</div>
-          <textarea id="custom-context-input" placeholder="Add custom instructions for the agent (e.g., preferred reporting format, specific rules)..." 
-            style="width: 100%; height: 120px; background: var(--dark); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px; color: var(--light); font-family: inherit; font-size: 0.85rem; resize: vertical;"></textarea>
-          <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="saveCustomContext()">💾 Save Context</button>
-            <button class="api-key-btn" style="padding: 8px 16px; font-size: 0.85rem;" onclick="clearCustomContext()">🗑️ Clear</button>
+        <!-- Communication Sub-Tab -->
+        <div class="settings-subtab-content" id="settings-comm">
+          <div class="settings-section">
+            <div class="settings-section-title">📱 Telegram Integration</div>
+            <div class="api-key-item">
+              <span class="api-key-label">Bot Token</span>
+              <input type="password" class="api-key-input" id="api-key-telegram_bot" placeholder="Enter Telegram bot token...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_bot')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_bot')">🗑️</button>
+            </div>
+            <div class="api-key-item">
+              <span class="api-key-label">Chat ID</span>
+              <input type="text" class="api-key-input" id="api-key-telegram_chat" placeholder="Enter chat/group ID...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('telegram_chat')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('telegram_chat')">🗑️</button>
+            </div>
+            <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
+              Create a bot via @BotFather on Telegram. Use the agent's telegram_connect tool to link.
+            </p>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 0.85rem; font-weight: 500;">🎧 Group Monitoring</span>
+                <label class="checkbox-wrapper" style="margin: 0;">
+                  <input type="checkbox" id="telegram-monitoring-toggle">
+                  <span class="checkmark"></span>
+                  <span class="checkbox-label">Enable</span>
+                </label>
+              </div>
+              <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.4;">
+                When enabled, the agent monitors Telegram group chats for commands.<br>
+                Mention the bot to execute commands: <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">@bot_name scan example.com</code>
+              </p>
+              <div id="telegram-monitoring-status" style="margin-top: 8px; font-size: 0.8rem; color: var(--gray-400);">Status: Not monitoring</div>
+            </div>
           </div>
-          <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px;">
-            These instructions will be included with every request to the agent.
-          </p>
+          
+          <div class="settings-section">
+            <div class="settings-section-title">🔔 Notifications</div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
+              Configure notification channels for scan results and alerts.
+              (Coming soon: Discord, Slack, Email integrations)
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -5816,6 +6774,242 @@ function showProviderStatus(message, type) {
       statusEl.style.display = 'none';
     }, 3000);
   }
+}
+
+// ============== SETTINGS SUB-TABS ==============
+function switchSettingsSubtab(subtab) {
+  // Update tab buttons
+  document.querySelectorAll('.settings-subtab').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.getAttribute('data-subtab') === subtab) {
+      btn.classList.add('active');
+    }
+  });
+  
+  // Update content panels
+  document.querySelectorAll('.settings-subtab-content').forEach(panel => {
+    panel.classList.remove('active');
+  });
+  const activePanel = document.getElementById('settings-' + subtab);
+  if (activePanel) {
+    activePanel.classList.add('active');
+  }
+  
+  // Load data for specific tabs
+  if (subtab === 'storage') {
+    loadDatabaseSettings();
+  }
+}
+
+// ============== DATABASE STORAGE MANAGEMENT ==============
+let currentDbType = 'local';
+
+function setDbType(type) {
+  currentDbType = type;
+  
+  // Update buttons
+  document.getElementById('db-type-local').classList.toggle('active', type === 'local');
+  document.getElementById('db-type-supabase').classList.toggle('active', type === 'supabase');
+  
+  // Set default values based on type
+  const hostInput = document.getElementById('db-host');
+  const portInput = document.getElementById('db-port');
+  const dbInput = document.getElementById('db-database');
+  const sslSelect = document.getElementById('db-ssl-mode');
+  
+  if (type === 'supabase') {
+    hostInput.placeholder = 'db.xxxxx.supabase.co';
+    portInput.value = '5432';
+    dbInput.value = 'postgres';
+    sslSelect.value = 'require';
+  } else {
+    hostInput.placeholder = 'localhost';
+    portInput.value = '5432';
+    dbInput.value = 'owasp_agent';
+    sslSelect.value = 'prefer';
+  }
+}
+
+async function loadDatabaseSettings() {
+  try {
+    const response = await fetch('/api/database/settings');
+    const settings = await response.json();
+    
+    // Populate form
+    document.getElementById('db-host').value = settings.host || '';
+    document.getElementById('db-port').value = settings.port || 5432;
+    document.getElementById('db-database').value = settings.database || 'postgres';
+    document.getElementById('db-user').value = settings.user || 'postgres';
+    document.getElementById('db-ssl-mode').value = settings.ssl_mode || 'prefer';
+    document.getElementById('db-auto-connect').checked = settings.auto_connect || false;
+    
+    // Set connection type
+    currentDbType = settings.connection_type || 'local';
+    setDbType(currentDbType);
+    
+    // Update status
+    updateDbStatus(settings.connected, settings.connected ? 'Connected' : 'Not connected');
+    
+    // Load stats if connected
+    if (settings.connected) {
+      loadDatabaseStats();
+    }
+    
+    // Show psycopg2 warning if not available
+    if (!settings.psycopg2_available) {
+      updateDbStatus(false, 'psycopg2 not installed. Run: pip install psycopg2-binary', true);
+    }
+  } catch (err) {
+    console.error('Failed to load database settings:', err);
+    updateDbStatus(false, 'Error loading settings: ' + err.message, true);
+  }
+}
+
+function getDbConfig() {
+  return {
+    enabled: false,
+    connection_type: currentDbType,
+    host: document.getElementById('db-host').value.trim(),
+    port: parseInt(document.getElementById('db-port').value) || 5432,
+    database: document.getElementById('db-database').value.trim() || 'postgres',
+    user: document.getElementById('db-user').value.trim() || 'postgres',
+    password: document.getElementById('db-password').value,
+    ssl_mode: document.getElementById('db-ssl-mode').value,
+    auto_connect: document.getElementById('db-auto-connect').checked
+  };
+}
+
+async function testDbConnection() {
+  const config = getDbConfig();
+  
+  updateDbStatus(null, 'Testing connection...', false);
+  
+  try {
+    // First save settings
+    await fetch('/api/database/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    
+    // Then test
+    const response = await fetch('/api/database/test', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      updateDbStatus(true, result.message);
+      addMessage('system', `✅ Database test successful: ${result.message}`);
+    } else {
+      updateDbStatus(false, result.message || result.error, true);
+      addMessage('system', `⚠️ Database test failed: ${result.message || result.error}`);
+    }
+  } catch (err) {
+    updateDbStatus(false, 'Connection failed: ' + err.message, true);
+    addMessage('system', `⚠️ Database test failed: ${err.message}`);
+  }
+}
+
+async function connectDatabase() {
+  const config = getDbConfig();
+  config.enabled = true;
+  
+  updateDbStatus(null, 'Connecting...', false);
+  
+  try {
+    // Save settings first
+    await fetch('/api/database/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    
+    // Connect
+    const connectResponse = await fetch('/api/database/connect', { method: 'POST' });
+    const connectResult = await connectResponse.json();
+    
+    if (connectResult.success) {
+      // Initialize tables
+      const setupResponse = await fetch('/api/database/setup', { method: 'POST' });
+      const setupResult = await setupResponse.json();
+      
+      if (setupResult.success) {
+        updateDbStatus(true, 'Connected and tables initialized');
+        addMessage('system', '✅ Database connected and initialized successfully');
+        loadDatabaseStats();
+      } else {
+        updateDbStatus(true, 'Connected (tables not initialized: ' + setupResult.message + ')');
+        addMessage('system', `⚠️ Connected but tables not initialized: ${setupResult.message}`);
+      }
+    } else {
+      updateDbStatus(false, connectResult.message || connectResult.error, true);
+      addMessage('system', `⚠️ Database connection failed: ${connectResult.message || connectResult.error}`);
+    }
+  } catch (err) {
+    updateDbStatus(false, 'Connection failed: ' + err.message, true);
+    addMessage('system', `⚠️ Database connection failed: ${err.message}`);
+  }
+}
+
+async function disconnectDatabase() {
+  try {
+    const response = await fetch('/api/database/disconnect', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      updateDbStatus(false, 'Disconnected');
+      document.getElementById('db-stats').style.display = 'none';
+      addMessage('system', '🔌 Database disconnected');
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Error disconnecting: ${err.message}`);
+  }
+}
+
+async function loadDatabaseStats() {
+  try {
+    const response = await fetch('/api/database/stats');
+    const stats = await response.json();
+    
+    if (stats.enabled) {
+      document.getElementById('db-stats').style.display = 'grid';
+      document.getElementById('db-stat-commands').textContent = stats.total_commands || 0;
+      document.getElementById('db-stat-tasks').textContent = stats.total_tasks || 0;
+      document.getElementById('db-stat-memory').textContent = stats.total_memories || 0;
+      document.getElementById('db-stat-messages').textContent = stats.total_messages || 0;
+    } else {
+      document.getElementById('db-stats').style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Failed to load database stats:', err);
+  }
+}
+
+function updateDbStatus(connected, message, isError = false) {
+  const statusEl = document.getElementById('db-status');
+  const iconEl = document.getElementById('db-status-icon');
+  const textEl = document.getElementById('db-status-text');
+  
+  if (!statusEl) return;
+  
+  statusEl.style.display = 'flex';
+  statusEl.className = 'db-status';
+  
+  if (connected === null) {
+    // Loading state
+    iconEl.textContent = '⏳';
+    statusEl.classList.add('disconnected');
+  } else if (connected) {
+    iconEl.textContent = '🟢';
+    statusEl.classList.add('connected');
+  } else if (isError) {
+    iconEl.textContent = '🔴';
+    statusEl.classList.add('error');
+  } else {
+    iconEl.textContent = '⚪';
+    statusEl.classList.add('disconnected');
+  }
+  
+  textEl.textContent = message;
 }
 
 async function loadApiKeys() {
@@ -7485,6 +8679,13 @@ window.startChain = startChain;
 window.stopChain = stopChain;
 window.deleteChain = deleteChain;
 window.toggleSection = toggleSection;
+// Settings sub-tab functions
+window.switchSettingsSubtab = switchSettingsSubtab;
+// Database functions
+window.setDbType = setDbType;
+window.testDbConnection = testDbConnection;
+window.connectDatabase = connectDatabase;
+window.disconnectDatabase = disconnectDatabase;
 </script>
 </body>
 </html>
@@ -7700,10 +8901,21 @@ The report should be comprehensive and professional, suitable for executive stak
                     try:
                         # Acquire lock for concurrent access
                         with agent_lock:
+                            # Log command to database if enabled
+                            db_command_id = None
+                            if db_storage.enabled:
+                                db_command_id = db_storage.log_command(
+                                    session_id=session_id,
+                                    task_id=request_task_id or "interactive",
+                                    command=msg_content,
+                                    command_type="prompt"
+                                )
+                            
                             # Use streaming mode for real-time updates
                             final_result = None
                             step_count = 0
                             tool_count = 0
+                            start_time = time.time()
                             
                             for event in agent.run(full_message, stream=True):
                                 step_count += 1
@@ -7759,6 +8971,16 @@ The report should be comprehensive and professional, suitable for executive stak
                                             "tool_count": tool_count,
                                             "step_count": step_count
                                         })
+                                        
+                                        # Log tool call to database
+                                        if db_storage.enabled:
+                                            tool_cmd_id = db_storage.log_command(
+                                                session_id=session_id,
+                                                task_id=request_task_id or "interactive",
+                                                command=f"{tool_name}: {str(tool_args)[:500]}",
+                                                command_type="tool_call",
+                                                tool_name=tool_name
+                                            )
                                 
                                 # Check for observations/results
                                 if hasattr(event, 'observations') and event.observations:
@@ -7787,6 +9009,17 @@ The report should be comprehensive and professional, suitable for executive stak
                                 # Capture final result
                                 if hasattr(event, 'output') and event.output is not None:
                                     final_result = event.output
+                            
+                            # Log final output to database
+                            if db_storage.enabled and db_command_id:
+                                execution_time = int((time.time() - start_time) * 1000)
+                                db_storage.log_output(
+                                    command_id=db_command_id,
+                                    output=str(final_result)[:10000] if final_result else "Task completed",
+                                    output_type="final",
+                                    status="success",
+                                    execution_time_ms=execution_time
+                                )
                             
                             # Signal completion
                             event_queue.put({
