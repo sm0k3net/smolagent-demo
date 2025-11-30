@@ -808,6 +808,59 @@ def save_chats_to_file():
         print(f"Error saving chats: {e}")
         return False
 
+def import_export_to_local_chats():
+    """Import chat history from .db_export to local chats_store."""
+    global chats_store
+    from pathlib import Path
+    
+    export_dir = Path(".db_export")
+    chat_file = export_dir / "chat_history.json"
+    
+    if not chat_file.exists():
+        return False, "No exported chat history found", {}
+    
+    try:
+        with open(chat_file) as f:
+            exported_chats = json.load(f)
+        
+        imported = {"messages": 0, "chats": 0}
+        
+        # Group messages by session_id (which is chat_id)
+        chat_messages = {}
+        for msg in exported_chats:
+            session_id = msg.get("session_id", "default")
+            if session_id not in chat_messages:
+                chat_messages[session_id] = []
+            chat_messages[session_id].append({
+                "type": msg.get("role", "user"),
+                "content": msg.get("content", ""),
+                "timestamp": msg.get("created_at", datetime.now().isoformat())
+            })
+            imported["messages"] += 1
+        
+        # Merge into chats_store
+        for chat_id, messages in chat_messages.items():
+            if chat_id not in chats_store:
+                chats_store[chat_id] = {
+                    "name": f"Imported Chat {chat_id[:8]}",
+                    "messages": [],
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat()
+                }
+                imported["chats"] += 1
+            
+            # Add messages (avoid duplicates by checking content+timestamp)
+            existing = {(m.get("content"), m.get("timestamp")) for m in chats_store[chat_id].get("messages", [])}
+            for msg in messages:
+                if (msg.get("content"), msg.get("timestamp")) not in existing:
+                    chats_store[chat_id]["messages"].append(msg)
+        
+        save_chats_to_file()
+        return True, f"Imported {imported['messages']} messages to {imported['chats']} new chats", imported
+        
+    except Exception as e:
+        return False, f"Import failed: {str(e)}", {}
+
 def load_scheduled_tasks_from_file():
     """Load scheduled tasks from file."""
     global scheduled_tasks_store
@@ -1664,6 +1717,16 @@ async def check_local_export():
         return JSONResponse({"exists": True, "metadata": metadata})
     
     return JSONResponse({"exists": True, "metadata": None})
+
+@app.post("/api/database/import-to-local")
+async def import_export_to_local():
+    """Import exported chat data to local file storage (when DB disconnected)."""
+    success, message, counts = import_export_to_local_chats()
+    return JSONResponse({
+        "success": success,
+        "message": message,
+        "counts": counts
+    })
 
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
@@ -2971,6 +3034,25 @@ h1 {
   background: rgba(99, 102, 241, 0.15);
   color: var(--primary-light);
   border-bottom: 2px solid var(--primary);
+}
+.sidebar-tab.has-activity {
+  position: relative;
+}
+.sidebar-tab.has-activity::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  box-shadow: 0 0 6px #ef4444;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.2); }
 }
 .sidebar-tab .tab-label {
   font-size: 0.65rem;
@@ -6146,7 +6228,7 @@ main {
                 Data Migration
               </div>
               <p style="font-size: 0.7rem; color: var(--gray-500); margin-bottom: 0.5rem; line-height: 1.4;">
-                Export database to local files or import from local backup.
+                Export from database or restore backup to local storage.
               </p>
               <div id="local-export-info" style="display: none; font-size: 0.7rem; color: var(--gray-400); margin-bottom: 0.5rem; padding: 0.4rem 0.6rem; background: rgba(255,255,255,0.05); border-radius: 4px;">
                 <span id="local-export-date"></span>
@@ -6158,15 +6240,22 @@ main {
                     <polyline points="7 10 12 15 17 10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
                   </svg>
-                  Export to Local
+                  DB → Backup
                 </button>
-                <button class="btn btn-secondary" onclick="importDatabaseFromLocal()" style="font-size: 0.7rem; padding: 0.4rem 0.6rem;" title="Import from local files">
+                <button class="btn btn-secondary" onclick="importDatabaseFromLocal()" style="font-size: 0.7rem; padding: 0.4rem 0.6rem;" title="Import backup to database">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                     <polyline points="17 8 12 3 7 8"/>
                     <line x1="12" y1="3" x2="12" y2="15"/>
                   </svg>
-                  Import from Local
+                  Backup → DB
+                </button>
+                <button class="btn btn-secondary" onclick="restoreBackupToLocal()" style="font-size: 0.7rem; padding: 0.4rem 0.6rem;" title="Restore backup to local chat storage">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                  </svg>
+                  Restore Local
                 </button>
               </div>
             </div>
@@ -7739,7 +7828,7 @@ async function importDatabaseFromLocal() {
   }
   
   try {
-    addMessage('system', '⏳ Importing data from local files...');
+    addMessage('system', '⏳ Importing data from local files to database...');
     const response = await fetch('/api/database/import', { method: 'POST' });
     const result = await response.json();
     
@@ -7753,6 +7842,29 @@ async function importDatabaseFromLocal() {
     }
   } catch (err) {
     addMessage('system', `⚠️ Import error: ${err.message}`);
+  }
+}
+
+async function restoreBackupToLocal() {
+  if (!confirm('Restore backup to local chat storage?\\n\\nThis will import your exported chat history to local file storage.\\nUse this when database is disconnected to restore your conversation history.')) {
+    return;
+  }
+  
+  try {
+    addMessage('system', '⏳ Restoring backup to local storage...');
+    const response = await fetch('/api/database/import-to-local', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      const counts = result.counts || {};
+      addMessage('system', `✅ ${result.message}\\n📊 Restored: ${counts.messages || 0} messages to ${counts.chats || 0} chats`);
+      // Reload chats to show restored data
+      await loadChats();
+    } else {
+      addMessage('system', `⚠️ Restore failed: ${result.message}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Restore error: ${err.message}`);
   }
 }
 
@@ -8697,18 +8809,12 @@ async function sendMessage() {
   // Reset background task checkbox
   if (isBackgroundTask) {
     backgroundTaskCheckbox.checked = false;
-    // Switch to Tasks tab to show the new task
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    document.querySelector('.sidebar-tab[data-tab="tasks"]').classList.add('active');
-    document.getElementById('tab-tasks').classList.add('active');
+    // Highlight Tasks tab instead of switching
+    highlightTab('tasks');
     startTaskPolling();
   } else {
-    // Switch to Activity tab to show the real-time progress
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    document.querySelector('.sidebar-tab[data-tab="activity"]').classList.add('active');
-    document.getElementById('tab-activity').classList.add('active');
+    // Highlight Activity tab with red dot instead of switching
+    highlightTab('activity');
   }
   
   // Auto-expand sidebar when task starts
@@ -9386,6 +9492,23 @@ async function checkTelegramMonitoringStatus() {
 }
 
 // ============== TAB SWITCHING UPDATES ==============
+
+// Function to highlight a tab with red dot notification
+function highlightTab(tabName) {
+  const tab = document.querySelector(`.sidebar-tab[data-tab="${tabName}"]`);
+  if (tab && !tab.classList.contains('active')) {
+    tab.classList.add('has-activity');
+  }
+}
+
+// Function to clear tab highlight
+function clearTabHighlight(tabName) {
+  const tab = document.querySelector(`.sidebar-tab[data-tab="${tabName}"]`);
+  if (tab) {
+    tab.classList.remove('has-activity');
+  }
+}
+
 // Update sidebar tab handling
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
   tab.onclick = () => {
@@ -9393,6 +9516,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     
     tab.classList.add('active');
+    // Clear highlight when tab is clicked
+    tab.classList.remove('has-activity');
     const tabId = tab.getAttribute('data-tab');
     document.getElementById('tab-' + tabId).classList.add('active');
     
@@ -9545,6 +9670,22 @@ async def ws_endpoint(ws: WebSocket):
                     full_message += "\n\n--- ATTACHED FILES ---"
                     for f in relevant_files:
                         full_message += f"\n\n### File: {f['filename']}\n```\n{f['content'][:15000]}\n```"
+            
+            # Add conversation history for context (last 10 user/assistant exchanges)
+            if chat_id in chats_store and chats_store[chat_id].get("messages"):
+                messages = chats_store[chat_id]["messages"]
+                # Filter for user and assistant messages only (skip system/progress)
+                conversation = [m for m in messages if m.get("type") in ("user", "assistant")]
+                # Get last 10 exchanges (20 messages)
+                recent = conversation[-20:] if len(conversation) > 20 else conversation
+                if recent:
+                    history_text = "\n\n--- CONVERSATION HISTORY ---\n"
+                    for m in recent:
+                        role = "User" if m.get("type") == "user" else "Assistant"
+                        content = m.get("content", "")[:2000]  # Truncate long messages
+                        history_text += f"\n{role}: {content}\n"
+                    history_text += "\n--- END HISTORY ---\n"
+                    full_message = history_text + "\nCurrent request: " + full_message
             
             # Add custom context if defined
             if custom_context and custom_context.strip():
