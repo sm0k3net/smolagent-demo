@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Literal
+import socket
 
 # Database storage support (optional)
 try:
@@ -88,8 +89,17 @@ class DatabaseStorage:
         
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
+            host = self.config["host"]
+            
+            # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
+            try:
+                ipv4_addr = socket.gethostbyname(host)
+                host = ipv4_addr
+            except socket.gaierror:
+                pass  # Keep original host if resolution fails
+            
             self.connection = psycopg2.connect(
-                host=self.config["host"],
+                host=host,
                 port=self.config["port"],
                 database=self.config["database"],
                 user=self.config["user"],
@@ -121,8 +131,17 @@ class DatabaseStorage:
         
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
+            host = self.config["host"]
+            
+            # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
+            try:
+                ipv4_addr = socket.gethostbyname(host)
+                host = ipv4_addr
+            except socket.gaierror:
+                pass  # Keep original host if resolution fails
+            
             conn = psycopg2.connect(
-                host=self.config["host"],
+                host=host,
                 port=self.config["port"],
                 database=self.config["database"],
                 user=self.config["user"],
@@ -5591,37 +5610,45 @@ main {
       <div class="sidebar-header"><span class="header-icon">⚙️</span> Settings</div>
       <div id="settings-content">
         <!-- Settings Sub-Tabs Navigation -->
-        <div class="settings-subtabs">
-          <button class="settings-subtab active" data-subtab="llm" onclick="switchSettingsSubtab('llm')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-              <path d="M19 9a7 7 0 1 0-14 0"/>
-              <path d="M12 12v10"/>
-              <path d="M8 18h8"/>
-            </svg>
-            LLM Config
-          </button>
-          <button class="settings-subtab" data-subtab="storage" onclick="switchSettingsSubtab('storage')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <ellipse cx="12" cy="5" rx="9" ry="3"/>
-              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-            </svg>
-            Storage
-          </button>
-          <button class="settings-subtab" data-subtab="api" onclick="switchSettingsSubtab('api')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
-            Public APIs
-          </button>
-          <button class="settings-subtab" data-subtab="comm" onclick="switchSettingsSubtab('comm')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-            </svg>
-            Communication
-          </button>
+        <div class="settings-subtabs-wrapper">
+          <div class="settings-subtabs-scroll left" id="subtabs-scroll-left" onclick="scrollSubtabs(-1)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+          </div>
+          <div class="settings-subtabs" id="settings-subtabs-container">
+            <button class="settings-subtab active" data-subtab="llm" onclick="switchSettingsSubtab('llm')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                <path d="M19 9a7 7 0 1 0-14 0"/>
+                <path d="M12 12v10"/>
+                <path d="M8 18h8"/>
+              </svg>
+              LLM
+            </button>
+            <button class="settings-subtab" data-subtab="storage" onclick="switchSettingsSubtab('storage')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+              </svg>
+              Storage
+            </button>
+            <button class="settings-subtab" data-subtab="api" onclick="switchSettingsSubtab('api')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              APIs
+            </button>
+            <button class="settings-subtab" data-subtab="comm" onclick="switchSettingsSubtab('comm')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+              </svg>
+              Comm
+            </button>
+          </div>
+          <div class="settings-subtabs-scroll right" id="subtabs-scroll-right" onclick="scrollSubtabs(1)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </div>
         </div>
         
         <!-- LLM Config Sub-Tab -->
@@ -6948,6 +6975,8 @@ function switchSettingsSubtab(subtab) {
     btn.classList.remove('active');
     if (btn.getAttribute('data-subtab') === subtab) {
       btn.classList.add('active');
+      // Scroll the active tab into view
+      btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
     }
   });
   
@@ -6964,7 +6993,45 @@ function switchSettingsSubtab(subtab) {
   if (subtab === 'storage') {
     loadDatabaseSettings();
   }
+  
+  // Update scroll arrows visibility
+  updateSubtabsScrollArrows();
 }
+
+// Scroll subtabs left or right
+function scrollSubtabs(direction) {
+  const container = document.getElementById('settings-subtabs-container');
+  if (container) {
+    const scrollAmount = 100;
+    container.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+    setTimeout(updateSubtabsScrollArrows, 300);
+  }
+}
+
+// Update visibility of scroll arrows based on scroll position
+function updateSubtabsScrollArrows() {
+  const container = document.getElementById('settings-subtabs-container');
+  const leftArrow = document.getElementById('subtabs-scroll-left');
+  const rightArrow = document.getElementById('subtabs-scroll-right');
+  
+  if (!container || !leftArrow || !rightArrow) return;
+  
+  const canScrollLeft = container.scrollLeft > 5;
+  const canScrollRight = container.scrollLeft < (container.scrollWidth - container.clientWidth - 5);
+  
+  leftArrow.classList.toggle('visible', canScrollLeft);
+  rightArrow.classList.toggle('visible', canScrollRight);
+}
+
+// Initialize subtabs scroll on load
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('settings-subtabs-container');
+  if (container) {
+    container.addEventListener('scroll', updateSubtabsScrollArrows);
+    // Initial check
+    setTimeout(updateSubtabsScrollArrows, 100);
+  }
+});
 
 // ============== DATABASE STORAGE MANAGEMENT ==============
 let currentDbType = 'local';
