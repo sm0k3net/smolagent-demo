@@ -302,6 +302,22 @@ class DatabaseStorage:
             print(f"Error logging command: {e}")
             return None
     
+    def save_chat_message(self, chat_id: str, role: str, content: str) -> bool:
+        """Save a chat message to the database."""
+        if not self.enabled or not self.connection:
+            return False
+        
+        try:
+            with self.connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO chat_history (chat_id, message_role, message_content)
+                    VALUES (%s, %s, %s);
+                """, (chat_id, role, content))
+            return True
+        except Exception as e:
+            print(f"Error saving chat message: {e}")
+            return False
+    
     def log_output(self, command_id: int, output: str, output_type: str = "text",
                    status: str = "success", execution_time_ms: int = None) -> bool:
         """Log command output to the database."""
@@ -823,18 +839,41 @@ def import_export_to_local_chats():
         with open(chat_file) as f:
             exported_chats = json.load(f)
         
+        if not exported_chats:
+            return False, "Export file is empty", {}
+        
         imported = {"messages": 0, "chats": 0}
         
-        # Group messages by session_id (which is chat_id)
+        # Group messages by chat_id
         chat_messages = {}
         for msg in exported_chats:
-            session_id = msg.get("session_id", "default")
-            if session_id not in chat_messages:
-                chat_messages[session_id] = []
-            chat_messages[session_id].append({
-                "type": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-                "timestamp": msg.get("created_at", datetime.now().isoformat())
+            # Handle different field names from different export sources:
+            # DB export uses: chat_id, message_role, message_content
+            # Old format might use: session_id, role, content
+            chat_id = msg.get("chat_id") or msg.get("session_id", "default")
+            
+            # Normalize session IDs that look like timestamps to 'default'
+            if chat_id and chat_id.startswith("session_"):
+                chat_id = "default"
+            if not chat_id:
+                chat_id = "default"
+            
+            if chat_id not in chat_messages:
+                chat_messages[chat_id] = []
+            
+            # Handle different field names for message type/role
+            msg_type = msg.get("message_role") or msg.get("role") or msg.get("type", "user")
+            # Normalize role names: 'assistant' stays, 'agent' -> 'assistant', 'user' stays
+            if msg_type == "agent":
+                msg_type = "assistant"
+            
+            # Handle different field names for content
+            content = msg.get("message_content") or msg.get("content", "")
+            
+            chat_messages[chat_id].append({
+                "type": msg_type,
+                "content": content,
+                "timestamp": msg.get("created_at") or msg.get("timestamp", datetime.now().isoformat())
             })
             imported["messages"] += 1
         
@@ -842,23 +881,33 @@ def import_export_to_local_chats():
         for chat_id, messages in chat_messages.items():
             if chat_id not in chats_store:
                 chats_store[chat_id] = {
-                    "name": f"Imported Chat {chat_id[:8]}",
+                    "name": f"Imported Chat {chat_id[:8]}" if chat_id != "default" else "Main Chat",
                     "messages": [],
                     "created_at": datetime.now().isoformat(),
                     "updated_at": datetime.now().isoformat()
                 }
                 imported["chats"] += 1
             
-            # Add messages (avoid duplicates by checking content+timestamp)
-            existing = {(m.get("content"), m.get("timestamp")) for m in chats_store[chat_id].get("messages", [])}
+            # Add messages (avoid duplicates by checking content)
+            existing_content = {m.get("content") for m in chats_store[chat_id].get("messages", [])}
+            added = 0
             for msg in messages:
-                if (msg.get("content"), msg.get("timestamp")) not in existing:
+                content = msg.get("content", "")
+                if content and content not in existing_content:
                     chats_store[chat_id]["messages"].append(msg)
+                    existing_content.add(content)
+                    added += 1
+            
+            if added > 0:
+                chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
         
         save_chats_to_file()
-        return True, f"Imported {imported['messages']} messages to {imported['chats']} new chats", imported
+        total_msgs = sum(len(msgs) for msgs in chat_messages.values())
+        return True, f"Imported {total_msgs} messages to {len(chat_messages)} chats", imported
         
     except Exception as e:
+        import traceback
+        print(f"Import error: {traceback.format_exc()}")
         return False, f"Import failed: {str(e)}", {}
 
 def load_scheduled_tasks_from_file():
@@ -1728,6 +1777,34 @@ async def import_export_to_local():
         "counts": counts
     })
 
+@app.get("/api/database/export/debug")
+async def debug_export():
+    """Debug endpoint to see export file contents."""
+    from pathlib import Path
+    import json
+    
+    export_dir = Path(".db_export")
+    chat_file = export_dir / "chat_history.json"
+    
+    if not chat_file.exists():
+        return JSONResponse({"error": "No export file found", "path": str(chat_file)})
+    
+    try:
+        with open(chat_file) as f:
+            data = json.load(f)
+        
+        # Show sample and structure
+        sample = data[:5] if len(data) > 5 else data
+        fields = list(data[0].keys()) if data else []
+        
+        return JSONResponse({
+            "total_records": len(data),
+            "fields": fields,
+            "sample": sample
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
                                task_id: Optional[str] = None,
@@ -1820,6 +1897,10 @@ async def add_chat_message(chat_id: str, message: ChatMessage):
         chats_store[chat_id]["messages"] = chats_store[chat_id]["messages"][-500:]
     
     save_chats_to_file()
+    
+    # Also save to database if connected
+    db_storage.save_chat_message(chat_id, message.type, message.content)
+    
     return JSONResponse({"success": True})
 
 @app.delete("/api/chats/{chat_id}/messages")
@@ -6609,7 +6690,7 @@ let durationInterval = null;
 
 // File attachments storage
 let attachedFiles = [];
-let sessionId = 'session_' + Date.now();
+let sessionId = 'default';  // Match currentChatId for consistency
 
 let chatHistory = [];
 let currentReport = { html: null, markdown: null };
@@ -9550,21 +9631,34 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 });
 
 // ============== INITIALIZATION ==============
-// Load chats on startup
-loadChats();
+// Load chats on startup and restore current chat messages
+async function initializeChats() {
+  await loadChats();
+  // Load messages for current chat (default) on page load
+  try {
+    const response = await fetch(`/api/chats/${currentChatId}`);
+    const chat = await response.json();
+    
+    if (chat.messages && chat.messages.length > 0) {
+      // Clear any existing messages first
+      messagesDiv.innerHTML = '';
+      chatHistory = [];
+      
+      // Load all messages
+      chat.messages.forEach(msg => {
+        addMessage(msg.type, msg.content, { skipSave: true, timestamp: msg.timestamp });
+      });
+      chatHistory = [...chat.messages];
+    }
+  } catch (err) {
+    console.error('Failed to load initial chat:', err);
+  }
+}
+initializeChats();
 // Load chains on startup
 loadChains();
 // Load provider settings on startup  
 loadProviders();
-
-// Update addMessage to support skipSave option
-const originalAddMessage = addMessage;
-addMessage = function(type, content, meta = {}) {
-  originalAddMessage(type, content, meta);
-  if (!meta.skipSave && type !== 'progress') {
-    // Messages are saved when switching chats or on page unload
-  }
-};
 
 // Expose functions globally for inline onclick handlers
 window.removeFile = removeFile;
