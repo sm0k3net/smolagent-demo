@@ -35,6 +35,20 @@ try:
 except ImportError:
     HAS_PSYCOPG2 = False
     psycopg2 = None
+    # Try to install psycopg2-binary automatically
+    try:
+        import subprocess
+        import sys
+        print("[Database] psycopg2 not found, attempting to install psycopg2-binary...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "psycopg2-binary", "-q"])
+        import psycopg2
+        from psycopg2 import sql
+        from psycopg2.extras import RealDictCursor
+        HAS_PSYCOPG2 = True
+        print("[Database] psycopg2-binary installed successfully!")
+    except Exception as install_error:
+        print(f"[Database] Could not auto-install psycopg2-binary: {install_error}")
+        print("[Database] To enable database features, run: pip install psycopg2-binary")
 
 
 class DatabaseStorage:
@@ -1286,7 +1300,9 @@ async def test_database_connection():
     if not HAS_PSYCOPG2:
         return JSONResponse({
             "success": False,
-            "error": "psycopg2 not installed. Run: pip install psycopg2-binary"
+            "error": "psycopg2 not installed",
+            "install_hint": "pip install psycopg2-binary",
+            "message": "Database driver not found. Install with: pip install psycopg2-binary"
         })
     
     # Configure with current settings
@@ -1304,7 +1320,9 @@ async def connect_database():
     if not HAS_PSYCOPG2:
         return JSONResponse({
             "success": False,
-            "error": "psycopg2 not installed. Run: pip install psycopg2-binary"
+            "error": "psycopg2 not installed",
+            "install_hint": "pip install psycopg2-binary",
+            "message": "Database driver not found. Install with: pip install psycopg2-binary"
         })
     
     # Configure with current settings
@@ -2458,8 +2476,8 @@ h1 {
 }
 .toggle-switch {
   position: relative;
-  width: 36px;
-  height: 20px;
+  width: 40px;
+  height: 22px;
   flex-shrink: 0;
 }
 .toggle-switch input {
@@ -2485,25 +2503,26 @@ h1 {
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
   background: var(--gray-600);
-  border-radius: 26px;
+  border-radius: 11px;
   transition: 0.3s;
 }
 .toggle-slider:before {
   position: absolute;
   content: "";
-  height: 20px;
-  width: 20px;
+  height: 16px;
+  width: 16px;
   left: 3px;
-  bottom: 3px;
+  top: 3px;
   background: white;
   border-radius: 50%;
   transition: 0.3s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 .toggle-switch input:checked + .toggle-slider {
   background: var(--success);
 }
 .toggle-switch input:checked + .toggle-slider:before {
-  transform: translateX(22px);
+  transform: translateX(18px);
 }
 .toggle-label {
   color: var(--gray-300);
@@ -4219,25 +4238,63 @@ h1 {
 }
 
 /* Settings Sub-Tabs Navigation */
+.settings-subtabs-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.settings-subtabs-scroll {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(90deg, var(--dark) 60%, transparent 100%);
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.settings-subtabs-scroll.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.settings-subtabs-scroll.left {
+  left: 0;
+  background: linear-gradient(90deg, var(--dark) 60%, transparent 100%);
+}
+.settings-subtabs-scroll.right {
+  right: 0;
+  background: linear-gradient(-90deg, var(--dark) 60%, transparent 100%);
+}
+.settings-subtabs-scroll svg {
+  width: 16px;
+  height: 16px;
+  color: var(--gray-400);
+  transition: color 0.2s;
+}
+.settings-subtabs-scroll:hover svg {
+  color: var(--primary);
+}
 .settings-subtabs {
   display: flex;
   gap: 0;
-  background: rgba(0, 0, 0, 0.3);
-  border-bottom: 1px solid rgba(255,255,255,0.1);
   padding: 0;
-  flex-shrink: 0;
   overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-behavior: smooth;
 }
 .settings-subtabs::-webkit-scrollbar {
-  height: 3px;
-}
-.settings-subtabs::-webkit-scrollbar-thumb {
-  background: var(--gray-600);
-  border-radius: 3px;
+  display: none;
 }
 .settings-subtab {
-  padding: 0.75rem 1rem;
-  font-size: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.7rem;
   font-weight: 500;
   color: var(--gray-400);
   background: transparent;
@@ -4247,8 +4304,9 @@ h1 {
   white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.3rem;
   position: relative;
+  flex-shrink: 0;
 }
 .settings-subtab::after {
   content: '';
@@ -4272,8 +4330,8 @@ h1 {
   background: var(--primary);
 }
 .settings-subtab svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   flex-shrink: 0;
 }
 
@@ -4300,30 +4358,31 @@ h1 {
 /* Database Storage Section */
 .db-connection-form {
   background: rgba(0,0,0,0.2);
-  border-radius: 12px;
-  padding: 1rem;
+  border-radius: 10px;
+  padding: 0.75rem;
   border: 1px solid rgba(255,255,255,0.08);
 }
 .db-connection-type {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
 }
 .db-type-btn {
   flex: 1;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.5rem;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--gray-400);
-  font-size: 0.8rem;
+  font-size: 0.65rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  gap: 0.3rem;
+  flex-direction: column;
 }
 .db-type-btn:hover {
   background: rgba(255,255,255,0.1);
@@ -4335,19 +4394,19 @@ h1 {
   color: var(--primary);
 }
 .db-type-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
 }
 .db-form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 .db-form-group {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.25rem;
 }
 .db-form-group.full-width {
   grid-column: span 2;
@@ -4967,22 +5026,15 @@ main {
   transform: translateY(-1px);
 }
 
-/* Input area */
+/* Input area - Redesigned */
 #input-area {
-  padding: 1rem;
-  background: rgba(0,0,0,0.2);
-  border-top: 1px solid rgba(255,255,255,0.1);
+  padding: 0.75rem 1rem;
+  background: linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.25) 100%);
+  border-top: 1px solid rgba(255,255,255,0.08);
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
   flex-shrink: 0;
-}
-.input-options {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem;
 }
 .input-row {
   display: flex;
@@ -4995,17 +5047,34 @@ main {
   display: flex;
   flex-direction: column;
 }
+.input-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.2) 100%);
+  border: 2px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  transition: all 0.25s ease;
+}
+.input-container:hover {
+  border-color: rgba(255,255,255,0.15);
+}
+.input-container:focus-within {
+  border-color: var(--primary);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(0,0,0,0.25) 100%);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15), 0 4px 20px rgba(0,0,0,0.2);
+}
 #message-input {
   width: 100%;
-  min-height: 48px;
-  max-height: 180px;
-  padding: 0.85rem 1rem;
-  border: 2px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 0.75rem 1rem;
+  padding-bottom: 0.5rem;
+  border: none;
+  border-radius: 16px 16px 0 0;
   font-size: 0.9rem;
-  background: linear-gradient(135deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.2) 100%);
+  background: transparent;
   color: var(--light);
-  transition: all 0.25s ease;
   font-family: inherit;
   resize: none;
   overflow-y: auto;
@@ -5022,14 +5091,106 @@ main {
   color: var(--gray-500);
   font-size: 0.85rem;
 }
-#message-input:hover {
-  border-color: rgba(255,255,255,0.15);
-}
 #message-input:focus {
   outline: none;
-  border-color: var(--primary);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(0,0,0,0.25) 100%);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15), 0 4px 20px rgba(0,0,0,0.2);
+}
+/* Input toolbar with attach & options */
+.input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem 0.5rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  gap: 0.5rem;
+}
+.input-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.input-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--gray-400);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.toolbar-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--gray-200);
+}
+.toolbar-btn.active {
+  background: rgba(14, 165, 233, 0.15);
+  color: var(--secondary);
+}
+.toolbar-btn svg {
+  width: 14px;
+  height: 14px;\n}
+.toolbar-btn-attach {
+  border: 1px dashed rgba(139, 92, 246, 0.3);
+}
+.toolbar-btn-attach:hover {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #a78bfa;
+}
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255,255,255,0.1);
+  margin: 0 0.25rem;
+}
+#attached-files {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0 0.75rem 0.5rem;
+}
+#attached-files:empty {
+  display: none;
+}
+.attached-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--primary-light);
+  border-radius: 14px;
+  font-size: 0.72rem;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+.attached-file .remove-file {
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+  font-size: 0.8rem;
+}
+.attached-file .remove-file:hover {
+  opacity: 1;
+}
+#send-btn {
+  padding: 0.85rem 1.5rem;
+  min-width: 52px;
+  border-radius: 14px;
+}
+
+/* Hide old input options - we moved them to toolbar */
+.input-options {
+  display: none;
 }
 
 /* Background task checkbox - Premium Style */
@@ -5927,31 +6088,35 @@ main {
     <div id="chat-container">
       <div id="messages"></div>
       <div id="input-area">
-        <div class="input-options">
-          <div class="file-attachment-area">
-            <div class="file-input-wrapper">
-              <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini">
-              <label for="file-input" class="file-input-btn">
-                <span class="attach-icon">📎</span>
-                <span>Attach</span>
-              </label>
-            </div>
-            <div id="attached-files"></div>
-          </div>
-          <div class="background-task-toggle">
-            <label class="checkbox-wrapper">
-              <input type="checkbox" id="background-task-checkbox">
-              <span class="checkmark"></span>
-              <span class="checkbox-label">
-                <span class="label-icon">🔄</span>
-                <span>Background Task</span>
-              </span>
-            </label>
-          </div>
-        </div>
         <div class="input-row">
           <div class="input-wrapper">
-            <textarea id="message-input" placeholder="Ask about OWASP, run security scans, use specific tools (e.g., 'run nmap against target.com')..." rows="1"></textarea>
+            <div class="input-container">
+              <textarea id="message-input" placeholder="Ask about OWASP, run security scans, use specific tools..." rows="1"></textarea>
+              <div id="attached-files"></div>
+              <div class="input-toolbar">
+                <div class="input-toolbar-left">
+                  <input type="file" id="file-input" multiple accept=".txt,.json,.xml,.html,.log,.csv,.md,.py,.js,.yaml,.yml,.conf,.cfg,.ini" style="display:none;">
+                  <button type="button" class="toolbar-btn toolbar-btn-attach" onclick="document.getElementById('file-input').click()" title="Attach files">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                    </svg>
+                    <span>Attach</span>
+                  </button>
+                  <span class="toolbar-divider"></span>
+                  <button type="button" class="toolbar-btn" id="bg-task-btn" onclick="toggleBackgroundTask()" title="Run as background task">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                    <span>Background</span>
+                  </button>
+                </div>
+                <div class="input-toolbar-right">
+                  <span id="char-counter" style="font-size:0.7rem;color:var(--gray-500);"></span>
+                </div>
+              </div>
+            </div>
+            <input type="checkbox" id="background-task-checkbox" style="display:none;">
           </div>
           <button class="btn btn-primary btn-send" id="send-btn" title="Send message">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -6900,8 +7065,14 @@ async function testDbConnection() {
       updateDbStatus(true, result.message);
       addMessage('system', `✅ Database test successful: ${result.message}`);
     } else {
-      updateDbStatus(false, result.message || result.error, true);
-      addMessage('system', `⚠️ Database test failed: ${result.message || result.error}`);
+      const errorMsg = result.message || result.error;
+      const hasInstallHint = result.install_hint;
+      updateDbStatus(false, errorMsg, true);
+      if (hasInstallHint) {
+        addMessage('system', `⚠️ Database driver missing. Run: <code>${result.install_hint}</code>`);
+      } else {
+        addMessage('system', `⚠️ Database test failed: ${errorMsg}`);
+      }
     }
   } catch (err) {
     updateDbStatus(false, 'Connection failed: ' + err.message, true);
@@ -6941,8 +7112,14 @@ async function connectDatabase() {
         addMessage('system', `⚠️ Connected but tables not initialized: ${setupResult.message}`);
       }
     } else {
-      updateDbStatus(false, connectResult.message || connectResult.error, true);
-      addMessage('system', `⚠️ Database connection failed: ${connectResult.message || connectResult.error}`);
+      const errorMsg = connectResult.message || connectResult.error;
+      const hasInstallHint = connectResult.install_hint;
+      updateDbStatus(false, errorMsg, true);
+      if (hasInstallHint) {
+        addMessage('system', `⚠️ Database driver missing. Run: <code>${connectResult.install_hint}</code>`);
+      } else {
+        addMessage('system', `⚠️ Database connection failed: ${errorMsg}`);
+      }
     }
   } catch (err) {
     updateDbStatus(false, 'Connection failed: ' + err.message, true);
@@ -7202,6 +7379,29 @@ function removeFile(index) {
   attachedFiles.splice(index, 1);
   renderAttachedFiles();
 }
+
+// Toggle background task mode
+function toggleBackgroundTask() {
+  const checkbox = document.getElementById('background-task-checkbox');
+  const btn = document.getElementById('bg-task-btn');
+  checkbox.checked = !checkbox.checked;
+  if (checkbox.checked) {
+    btn.classList.add('active');
+  } else {
+    btn.classList.remove('active');
+  }
+}
+
+// Update char counter
+document.getElementById('message-input').addEventListener('input', function() {
+  const counter = document.getElementById('char-counter');
+  const len = this.value.length;
+  if (len > 0) {
+    counter.textContent = len + ' chars';
+  } else {
+    counter.textContent = '';
+  }
+});
 
 // SVG icons for activity types
 const activityIcons = {
