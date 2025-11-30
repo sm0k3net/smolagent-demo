@@ -6960,7 +6960,10 @@ let sessionId = 'default';  // Match currentChatId for consistency
 
 let chatHistory = [];
 let currentReport = { html: null, markdown: null };
-const ws = new WebSocket(`ws://${location.host}/ws`);
+
+// Determine WebSocket protocol based on page protocol (ws for http, wss for https)
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
 
 // Task store for UI
 let taskStore = {};
