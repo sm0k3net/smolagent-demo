@@ -450,6 +450,191 @@ class DatabaseStorage:
                 return stats
         except Exception as e:
             return {"enabled": True, "error": str(e)}
+    
+    def export_to_local(self, export_path: str = ".db_export") -> tuple[bool, str, Dict]:
+        """Export all database data to local JSON files for backup/migration."""
+        if not self.enabled or not self.connection:
+            return False, "Not connected to database", {}
+        
+        import json
+        from pathlib import Path
+        
+        try:
+            export_dir = Path(export_path)
+            export_dir.mkdir(exist_ok=True)
+            
+            exported = {}
+            
+            with self.connection.cursor(cursor_factory=RealDictCursor) as cur:
+                # Export command_history
+                cur.execute("SELECT * FROM command_history ORDER BY created_at;")
+                commands = cur.fetchall()
+                commands_data = []
+                for row in commands:
+                    row_dict = dict(row)
+                    for k, v in row_dict.items():
+                        if hasattr(v, 'isoformat'):
+                            row_dict[k] = v.isoformat()
+                    commands_data.append(row_dict)
+                with open(export_dir / "command_history.json", "w") as f:
+                    json.dump(commands_data, f, indent=2, default=str)
+                exported["commands"] = len(commands_data)
+                
+                # Export command_outputs
+                cur.execute("SELECT * FROM command_outputs ORDER BY created_at;")
+                outputs = cur.fetchall()
+                outputs_data = []
+                for row in outputs:
+                    row_dict = dict(row)
+                    for k, v in row_dict.items():
+                        if hasattr(v, 'isoformat'):
+                            row_dict[k] = v.isoformat()
+                    outputs_data.append(row_dict)
+                with open(export_dir / "command_outputs.json", "w") as f:
+                    json.dump(outputs_data, f, indent=2, default=str)
+                exported["outputs"] = len(outputs_data)
+                
+                # Export agent_memory
+                cur.execute("SELECT * FROM agent_memory ORDER BY created_at;")
+                memories = cur.fetchall()
+                memories_data = []
+                for row in memories:
+                    row_dict = dict(row)
+                    for k, v in row_dict.items():
+                        if hasattr(v, 'isoformat'):
+                            row_dict[k] = v.isoformat()
+                    memories_data.append(row_dict)
+                with open(export_dir / "agent_memory.json", "w") as f:
+                    json.dump(memories_data, f, indent=2, default=str)
+                exported["memories"] = len(memories_data)
+                
+                # Export task_history
+                cur.execute("SELECT * FROM task_history ORDER BY created_at;")
+                tasks = cur.fetchall()
+                tasks_data = []
+                for row in tasks:
+                    row_dict = dict(row)
+                    for k, v in row_dict.items():
+                        if hasattr(v, 'isoformat'):
+                            row_dict[k] = v.isoformat()
+                    tasks_data.append(row_dict)
+                with open(export_dir / "task_history.json", "w") as f:
+                    json.dump(tasks_data, f, indent=2, default=str)
+                exported["tasks"] = len(tasks_data)
+                
+                # Export chat_history
+                cur.execute("SELECT * FROM chat_history ORDER BY created_at;")
+                chats = cur.fetchall()
+                chats_data = []
+                for row in chats:
+                    row_dict = dict(row)
+                    for k, v in row_dict.items():
+                        if hasattr(v, 'isoformat'):
+                            row_dict[k] = v.isoformat()
+                    chats_data.append(row_dict)
+                with open(export_dir / "chat_history.json", "w") as f:
+                    json.dump(chats_data, f, indent=2, default=str)
+                exported["messages"] = len(chats_data)
+            
+            # Save export metadata
+            metadata = {
+                "exported_at": datetime.now().isoformat(),
+                "source": self.config.get("host", "unknown"),
+                "counts": exported
+            }
+            with open(export_dir / "export_metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+            
+            total = sum(exported.values())
+            return True, f"Exported {total} records to {export_path}/", exported
+            
+        except Exception as e:
+            return False, f"Export failed: {str(e)}", {}
+    
+    def import_from_local(self, import_path: str = ".db_export") -> tuple[bool, str, Dict]:
+        """Import data from local JSON files back to database."""
+        if not self.enabled or not self.connection:
+            return False, "Not connected to database", {}
+        
+        import json
+        from pathlib import Path
+        
+        try:
+            import_dir = Path(import_path)
+            if not import_dir.exists():
+                return False, f"Import directory {import_path} not found", {}
+            
+            imported = {}
+            
+            with self.connection.cursor() as cur:
+                # Import command_history
+                cmd_file = import_dir / "command_history.json"
+                if cmd_file.exists():
+                    with open(cmd_file) as f:
+                        commands = json.load(f)
+                    for cmd in commands:
+                        cur.execute("""
+                            INSERT INTO command_history (session_id, task_id, command, command_type, tool_name, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING;
+                        """, (cmd.get("session_id"), cmd.get("task_id"), cmd.get("command"),
+                              cmd.get("command_type"), cmd.get("tool_name"), cmd.get("created_at")))
+                    imported["commands"] = len(commands)
+                
+                # Import agent_memory
+                mem_file = import_dir / "agent_memory.json"
+                if mem_file.exists():
+                    with open(mem_file) as f:
+                        memories = json.load(f)
+                    for mem in memories:
+                        cur.execute("""
+                            INSERT INTO agent_memory (session_id, memory_type, key, value, metadata, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING;
+                        """, (mem.get("session_id"), mem.get("memory_type"), mem.get("key"),
+                              mem.get("value"), json.dumps(mem.get("metadata")) if mem.get("metadata") else None,
+                              mem.get("created_at")))
+                    imported["memories"] = len(memories)
+                
+                # Import task_history
+                task_file = import_dir / "task_history.json"
+                if task_file.exists():
+                    with open(task_file) as f:
+                        tasks = json.load(f)
+                    for task in tasks:
+                        cur.execute("""
+                            INSERT INTO task_history (task_id, session_id, prompt, status, result, error, 
+                                                      step_count, tool_count, created_at, completed_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING;
+                        """, (task.get("task_id"), task.get("session_id"), task.get("prompt"),
+                              task.get("status"), task.get("result"), task.get("error"),
+                              task.get("step_count", 0), task.get("tool_count", 0),
+                              task.get("created_at"), task.get("completed_at")))
+                    imported["tasks"] = len(tasks)
+                
+                # Import chat_history
+                chat_file = import_dir / "chat_history.json"
+                if chat_file.exists():
+                    with open(chat_file) as f:
+                        chats = json.load(f)
+                    for chat in chats:
+                        cur.execute("""
+                            INSERT INTO chat_history (session_id, role, content, metadata, created_at)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING;
+                        """, (chat.get("session_id"), chat.get("role"), chat.get("content"),
+                              json.dumps(chat.get("metadata")) if chat.get("metadata") else None,
+                              chat.get("created_at")))
+                    imported["messages"] = len(chats)
+                
+                self.connection.commit()
+            
+            total = sum(imported.values())
+            return True, f"Imported {total} records from {import_path}/", imported
+            
+        except Exception as e:
+            return False, f"Import failed: {str(e)}", {}
 
 
 # Global database storage instance
@@ -1441,6 +1626,44 @@ async def get_database_stats():
     """Get database statistics."""
     stats = db_storage.get_stats()
     return JSONResponse(stats)
+
+@app.post("/api/database/export")
+async def export_database_to_local():
+    """Export all database data to local JSON files."""
+    success, message, counts = db_storage.export_to_local()
+    return JSONResponse({
+        "success": success,
+        "message": message,
+        "counts": counts
+    })
+
+@app.post("/api/database/import")
+async def import_database_from_local():
+    """Import data from local JSON files to database."""
+    success, message, counts = db_storage.import_from_local()
+    return JSONResponse({
+        "success": success,
+        "message": message,
+        "counts": counts
+    })
+
+@app.get("/api/database/export/check")
+async def check_local_export():
+    """Check if local export exists and get its metadata."""
+    from pathlib import Path
+    import json
+    
+    export_dir = Path(".db_export")
+    if not export_dir.exists():
+        return JSONResponse({"exists": False})
+    
+    metadata_file = export_dir / "export_metadata.json"
+    if metadata_file.exists():
+        with open(metadata_file) as f:
+            metadata = json.load(f)
+        return JSONResponse({"exists": True, "metadata": metadata})
+    
+    return JSONResponse({"exists": True, "metadata": None})
 
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
@@ -5910,6 +6133,43 @@ main {
                 <div class="db-stat-label">Messages</div>
               </div>
             </div>
+            
+            <!-- Data Migration Section -->
+            <div id="db-migration" class="db-migration" style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08);">
+              <div style="font-size: 0.75rem; font-weight: 600; color: var(--gray-300); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="17 1 21 5 17 9"></polyline>
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                  <polyline points="7 23 3 19 7 15"></polyline>
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                </svg>
+                Data Migration
+              </div>
+              <p style="font-size: 0.7rem; color: var(--gray-500); margin-bottom: 0.5rem; line-height: 1.4;">
+                Export database to local files or import from local backup.
+              </p>
+              <div id="local-export-info" style="display: none; font-size: 0.7rem; color: var(--gray-400); margin-bottom: 0.5rem; padding: 0.4rem 0.6rem; background: rgba(255,255,255,0.05); border-radius: 4px;">
+                <span id="local-export-date"></span>
+              </div>
+              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                <button class="btn btn-secondary" onclick="exportDatabaseToLocal()" style="font-size: 0.7rem; padding: 0.4rem 0.6rem;" title="Export DB to local files">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Export to Local
+                </button>
+                <button class="btn btn-secondary" onclick="importDatabaseFromLocal()" style="font-size: 0.7rem; padding: 0.4rem 0.6rem;" title="Import from local files">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  Import from Local
+                </button>
+              </div>
+            </div>
           </div>
           
           <div class="settings-section">
@@ -7417,8 +7677,82 @@ async function loadDatabaseStats() {
     } else {
       document.getElementById('db-stats').style.display = 'none';
     }
+    
+    // Check for local export
+    checkLocalExport();
   } catch (err) {
     console.error('Failed to load database stats:', err);
+  }
+}
+
+async function checkLocalExport() {
+  try {
+    const response = await fetch('/api/database/export/check');
+    const result = await response.json();
+    
+    const infoEl = document.getElementById('local-export-info');
+    const dateEl = document.getElementById('local-export-date');
+    
+    if (result.exists && result.metadata) {
+      infoEl.style.display = 'block';
+      const exportDate = new Date(result.metadata.exported_at).toLocaleString();
+      const counts = result.metadata.counts || {};
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      dateEl.innerHTML = `📦 Local backup: ${exportDate} (${total} records)`;
+    } else if (result.exists) {
+      infoEl.style.display = 'block';
+      dateEl.innerHTML = '📦 Local backup available';
+    } else {
+      infoEl.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Failed to check local export:', err);
+  }
+}
+
+async function exportDatabaseToLocal() {
+  if (!confirm('Export all database data to local files?\\n\\nThis will create a backup in the .db_export/ directory.')) {
+    return;
+  }
+  
+  try {
+    addMessage('system', '⏳ Exporting database to local files...');
+    const response = await fetch('/api/database/export', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      const counts = result.counts || {};
+      const details = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+      addMessage('system', `✅ ${result.message}\\n📊 Exported: ${details}`);
+      checkLocalExport();
+    } else {
+      addMessage('system', `⚠️ Export failed: ${result.message}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Export error: ${err.message}`);
+  }
+}
+
+async function importDatabaseFromLocal() {
+  if (!confirm('Import data from local backup to database?\\n\\nThis will add records from the .db_export/ directory to the connected database.\\n\\nNote: Duplicate records will be skipped.')) {
+    return;
+  }
+  
+  try {
+    addMessage('system', '⏳ Importing data from local files...');
+    const response = await fetch('/api/database/import', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      const counts = result.counts || {};
+      const details = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+      addMessage('system', `✅ ${result.message}\\n📊 Imported: ${details}`);
+      loadDatabaseStats();
+    } else {
+      addMessage('system', `⚠️ Import failed: ${result.message}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Import error: ${err.message}`);
   }
 }
 
