@@ -63,6 +63,27 @@ class DatabaseStorage:
     
     def configure(self, config: Dict[str, Any]) -> bool:
         """Configure database connection settings."""
+        # Check if a connection URI was provided
+        connection_uri = config.get("connection_uri", "")
+        if connection_uri and connection_uri.startswith("postgresql://"):
+            # Parse the URI
+            try:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(connection_uri)
+                self.config = {
+                    "host": parsed.hostname or "localhost",
+                    "port": parsed.port or 5432,
+                    "database": parsed.path.lstrip('/') or "postgres",
+                    "user": parsed.username or "postgres",
+                    "password": parsed.password or "",
+                    "ssl_mode": parse_qs(parsed.query).get("sslmode", ["require"])[0],
+                    "connection_type": "supabase" if "supabase" in (parsed.hostname or "") else "local",
+                    "connection_uri": connection_uri,
+                }
+                return True
+            except Exception as e:
+                print(f"[Database] Failed to parse connection URI: {e}")
+        
         self.config = {
             "host": config.get("host", "localhost"),
             "port": config.get("port", 5432),
@@ -89,14 +110,16 @@ class DatabaseStorage:
         
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
-            host = self.config["host"]
+            original_host = self.config["host"]
+            host = original_host
             
             # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
             try:
-                ipv4_addr = socket.gethostbyname(host)
-                host = ipv4_addr
-            except socket.gaierror:
-                pass  # Keep original host if resolution fails
+                resolved_ip = socket.gethostbyname(original_host)
+                host = resolved_ip
+                print(f"[Database] Connecting to {original_host} via IPv4: {resolved_ip}")
+            except socket.gaierror as dns_err:
+                print(f"[Database] DNS resolution failed for {original_host}: {dns_err}")
             
             self.connection = psycopg2.connect(
                 host=host,
@@ -105,7 +128,7 @@ class DatabaseStorage:
                 user=self.config["user"],
                 password=self.config["password"],
                 sslmode=ssl_mode,
-                connect_timeout=10
+                connect_timeout=15
             )
             self.connection.autocommit = True
             self.enabled = True
@@ -131,14 +154,19 @@ class DatabaseStorage:
         
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
-            host = self.config["host"]
+            original_host = self.config["host"]
+            host = original_host
             
             # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
+            resolved_ip = None
             try:
-                ipv4_addr = socket.gethostbyname(host)
-                host = ipv4_addr
-            except socket.gaierror:
-                pass  # Keep original host if resolution fails
+                # gethostbyname returns IPv4 address only
+                resolved_ip = socket.gethostbyname(original_host)
+                host = resolved_ip
+                print(f"[Database] Resolved {original_host} to IPv4: {resolved_ip}")
+            except socket.gaierror as dns_err:
+                print(f"[Database] DNS resolution failed for {original_host}: {dns_err}")
+                # Keep original host if resolution fails
             
             conn = psycopg2.connect(
                 host=host,
@@ -147,7 +175,7 @@ class DatabaseStorage:
                 user=self.config["user"],
                 password=self.config["password"],
                 sslmode=ssl_mode,
-                connect_timeout=10
+                connect_timeout=15
             )
             
             # Test with a simple query
@@ -442,6 +470,9 @@ class Task(BaseModel):
     error: Optional[str] = None
     tool_count: int = 0
     step_count: int = 0
+    # Report fields
+    report_html: Optional[str] = None  # Generated HTML report
+    report_markdown: Optional[str] = None  # Generated Markdown report
     # Task chaining fields
     depends_on: Optional[str] = None  # Task ID this task depends on
     chain_id: Optional[str] = None  # Chain identifier for grouped tasks
@@ -799,6 +830,17 @@ Now, proceed with the following task:
         task_store[task_id].status = TaskStatus.completed
         task_store[task_id].completed_at = datetime.now()
         task_store[task_id].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
+        
+        # Check if a report was generated and store it
+        if is_report_mode_enabled():
+            try:
+                html_report = generate_html_report()
+                md_report = generate_markdown_report()
+                if html_report and '<!DOCTYPE html>' in html_report:
+                    task_store[task_id].report_html = html_report
+                    task_store[task_id].report_markdown = md_report
+            except Exception as report_err:
+                pass  # Report generation failed, but task still completed
         
         # Trigger next task in chain if any
         check_and_start_dependent_tasks(task_id)
@@ -3167,11 +3209,11 @@ h1 {
   margin-top: 2px;
 }
 .schedule-modal-body {
-  padding: 1.25rem 1.5rem;
+  padding: 1rem 1.25rem;
 }
 .schedule-form-section {
-  margin-bottom: 1.25rem;
-  padding-bottom: 1.25rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 .schedule-timing-section {
@@ -3179,26 +3221,29 @@ h1 {
   margin-bottom: 0;
   padding-bottom: 0;
 }
+.schedule-form .form-group {
+  margin-bottom: 0.6rem;
+}
 .form-label {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
+  gap: 0.4rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--gray-300);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
 }
 .form-label svg {
   opacity: 0.7;
 }
 .schedule-input {
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.75rem;
   background: rgba(0,0,0,0.3);
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--light);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-family: inherit;
   transition: all 0.2s ease;
 }
@@ -3215,15 +3260,15 @@ h1 {
 }
 .schedule-textarea {
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.75rem;
   background: rgba(0,0,0,0.3);
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--light);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-family: inherit;
   resize: vertical;
-  min-height: 80px;
+  min-height: 60px;
   transition: all 0.2s ease;
 }
 .schedule-textarea:hover {
@@ -3238,11 +3283,12 @@ h1 {
   color-scheme: dark;
 }
 .schedule-recurring-toggle {
-  margin: 1rem 0;
+  margin: 0.6rem 0;
 }
 .schedule-checkbox {
   background: rgba(245, 158, 11, 0.08);
   border-color: rgba(245, 158, 11, 0.2);
+  padding: 0.4rem 0.6rem;
 }
 .schedule-checkbox:hover {
   background: rgba(245, 158, 11, 0.12);
@@ -3250,11 +3296,11 @@ h1 {
 }
 .recurring-options {
   display: none;
-  padding: 1rem;
+  padding: 0.75rem;
   background: rgba(0,0,0,0.2);
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.06);
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
 }
 .recurring-options.active {
   display: block;
@@ -3294,9 +3340,9 @@ h1 {
 }
 .schedule-submit-btn {
   width: 100%;
-  margin-top: 1.25rem;
-  padding: 0.85rem;
-  font-size: 0.9rem;
+  margin-top: 0.75rem;
+  padding: 0.65rem;
+  font-size: 0.85rem;
   justify-content: center;
 }
 
@@ -4417,15 +4463,21 @@ h1 {
   height: 16px;
 }
 .db-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.db-form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
 }
 .db-form-group {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  min-width: 0;
 }
 .db-form-group.full-width {
   grid-column: span 2;
@@ -5754,35 +5806,46 @@ main {
                 </button>
               </div>
               
+              <!-- Connection URI (for Supabase/quick setup) -->
+              <div class="db-form-group" id="db-uri-group" style="margin-bottom: 0.75rem; display: none;">
+                <label class="db-form-label">Connection URI (optional)</label>
+                <input type="text" class="db-form-input" id="db-connection-uri" placeholder="postgresql://user:pass@host:5432/db" style="font-size: 0.75rem;">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 0.25rem;">Paste your Supabase connection string here to auto-fill fields</div>
+              </div>
+              
               <div class="db-form-grid">
                 <div class="db-form-group">
                   <label class="db-form-label">Host</label>
                   <input type="text" class="db-form-input" id="db-host" placeholder="localhost or db.xxx.supabase.co">
                 </div>
-                <div class="db-form-group">
-                  <label class="db-form-label">Port</label>
-                  <input type="number" class="db-form-input" id="db-port" value="5432" placeholder="5432">
+                <div class="db-form-row">
+                  <div class="db-form-group">
+                    <label class="db-form-label">Port</label>
+                    <input type="number" class="db-form-input" id="db-port" value="5432" placeholder="5432">
+                  </div>
+                  <div class="db-form-group">
+                    <label class="db-form-label">SSL</label>
+                    <select class="db-form-select" id="db-ssl-mode">
+                      <option value="require">Require</option>
+                      <option value="prefer">Prefer</option>
+                      <option value="verify-ca">Verify CA</option>
+                      <option value="disable">Disable</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="db-form-row">
+                  <div class="db-form-group">
+                    <label class="db-form-label">Database</label>
+                    <input type="text" class="db-form-input" id="db-database" value="postgres" placeholder="postgres">
+                  </div>
+                  <div class="db-form-group">
+                    <label class="db-form-label">User</label>
+                    <input type="text" class="db-form-input" id="db-user" value="postgres" placeholder="postgres">
+                  </div>
                 </div>
                 <div class="db-form-group">
-                  <label class="db-form-label">Database</label>
-                  <input type="text" class="db-form-input" id="db-database" value="postgres" placeholder="postgres">
-                </div>
-                <div class="db-form-group">
-                  <label class="db-form-label">User</label>
-                  <input type="text" class="db-form-input" id="db-user" value="postgres" placeholder="postgres">
-                </div>
-                <div class="db-form-group full-width">
                   <label class="db-form-label">Password</label>
                   <input type="password" class="db-form-input" id="db-password" placeholder="Enter database password">
-                </div>
-                <div class="db-form-group">
-                  <label class="db-form-label">SSL Mode</label>
-                  <select class="db-form-select" id="db-ssl-mode">
-                    <option value="prefer">Prefer</option>
-                    <option value="require">Require</option>
-                    <option value="verify-ca">Verify CA</option>
-                    <option value="disable">Disable</option>
-                  </select>
                 </div>
               </div>
               
@@ -6415,6 +6478,9 @@ async function viewTaskResult(taskId) {
     
     title.textContent = `Task Result: ${task.prompt.substring(0, 50)}${task.prompt.length > 50 ? '...' : ''}`;
     
+    // Check if we have an HTML report
+    const hasHtmlReport = task.report_html && task.report_html.includes('<!DOCTYPE html');
+    
     // Format result with markdown-like rendering
     let resultHtml = task.result || 'No result available';
     
@@ -6434,12 +6500,46 @@ async function viewTaskResult(taskId) {
     const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
     resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px; cursor: pointer;" onclick="showImageModal(this.src)">');
     
+    // Build the modal content
+    let reportButtonHtml = '';
+    if (hasHtmlReport) {
+      reportButtonHtml = `
+        <div style="margin: 1rem 0; padding: 0.75rem; background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.1) 100%); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px;">
+          <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+            <span style="font-size: 1.2rem;">📋</span>
+            <strong style="color: var(--success);">Security Report Available</strong>
+          </div>
+          <p style="font-size: 0.8rem; color: var(--gray-300); margin-bottom: 0.75rem;">A professional HTML report was generated for this task.</p>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="viewTaskReport('${taskId}')" style="font-size: 0.8rem; padding: 0.5rem 1rem;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 0.3rem;">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              View Report
+            </button>
+            <button class="btn btn-secondary" onclick="downloadTaskReport('${taskId}')" style="font-size: 0.8rem; padding: 0.5rem 1rem;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 0.3rem;">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
     body.innerHTML = `
       <div style="margin-bottom: 1rem;">
         <strong>Status:</strong> <span class="task-status ${task.status}">${task.status}</span><br>
         <strong>Steps:</strong> ${task.step_count} | <strong>Tools Used:</strong> ${task.tool_count}<br>
         ${task.error ? `<strong style="color: var(--danger);">Error:</strong> ${task.error}` : ''}
       </div>
+      ${reportButtonHtml}
       <hr style="border-color: rgba(255,255,255,0.1); margin: 1rem 0;">
       <div style="white-space: pre-wrap; word-break: break-word;">${resultHtml}</div>
     `;
@@ -6448,6 +6548,48 @@ async function viewTaskResult(taskId) {
   } catch (err) {
     alert('Failed to load task result: ' + err.message);
   }
+}
+
+// View task report in new window
+function viewTaskReport(taskId) {
+  const task = taskStore[taskId];
+  if (task && task.report_html) {
+    const newWindow = window.open('', '_blank');
+    newWindow.document.write(task.report_html);
+    newWindow.document.close();
+  } else {
+    // Fetch from server
+    fetch(`/api/tasks/${taskId}`)
+      .then(r => r.json())
+      .then(t => {
+        if (t.report_html) {
+          const newWindow = window.open('', '_blank');
+          newWindow.document.write(t.report_html);
+          newWindow.document.close();
+        } else {
+          alert('No report available for this task');
+        }
+      });
+  }
+}
+
+// Download task report
+function downloadTaskReport(taskId) {
+  fetch(`/api/tasks/${taskId}`)
+    .then(r => r.json())
+    .then(t => {
+      if (t.report_html) {
+        const blob = new Blob([t.report_html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `security-report-${taskId}.html`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        alert('No report available for this task');
+      }
+    });
 }
 
 function closeTaskModal() {
@@ -7043,6 +7185,12 @@ function setDbType(type) {
   document.getElementById('db-type-local').classList.toggle('active', type === 'local');
   document.getElementById('db-type-supabase').classList.toggle('active', type === 'supabase');
   
+  // Show/hide URI input for Supabase
+  const uriGroup = document.getElementById('db-uri-group');
+  if (uriGroup) {
+    uriGroup.style.display = type === 'supabase' ? 'block' : 'none';
+  }
+  
   // Set default values based on type
   const hostInput = document.getElementById('db-host');
   const portInput = document.getElementById('db-port');
@@ -7061,6 +7209,38 @@ function setDbType(type) {
     sslSelect.value = 'prefer';
   }
 }
+
+// Parse connection URI and fill form fields
+function parseConnectionUri() {
+  const uri = document.getElementById('db-connection-uri').value.trim();
+  if (!uri || !uri.startsWith('postgresql://')) return;
+  
+  try {
+    const url = new URL(uri);
+    document.getElementById('db-host').value = url.hostname || '';
+    document.getElementById('db-port').value = url.port || '5432';
+    document.getElementById('db-database').value = url.pathname.replace('/', '') || 'postgres';
+    document.getElementById('db-user').value = url.username || 'postgres';
+    document.getElementById('db-password').value = url.password || '';
+    
+    // Check for sslmode in query params
+    const sslMode = url.searchParams.get('sslmode');
+    if (sslMode) {
+      document.getElementById('db-ssl-mode').value = sslMode;
+    }
+  } catch (e) {
+    console.error('Failed to parse connection URI:', e);
+  }
+}
+
+// Add listener for URI input
+document.addEventListener('DOMContentLoaded', () => {
+  const uriInput = document.getElementById('db-connection-uri');
+  if (uriInput) {
+    uriInput.addEventListener('change', parseConnectionUri);
+    uriInput.addEventListener('paste', () => setTimeout(parseConnectionUri, 100));
+  }
+});
 
 async function loadDatabaseSettings() {
   try {
@@ -7101,6 +7281,7 @@ function getDbConfig() {
   return {
     enabled: false,
     connection_type: currentDbType,
+    connection_uri: document.getElementById('db-connection-uri')?.value.trim() || '',
     host: document.getElementById('db-host').value.trim(),
     port: parseInt(document.getElementById('db-port').value) || 5432,
     database: document.getElementById('db-database').value.trim() || 'postgres',
