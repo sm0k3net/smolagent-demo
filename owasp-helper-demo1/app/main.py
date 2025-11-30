@@ -5817,15 +5817,15 @@ main {
               
               <!-- Connection URI (for Supabase/quick setup) -->
               <div class="db-form-group" id="db-uri-group" style="margin-bottom: 0.75rem; display: none;">
-                <label class="db-form-label">Connection URI (optional)</label>
-                <input type="text" class="db-form-input" id="db-connection-uri" placeholder="postgresql://user:pass@host:5432/db" style="font-size: 0.75rem;">
-                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 0.25rem;">Paste your Supabase connection string here to auto-fill fields</div>
+                <label class="db-form-label">Connection URI (recommended)</label>
+                <input type="text" class="db-form-input" id="db-connection-uri" placeholder="postgresql://postgres.xxx:pass@aws-0-region.pooler.supabase.com:6543/postgres" style="font-size: 0.7rem;">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 0.25rem;">Paste your Supabase <strong>Transaction Pooler</strong> connection string (port 6543)</div>
               </div>
               
               <div class="db-form-grid">
                 <div class="db-form-group">
                   <label class="db-form-label">Host</label>
-                  <input type="text" class="db-form-input" id="db-host" placeholder="localhost or db.xxx.supabase.co">
+                  <input type="text" class="db-form-input" id="db-host" placeholder="localhost or pooler.supabase.com">
                 </div>
                 <div class="db-form-row">
                   <div class="db-form-group">
@@ -5849,7 +5849,7 @@ main {
                   </div>
                   <div class="db-form-group">
                     <label class="db-form-label">User</label>
-                    <input type="text" class="db-form-input" id="db-user" value="postgres" placeholder="postgres">
+                    <input type="text" class="db-form-input" id="db-user" value="postgres" placeholder="postgres.project-ref">
                   </div>
                 </div>
                 <div class="db-form-group">
@@ -7204,17 +7204,21 @@ function setDbType(type) {
   const hostInput = document.getElementById('db-host');
   const portInput = document.getElementById('db-port');
   const dbInput = document.getElementById('db-database');
+  const userInput = document.getElementById('db-user');
   const sslSelect = document.getElementById('db-ssl-mode');
   
   if (type === 'supabase') {
-    hostInput.placeholder = 'db.xxxxx.supabase.co';
-    portInput.value = '5432';
+    // Use Transaction Pooler (more reliable, works through firewalls)
+    hostInput.placeholder = 'aws-0-region.pooler.supabase.com';
+    portInput.value = '6543';
     dbInput.value = 'postgres';
+    userInput.placeholder = 'postgres.your-project-ref';
     sslSelect.value = 'require';
   } else {
     hostInput.placeholder = 'localhost';
     portInput.value = '5432';
     dbInput.value = 'owasp_agent';
+    userInput.placeholder = 'postgres';
     sslSelect.value = 'prefer';
   }
 }
