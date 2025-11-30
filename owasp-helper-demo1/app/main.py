@@ -111,28 +111,34 @@ class DatabaseStorage:
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
             original_host = self.config["host"]
-            host = original_host
             
-            # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
+            # For Supabase/remote hosts, try to force IPv4 connection
+            # libpq will use hostaddr if provided, bypassing DNS resolution
+            connect_params = {
+                "port": self.config["port"],
+                "dbname": self.config["database"],
+                "user": self.config["user"],
+                "password": self.config["password"],
+                "sslmode": ssl_mode,
+                "connect_timeout": 15,
+            }
+            
+            # Try to resolve to IPv4 and use hostaddr parameter
+            resolved_ip = None
             try:
                 resolved_ip = socket.gethostbyname(original_host)
-                host = resolved_ip
-                print(f"[Database] Connecting to {original_host} via IPv4: {resolved_ip}")
+                # Use hostaddr to force IPv4, but keep host for SSL certificate verification
+                connect_params["hostaddr"] = resolved_ip
+                connect_params["host"] = original_host
+                print(f"[Database] Connecting via IPv4 address {resolved_ip} for {original_host}")
             except socket.gaierror as dns_err:
-                print(f"[Database] DNS resolution failed for {original_host}: {dns_err}")
+                print(f"[Database] IPv4 resolution failed, using hostname directly: {dns_err}")
+                connect_params["host"] = original_host
             
-            self.connection = psycopg2.connect(
-                host=host,
-                port=self.config["port"],
-                database=self.config["database"],
-                user=self.config["user"],
-                password=self.config["password"],
-                sslmode=ssl_mode,
-                connect_timeout=15
-            )
+            self.connection = psycopg2.connect(**connect_params)
             self.connection.autocommit = True
             self.enabled = True
-            return True, "Connected successfully"
+            return True, f"Connected successfully{' via ' + resolved_ip if resolved_ip else ''}"
         except Exception as e:
             self.enabled = False
             return False, str(e)
@@ -155,28 +161,31 @@ class DatabaseStorage:
         try:
             ssl_mode = self.config.get("ssl_mode", "prefer")
             original_host = self.config["host"]
-            host = original_host
             
-            # Force IPv4 resolution for hosts (fixes Supabase IPv6 issues)
+            # For Supabase/remote hosts, try to force IPv4 connection
+            # libpq will use hostaddr if provided, bypassing DNS resolution
+            connect_params = {
+                "port": self.config["port"],
+                "dbname": self.config["database"],
+                "user": self.config["user"],
+                "password": self.config["password"],
+                "sslmode": ssl_mode,
+                "connect_timeout": 15,
+            }
+            
+            # Try to resolve to IPv4 and use hostaddr parameter
             resolved_ip = None
             try:
-                # gethostbyname returns IPv4 address only
                 resolved_ip = socket.gethostbyname(original_host)
-                host = resolved_ip
-                print(f"[Database] Resolved {original_host} to IPv4: {resolved_ip}")
+                # Use hostaddr to force IPv4, but keep host for SSL certificate verification
+                connect_params["hostaddr"] = resolved_ip
+                connect_params["host"] = original_host
+                print(f"[Database] Using IPv4 address {resolved_ip} for {original_host}")
             except socket.gaierror as dns_err:
-                print(f"[Database] DNS resolution failed for {original_host}: {dns_err}")
-                # Keep original host if resolution fails
+                print(f"[Database] IPv4 resolution failed, using hostname directly: {dns_err}")
+                connect_params["host"] = original_host
             
-            conn = psycopg2.connect(
-                host=host,
-                port=self.config["port"],
-                database=self.config["database"],
-                user=self.config["user"],
-                password=self.config["password"],
-                sslmode=ssl_mode,
-                connect_timeout=15
-            )
+            conn = psycopg2.connect(**connect_params)
             
             # Test with a simple query
             with conn.cursor() as cur:
