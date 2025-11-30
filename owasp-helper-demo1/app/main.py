@@ -22,6 +22,8 @@ import threading
 import uuid
 import os
 import time
+import subprocess
+import re
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Literal
@@ -660,6 +662,10 @@ class DatabaseStorage:
 
 # Global database storage instance
 db_storage = DatabaseStorage()
+
+# Cloudflare Tunnel management
+cloudflare_tunnel_process = None
+cloudflare_tunnel_url = None
 
 
 # Task management enums and models
@@ -1845,6 +1851,140 @@ async def debug_export():
         })
     except Exception as e:
         return JSONResponse({"error": str(e)})
+
+# ============== CLOUDFLARE TUNNEL ENDPOINTS ==============
+
+@app.get("/api/tunnel/status")
+async def get_tunnel_status():
+    """Get current Cloudflare Tunnel status."""
+    global cloudflare_tunnel_process, cloudflare_tunnel_url
+    
+    is_running = cloudflare_tunnel_process is not None and cloudflare_tunnel_process.poll() is None
+    
+    return JSONResponse({
+        "running": is_running,
+        "url": cloudflare_tunnel_url if is_running else None
+    })
+
+@app.post("/api/tunnel/start")
+async def start_tunnel():
+    """Start Cloudflare Tunnel using cloudflared (trycloudflare.com)."""
+    global cloudflare_tunnel_process, cloudflare_tunnel_url
+    
+    # Check if already running
+    if cloudflare_tunnel_process is not None and cloudflare_tunnel_process.poll() is None:
+        return JSONResponse({
+            "success": True,
+            "message": "Tunnel already running",
+            "url": cloudflare_tunnel_url
+        })
+    
+    try:
+        # Check if cloudflared is installed
+        check_result = subprocess.run(
+            ["cloudflared", "--version"],
+            capture_output=True,
+            text=True
+        )
+        if check_result.returncode != 0:
+            return JSONResponse({
+                "success": False,
+                "message": "cloudflared not installed. Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+                "url": None
+            })
+        
+        # Start cloudflared tunnel
+        # Using quick tunnel (trycloudflare.com) - no account needed
+        cloudflare_tunnel_process = subprocess.Popen(
+            ["cloudflared", "tunnel", "--url", "http://localhost:8000"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Wait and capture the URL from stderr (cloudflared outputs there)
+        cloudflare_tunnel_url = None
+        start_time = time.time()
+        timeout = 30  # Wait up to 30 seconds for URL
+        
+        while time.time() - start_time < timeout:
+            # Read stderr line by line (non-blocking approach)
+            if cloudflare_tunnel_process.stderr:
+                line = cloudflare_tunnel_process.stderr.readline()
+                if line:
+                    # Look for the URL in the output
+                    # Pattern: https://xxxxx.trycloudflare.com
+                    url_match = re.search(r'(https://[a-zA-Z0-9-]+\.trycloudflare\.com)', line)
+                    if url_match:
+                        cloudflare_tunnel_url = url_match.group(1)
+                        break
+            
+            # Small sleep to avoid CPU spin
+            await asyncio.sleep(0.1)
+        
+        if cloudflare_tunnel_url:
+            return JSONResponse({
+                "success": True,
+                "message": "Tunnel started successfully",
+                "url": cloudflare_tunnel_url
+            })
+        else:
+            # If we didn't get URL but process is still running, it might still work
+            if cloudflare_tunnel_process.poll() is None:
+                return JSONResponse({
+                    "success": True,
+                    "message": "Tunnel starting... URL will appear shortly",
+                    "url": None
+                })
+            else:
+                # Process died
+                stderr_output = cloudflare_tunnel_process.stderr.read() if cloudflare_tunnel_process.stderr else ""
+                cloudflare_tunnel_process = None
+                return JSONResponse({
+                    "success": False,
+                    "message": f"Tunnel failed to start: {stderr_output[:500]}",
+                    "url": None
+                })
+                
+    except FileNotFoundError:
+        return JSONResponse({
+            "success": False,
+            "message": "cloudflared not found. Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+            "url": None
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Error starting tunnel: {str(e)}",
+            "url": None
+        })
+
+@app.post("/api/tunnel/stop")
+async def stop_tunnel():
+    """Stop Cloudflare Tunnel."""
+    global cloudflare_tunnel_process, cloudflare_tunnel_url
+    
+    if cloudflare_tunnel_process is None:
+        return JSONResponse({
+            "success": True,
+            "message": "No tunnel running"
+        })
+    
+    try:
+        cloudflare_tunnel_process.terminate()
+        cloudflare_tunnel_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        cloudflare_tunnel_process.kill()
+    except Exception as e:
+        pass
+    
+    cloudflare_tunnel_process = None
+    cloudflare_tunnel_url = None
+    
+    return JSONResponse({
+        "success": True,
+        "message": "Tunnel stopped"
+    })
 
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
@@ -5487,6 +5627,9 @@ main {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+.spin {
+  animation: spin 1s linear infinite;
+}
 
 /* Report buttons */
 .report-actions {
@@ -6133,6 +6276,14 @@ main {
               </svg>
               Comm
             </button>
+            <button class="settings-subtab" data-subtab="general" onclick="switchSettingsSubtab('general')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M2 12h20"/>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+              </svg>
+              General
+            </button>
           </div>
           <div class="settings-subtabs-scroll right" id="subtabs-scroll-right" onclick="scrollSubtabs(1)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
@@ -6494,6 +6645,80 @@ main {
             <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
               Configure notification channels for scan results and alerts.
               (Coming soon: Discord, Slack, Email integrations)
+            </p>
+          </div>
+        </div>
+        
+        <!-- General Sub-Tab -->
+        <div class="settings-subtab-content" id="settings-general">
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M2 12h20"/>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+              </svg>
+              Cloudflare Tunnel
+            </div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5; margin-bottom: 15px;">
+              Make your agent accessible from the internet with one click using <a href="https://trycloudflare.com" target="_blank" style="color: var(--primary);">Cloudflare Quick Tunnels</a>.
+              No account needed!
+            </p>
+            
+            <div id="tunnel-status-container" style="background: var(--dark); border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                <div id="tunnel-indicator" style="width: 10px; height: 10px; border-radius: 50%; background: var(--gray-600);"></div>
+                <span id="tunnel-status-text" style="font-size: 0.85rem; color: var(--gray-300);">Not connected</span>
+              </div>
+              <div id="tunnel-url-container" style="display: none;">
+                <div style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                  </svg>
+                  <a id="tunnel-url" href="#" target="_blank" style="color: var(--primary); font-size: 0.85rem; word-break: break-all;"></a>
+                  <button onclick="copyTunnelUrl()" title="Copy URL" style="background: none; border: none; cursor: pointer; padding: 4px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--gray-400)" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 10px;">
+              <button id="tunnel-start-btn" class="btn btn-primary" style="flex: 1;" onclick="startTunnel()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M2 12h20"/>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                </svg>
+                Start Tunnel
+              </button>
+              <button id="tunnel-stop-btn" class="btn" style="flex: 1; background: rgba(239,68,68,0.2); color: #ef4444; display: none;" onclick="stopTunnel()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+                Stop Tunnel
+              </button>
+            </div>
+            
+            <div id="tunnel-message" style="margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+            
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+              <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.5;">
+                <strong>Requirements:</strong> <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">cloudflared</code> must be installed.<br>
+                <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" style="color: var(--primary);">Download cloudflared →</a>
+              </p>
+            </div>
+          </div>
+          
+          <div class="settings-section">
+            <div class="settings-section-title">ℹ️ About</div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
+              OWASP Security Agent - AI-powered security testing assistant.<br>
+              Built with FastAPI, smolagents, and modern web technologies.
             </p>
           </div>
         </div>
@@ -7614,6 +7839,8 @@ function switchSettingsSubtab(subtab) {
   // Load data for specific tabs
   if (subtab === 'storage') {
     loadDatabaseSettings();
+  } else if (subtab === 'general') {
+    checkTunnelStatus();
   }
   
   // Update scroll arrows visibility
@@ -7653,6 +7880,146 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial check
     setTimeout(updateSubtabsScrollArrows, 100);
   }
+});
+
+// ============== CLOUDFLARE TUNNEL MANAGEMENT ==============
+let tunnelCheckInterval = null;
+
+async function checkTunnelStatus() {
+  try {
+    const response = await fetch('/api/tunnel/status');
+    const data = await response.json();
+    updateTunnelUI(data.running, data.url);
+  } catch (error) {
+    console.error('Failed to check tunnel status:', error);
+  }
+}
+
+function updateTunnelUI(isRunning, url) {
+  const indicator = document.getElementById('tunnel-indicator');
+  const statusText = document.getElementById('tunnel-status-text');
+  const urlContainer = document.getElementById('tunnel-url-container');
+  const urlLink = document.getElementById('tunnel-url');
+  const startBtn = document.getElementById('tunnel-start-btn');
+  const stopBtn = document.getElementById('tunnel-stop-btn');
+  
+  if (isRunning) {
+    indicator.style.background = '#10b981';
+    indicator.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.5)';
+    statusText.textContent = 'Connected';
+    statusText.style.color = '#10b981';
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'flex';
+    
+    if (url) {
+      urlContainer.style.display = 'block';
+      urlLink.href = url;
+      urlLink.textContent = url;
+    }
+  } else {
+    indicator.style.background = 'var(--gray-600)';
+    indicator.style.boxShadow = 'none';
+    statusText.textContent = 'Not connected';
+    statusText.style.color = 'var(--gray-300)';
+    urlContainer.style.display = 'none';
+    startBtn.style.display = 'flex';
+    stopBtn.style.display = 'none';
+  }
+}
+
+function showTunnelMessage(message, isError = false) {
+  const msgEl = document.getElementById('tunnel-message');
+  msgEl.textContent = message;
+  msgEl.style.display = 'block';
+  msgEl.style.background = isError ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+  msgEl.style.color = isError ? '#ef4444' : '#10b981';
+  
+  setTimeout(() => {
+    msgEl.style.display = 'none';
+  }, 5000);
+}
+
+async function startTunnel() {
+  const startBtn = document.getElementById('tunnel-start-btn');
+  startBtn.disabled = true;
+  startBtn.innerHTML = '<svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Starting...';
+  
+  try {
+    const response = await fetch('/api/tunnel/start', { method: 'POST' });
+    const data = await response.json();
+    
+    if (data.success) {
+      showTunnelMessage(data.message);
+      
+      // Start polling for URL if not immediately available
+      if (!data.url) {
+        let pollCount = 0;
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          const statusResp = await fetch('/api/tunnel/status');
+          const statusData = await statusResp.json();
+          
+          if (statusData.url) {
+            clearInterval(pollInterval);
+            updateTunnelUI(true, statusData.url);
+          } else if (pollCount > 30) {
+            clearInterval(pollInterval);
+            showTunnelMessage('Tunnel started but URL not available yet. Try checking status again.', false);
+          }
+        }, 1000);
+      } else {
+        updateTunnelUI(true, data.url);
+      }
+    } else {
+      showTunnelMessage(data.message, true);
+      updateTunnelUI(false, null);
+    }
+  } catch (error) {
+    showTunnelMessage('Failed to start tunnel: ' + error.message, true);
+    updateTunnelUI(false, null);
+  }
+  
+  startBtn.disabled = false;
+  startBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Start Tunnel';
+}
+
+async function stopTunnel() {
+  const stopBtn = document.getElementById('tunnel-stop-btn');
+  stopBtn.disabled = true;
+  stopBtn.innerHTML = '<svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Stopping...';
+  
+  try {
+    const response = await fetch('/api/tunnel/stop', { method: 'POST' });
+    const data = await response.json();
+    
+    if (data.success) {
+      showTunnelMessage(data.message);
+      updateTunnelUI(false, null);
+    } else {
+      showTunnelMessage(data.message || 'Failed to stop tunnel', true);
+    }
+  } catch (error) {
+    showTunnelMessage('Failed to stop tunnel: ' + error.message, true);
+  }
+  
+  stopBtn.disabled = false;
+  stopBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop Tunnel';
+}
+
+function copyTunnelUrl() {
+  const urlEl = document.getElementById('tunnel-url');
+  if (urlEl && urlEl.textContent) {
+    navigator.clipboard.writeText(urlEl.textContent).then(() => {
+      showTunnelMessage('URL copied to clipboard!');
+    }).catch(err => {
+      showTunnelMessage('Failed to copy URL', true);
+    });
+  }
+}
+
+// Check tunnel status on page load
+document.addEventListener('DOMContentLoaded', () => {
+  checkTunnelStatus();
 });
 
 // ============== DATABASE STORAGE MANAGEMENT ==============
