@@ -61,6 +61,7 @@ from app.tools.pentest_tools import (
     install_python_package,
     install_playwright_browsers,
     install_system_tool,
+    install_cloudflared,
     check_and_install_dependencies,
 )
 from app.tools.report_tools import (
@@ -241,6 +242,7 @@ def build_owasp_agent() -> CodeAgent:
         install_python_package,
         install_playwright_browsers,
         install_system_tool,
+        install_cloudflared,
         check_and_install_dependencies,
     ])
     
