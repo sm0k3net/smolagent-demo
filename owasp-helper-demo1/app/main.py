@@ -833,14 +833,51 @@ def import_export_to_local_chats():
     chat_file = export_dir / "chat_history.json"
     
     if not chat_file.exists():
-        return False, "No exported chat history found", {}
+        return False, "No exported chat history found in .db_export/", {}
     
     try:
         with open(chat_file) as f:
             exported_chats = json.load(f)
         
-        if not exported_chats:
-            return False, "Export file is empty", {}
+        if not exported_chats or len(exported_chats) == 0:
+            # Check if there's command history we can import instead
+            cmd_file = export_dir / "command_history.json"
+            if cmd_file.exists():
+                with open(cmd_file) as f:
+                    commands = json.load(f)
+                if commands:
+                    # Convert command history to chat messages
+                    imported = {"messages": 0, "chats": 0}
+                    for cmd in commands:
+                        chat_id = cmd.get("session_id", "default")
+                        if chat_id.startswith("session_"):
+                            chat_id = "default"
+                        
+                        if chat_id not in chats_store:
+                            chats_store[chat_id] = {
+                                "name": "Main Chat" if chat_id == "default" else f"Chat {chat_id[:8]}",
+                                "messages": [],
+                                "created_at": datetime.now().isoformat(),
+                                "updated_at": datetime.now().isoformat()
+                            }
+                            imported["chats"] += 1
+                        
+                        # Add command as user message
+                        content = cmd.get("command", "")
+                        if content:
+                            existing = {m.get("content") for m in chats_store[chat_id].get("messages", [])}
+                            if content not in existing:
+                                chats_store[chat_id]["messages"].append({
+                                    "type": "user",
+                                    "content": content,
+                                    "timestamp": cmd.get("created_at", datetime.now().isoformat())
+                                })
+                                imported["messages"] += 1
+                    
+                    save_chats_to_file()
+                    return True, f"Imported {imported['messages']} commands as messages", imported
+            
+            return False, "No chat messages found in export (chat_history.json is empty). Command history was exported but not chat messages.", {}
         
         imported = {"messages": 0, "chats": 0}
         
@@ -1340,7 +1377,6 @@ class ChatCreate(BaseModel):
     name: str
 
 class ChatMessage(BaseModel):
-    chat_id: str
     type: str
     content: str
     timestamp: Optional[str] = None
@@ -8628,30 +8664,52 @@ let saveMessageTimeout = null;
 let pendingMessages = [];
 
 async function saveMessageToBackend(msgData) {
-  pendingMessages.push(msgData);
+  // Save immediately for important messages, debounce for others
+  const isImportant = msgData.type === 'user' || msgData.type === 'agent' || msgData.type === 'assistant';
   
-  // Debounce: wait 500ms before saving
-  if (saveMessageTimeout) clearTimeout(saveMessageTimeout);
-  saveMessageTimeout = setTimeout(async () => {
-    const messagesToSave = [...pendingMessages];
-    pendingMessages = [];
-    
-    for (const msg of messagesToSave) {
-      try {
-        await fetch(`/api/chats/${currentChatId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: msg.type,
-            content: msg.content,
-            timestamp: msg.timestamp
-          })
-        });
-      } catch (err) {
-        console.error('Failed to save message:', err);
-      }
+  if (isImportant) {
+    // Save important messages immediately
+    try {
+      await fetch(`/api/chats/${currentChatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: msgData.type,
+          content: msgData.content,
+          timestamp: msgData.timestamp
+        })
+      });
+    } catch (err) {
+      console.error('Failed to save message:', err);
+      // Add to pending for retry
+      pendingMessages.push(msgData);
     }
-  }, 500);
+  } else {
+    // Debounce system messages
+    pendingMessages.push(msgData);
+    
+    if (saveMessageTimeout) clearTimeout(saveMessageTimeout);
+    saveMessageTimeout = setTimeout(async () => {
+      const messagesToSave = [...pendingMessages];
+      pendingMessages = [];
+      
+      for (const msg of messagesToSave) {
+        try {
+          await fetch(`/api/chats/${currentChatId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: msg.type,
+              content: msg.content,
+              timestamp: msg.timestamp
+            })
+          });
+        } catch (err) {
+          console.error('Failed to save message:', err);
+        }
+      }
+    }, 500);
+  }
 }
 
 function escapeForRegex(string) {
@@ -9016,6 +9074,27 @@ function renderChats() {
       </div>
     </div>
   `).join('');
+}
+
+async function reloadCurrentChat() {
+  // Reload messages for the current chat from backend
+  try {
+    const response = await fetch(`/api/chats/${currentChatId}`);
+    const chat = await response.json();
+    
+    if (chat.messages && chat.messages.length > 0) {
+      // Clear and reload
+      messagesDiv.innerHTML = '';
+      chatHistory = [];
+      
+      chat.messages.forEach(msg => {
+        addMessage(msg.type, msg.content, { skipSave: true, timestamp: msg.timestamp });
+      });
+      chatHistory = [...chat.messages];
+    }
+  } catch (err) {
+    console.error('Failed to reload chat:', err);
+  }
 }
 
 async function createNewChat() {
@@ -9613,7 +9692,11 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       checkTelegramMonitoringStatus();
     }
     
-    if (tabId === 'chats') loadChats();
+    if (tabId === 'chats') {
+      loadChats();
+      // Also reload current chat messages to ensure they're up to date
+      reloadCurrentChat();
+    }
     
     if (tabId === 'scheduled') {
       loadScheduledTasks();
@@ -9670,6 +9753,7 @@ window.saveApiKey = saveApiKey;
 window.deleteApiKey = deleteApiKey;
 window.createNewChat = createNewChat;
 window.switchChat = switchChat;
+window.reloadCurrentChat = reloadCurrentChat;
 window.renameChat = renameChat;
 window.deleteChat = deleteChat;
 window.showScheduleModal = showScheduleModal;
