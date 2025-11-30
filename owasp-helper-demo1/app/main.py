@@ -635,13 +635,18 @@ class DatabaseStorage:
                     with open(chat_file) as f:
                         chats = json.load(f)
                     for chat in chats:
-                        cur.execute("""
-                            INSERT INTO chat_history (session_id, role, content, metadata, created_at)
-                            VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT DO NOTHING;
-                        """, (chat.get("session_id"), chat.get("role"), chat.get("content"),
-                              json.dumps(chat.get("metadata")) if chat.get("metadata") else None,
-                              chat.get("created_at")))
+                        # Support both DB export format and legacy format
+                        chat_id = chat.get("chat_id") or chat.get("session_id") or "default"
+                        role = chat.get("message_role") or chat.get("role") or "user"
+                        content = chat.get("message_content") or chat.get("content") or ""
+                        created_at = chat.get("created_at")
+                        
+                        if content:  # Only import if there's content
+                            cur.execute("""
+                                INSERT INTO chat_history (chat_id, message_role, message_content, created_at)
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT DO NOTHING;
+                            """, (chat_id, role, content, created_at))
                     imported["messages"] = len(chats)
                 
                 self.connection.commit()
@@ -9434,7 +9439,7 @@ function viewScheduledTaskResult(taskId) {
   const title = document.getElementById('task-modal-title');
   const body = document.getElementById('task-modal-body');
   
-  title.textContent = `📊 Scheduled Task Result: ${task.name || task.prompt.substring(0, 30)}`;
+  title.textContent = `Scheduled Task Result: ${task.name || task.prompt.substring(0, 30)}`;
   
   let resultHtml = task.last_result;
   
@@ -9993,8 +9998,8 @@ The report should be comprehensive and professional, suitable for executive stak
                 # Send initial progress
                 await ws.send_text(json.dumps({
                     "type": "activity",
-                    "activity_type": "step",
-                    "title": "🚀 Task Started",
+                    "activity_type": "start",
+                    "title": "Task Started",
                     "content": f"Processing: {msg_content[:100]}...",
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
@@ -10002,7 +10007,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 await ws.send_text(json.dumps({
                     "type": "progress",
-                    "content": "🔄 Agent analyzing your request...",
+                    "content": "Agent analyzing your request...",
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
                 }))
@@ -10044,27 +10049,20 @@ The report should be comprehensive and professional, suitable for executive stak
                                         
                                         # Map tool names to activity types
                                         activity_type = "tool"
-                                        icon = "🔧"
                                         
                                         # Categorize tools for better display
                                         if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
-                                            icon = "🔍"
                                             activity_msg = f"Running security scan: {tool_name}"
                                         elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
-                                            icon = "🌐"
                                             activity_msg = f"OSINT lookup: {tool_name}"
                                         elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
-                                            icon = "🌍"
                                             activity_msg = f"Browser automation: {tool_name}"
                                         elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
-                                            icon = "📡"
                                             activity_msg = f"HTTP request: {tool_name}"
                                         elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
-                                            icon = "📋"
                                             activity_msg = f"Report generation: {tool_name}"
                                             activity_type = "tool-result"
                                         elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
-                                            icon = "📚"
                                             activity_msg = f"OWASP analysis: {tool_name}"
                                         else:
                                             activity_msg = f"Executing: {tool_name}"
@@ -10080,7 +10078,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                         event_queue.put({
                                             "type": "activity",
                                             "activity_type": activity_type,
-                                            "title": f"{icon} {activity_msg}",
+                                            "title": activity_msg,
                                             "content": f"Tool #{tool_count}: {tool_name}{target_info}",
                                             "tool_count": tool_count,
                                             "step_count": step_count
@@ -10102,7 +10100,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                     event_queue.put({
                                         "type": "activity",
                                         "activity_type": "tool-result",
-                                        "title": "📊 Tool Result",
+                                        "title": "Tool Result",
                                         "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
                                         "tool_count": tool_count,
                                         "step_count": step_count
@@ -10114,7 +10112,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                     event_queue.put({
                                         "type": "activity",
                                         "activity_type": "thinking",
-                                        "title": "🧠 Agent Planning",
+                                        "title": "Agent Planning",
                                         "content": plan,
                                         "tool_count": tool_count,
                                         "step_count": step_count
@@ -10199,8 +10197,8 @@ The report should be comprehensive and professional, suitable for executive stak
                                 
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
-                                    "activity_type": "tool-result",
-                                    "title": "✅ Task Completed",
+                                    "activity_type": "complete",
+                                    "title": "Task Completed",
                                     "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
                                     "tool_count": last_tool_count,
                                     "step_count": last_step_count,
@@ -10213,7 +10211,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": "error",
-                                    "title": "❌ Error Occurred",
+                                    "title": "Error Occurred",
                                     "content": event["error"],
                                     "chat_id": request_chat_id,
                                     "task_id": request_task_id
@@ -10238,7 +10236,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         await ws.send_text(json.dumps({
                             "type": "activity",
                             "activity_type": "error", 
-                            "title": "❌ Error",
+                            "title": "Error",
                             "content": str(e),
                             "chat_id": request_chat_id,
                             "task_id": request_task_id
