@@ -7,6 +7,39 @@ import subprocess
 import sys
 from smolagents import tool
 
+# Import proxy config
+try:
+    from app.tools.pentest_tools import get_proxy_url, _proxy_config
+except ImportError:
+    def get_proxy_url():
+        return None
+    _proxy_config = {"enabled": False}
+
+
+def _get_browser_proxy_settings() -> dict | None:
+    """Get proxy settings for Playwright browser launch."""
+    proxy_url = get_proxy_url()
+    if not proxy_url:
+        return None
+    
+    proxy_settings = {"server": proxy_url}
+    
+    # Add authentication if configured
+    if _proxy_config.get("username"):
+        proxy_settings["username"] = _proxy_config["username"]
+    if _proxy_config.get("password"):
+        proxy_settings["password"] = _proxy_config["password"]
+    
+    return proxy_settings
+
+
+def _launch_browser(playwright_instance, headless: bool = True):
+    """Launch browser with optional proxy settings."""
+    proxy = _get_browser_proxy_settings()
+    if proxy:
+        return playwright_instance.chromium.launch(headless=headless, proxy=proxy)
+    return playwright_instance.chromium.launch(headless=headless)
+
 
 def _check_playwright_installed() -> tuple[bool, str | None]:
     """Check if Playwright is installed and browser is available."""
@@ -120,7 +153,7 @@ def fetch_page_title(url: str) -> str:
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             title = page.title()
@@ -146,7 +179,7 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -205,7 +238,7 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
         screenshot_path = os.path.join(output_dir, filename)
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page(viewport={"width": 1920, "height": 1080})
             
             # Set user agent
@@ -277,7 +310,7 @@ def click_and_extract(url: str, click_selector: str, extract_selector: str) -> s
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             )
@@ -319,7 +352,7 @@ def fill_form(url: str, form_data: str, submit_selector: str | None = None) -> s
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             )
@@ -361,7 +394,7 @@ def get_page_links(url: str, filter_domain: bool = True) -> str:
         from urllib.parse import urlparse
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="networkidle", timeout=30000)
             
@@ -403,7 +436,7 @@ def get_page_forms(url: str) -> str:
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="networkidle", timeout=30000)
             
@@ -464,7 +497,7 @@ def intercept_requests(url: str, log_types: str = "xhr,fetch,document") -> str:
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page()
             
             def log_request(request):
@@ -509,7 +542,7 @@ def check_console_errors(url: str) -> str:
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_browser(p, headless=True)
             page = browser.new_page()
             
             def log_console(msg):

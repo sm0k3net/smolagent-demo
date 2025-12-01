@@ -2080,6 +2080,61 @@ async def toggle_proxy(request: Request):
             "message": f"Error toggling proxy: {str(e)}"
         })
 
+@app.post("/api/proxy/test")
+async def test_proxy():
+    """Test proxy connection by checking IP via ifconfig.io."""
+    global proxy_config
+    from app.tools.pentest_tools import get_proxy_url
+    import subprocess
+    import shutil
+    
+    if not shutil.which("curl"):
+        return JSONResponse({
+            "success": False,
+            "message": "curl not installed",
+            "ip": None
+        })
+    
+    proxy_url = get_proxy_url()
+    
+    try:
+        # Build curl command
+        cmd = ["curl", "-sS", "--max-time", "10", "https://ifconfig.io/ip"]
+        
+        if proxy_url:
+            cmd.insert(1, "-x")
+            cmd.insert(2, proxy_url)
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            ip = result.stdout.strip()
+            return JSONResponse({
+                "success": True,
+                "message": f"Connection successful",
+                "ip": ip,
+                "using_proxy": bool(proxy_url),
+                "proxy_url": proxy_url
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "message": f"Request failed: {result.stderr}",
+                "ip": None
+            })
+    except subprocess.TimeoutExpired:
+        return JSONResponse({
+            "success": False,
+            "message": "Connection timed out - proxy may be unreachable",
+            "ip": None
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "ip": None
+        })
+
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
                                task_id: Optional[str] = None,
@@ -6840,16 +6895,16 @@ main {
               Supports HTTP, HTTPS, and SOCKS5 proxies.
             </p>
             
-            <!-- Proxy Toggle -->
-            <div style="display: flex; align-items: center; justify-content: space-between; background: var(--dark); border-radius: 8px; padding: 12px 15px; margin-bottom: 15px;">
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <div id="proxy-indicator" style="width: 10px; height: 10px; border-radius: 50%; background: var(--gray-600);"></div>
-                <span id="proxy-status-text" style="font-size: 0.85rem; color: var(--gray-300);">Proxy disabled</span>
-              </div>
-              <label class="toggle-switch" style="position: relative; display: inline-block; width: 48px; height: 24px;">
+            <!-- Proxy Toggle - Compact Layout -->
+            <div style="display: flex; align-items: center; gap: 12px; background: var(--dark); border-radius: 8px; padding: 12px 15px; margin-bottom: 15px;">
+              <label class="toggle-switch" style="position: relative; display: inline-block; width: 48px; height: 24px; flex-shrink: 0;">
                 <input type="checkbox" id="proxy-enabled-toggle" onchange="toggleProxy(this.checked)" style="opacity: 0; width: 0; height: 0;">
                 <span class="toggle-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--gray-600); transition: .3s; border-radius: 24px;"></span>
               </label>
+              <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                <div id="proxy-indicator" style="width: 8px; height: 8px; border-radius: 50%; background: var(--gray-600); flex-shrink: 0;"></div>
+                <span id="proxy-status-text" style="font-size: 0.8rem; color: var(--gray-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Disabled</span>
+              </div>
             </div>
             
             <!-- Proxy Configuration Form -->
@@ -8249,13 +8304,13 @@ function updateProxyUI(isEnabled, proxyUrl) {
   
   if (isEnabled && proxyUrl) {
     indicator.style.background = '#10b981';
-    indicator.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.5)';
-    statusText.textContent = 'Proxy enabled: ' + proxyUrl;
+    indicator.style.boxShadow = '0 0 8px rgba(16, 185, 129, 0.5)';
+    statusText.textContent = 'Enabled';
     statusText.style.color = '#10b981';
   } else {
     indicator.style.background = 'var(--gray-600)';
     indicator.style.boxShadow = 'none';
-    statusText.textContent = 'Proxy disabled';
+    statusText.textContent = 'Disabled';
     statusText.style.color = 'var(--gray-300)';
   }
 }
@@ -8340,21 +8395,60 @@ async function toggleProxy(enabled) {
 
 async function testProxyConnection() {
   const host = document.getElementById('proxy-host').value.trim();
-  const port = document.getElementById('proxy-port').value.trim();
   
   if (!host) {
     showProxyMessage('Please enter a proxy host first', true);
     return;
   }
   
-  showProxyMessage('Testing proxy connection...');
+  // First save the config
+  const config = {
+    type: document.getElementById('proxy-type').value,
+    host: host,
+    port: document.getElementById('proxy-port').value.trim(),
+    username: document.getElementById('proxy-username').value.trim(),
+    password: document.getElementById('proxy-password').value
+  };
   
-  // Simple test - just check if we can reach the proxy endpoint
-  // The actual proxy testing would require server-side validation
   try {
     // Save config first
-    await saveProxyConfig();
-    showProxyMessage('Configuration saved. Enable proxy to route tool traffic through it.');
+    await fetch('/api/proxy/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    
+    // Temporarily enable proxy for test
+    await fetch('/api/proxy/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true })
+    });
+    
+    showProxyMessage('Testing connection to ifconfig.io...');
+    
+    // Test the connection
+    const testResponse = await fetch('/api/proxy/test', { method: 'POST' });
+    const testData = await testResponse.json();
+    
+    if (testData.success) {
+      showProxyMessage(`✓ Proxy working! Your IP: ${testData.ip}`);
+      document.getElementById('proxy-enabled-toggle').checked = true;
+      updateProxyUI(true, config.type + '://' + config.host + ':' + config.port);
+    } else {
+      // Disable proxy on failure
+      await fetch('/api/proxy/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false })
+      });
+      document.getElementById('proxy-enabled-toggle').checked = false;
+      updateProxyUI(false, null);
+      showProxyMessage('Test failed: ' + testData.message, true);
+    }
+    
+    // Clear password field
+    document.getElementById('proxy-password').value = '';
   } catch (error) {
     showProxyMessage('Test failed: ' + error.message, true);
   }
