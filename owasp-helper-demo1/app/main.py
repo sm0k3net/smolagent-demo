@@ -734,6 +734,15 @@ class TaskStatus(str, Enum):
     failed = "failed"
 
 
+class TaskLabel(str, Enum):
+    """Task type labels for categorizing security activities."""
+    general = "general"      # General questions and tasks
+    pentest = "pentest"      # Full penetration test
+    scanning = "scanning"    # Vulnerability scanning
+    recon = "recon"          # Reconnaissance / OSINT
+    discovery = "discovery"  # Asset discovery / Scoping
+
+
 class Task(BaseModel):
     id: str
     name: Optional[str] = None  # Human-readable task name
@@ -746,6 +755,9 @@ class Task(BaseModel):
     error: Optional[str] = None
     tool_count: int = 0
     step_count: int = 0
+    # Task classification
+    label: TaskLabel = TaskLabel.general  # Task type label
+    target_type: Optional[str] = None  # "web", "network", "api", "mobile", etc.
     # Report fields
     report_html: Optional[str] = None  # Generated HTML report
     report_markdown: Optional[str] = None  # Generated Markdown report
@@ -791,6 +803,129 @@ chain_monitor_stop_event = threading.Event()
 # API Keys storage with file persistence
 API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
 api_keys_store: Dict[str, str] = {}
+
+
+def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
+    """Classify a task prompt into a label and detect target type.
+    
+    Returns:
+        Tuple of (TaskLabel, target_type) where target_type can be:
+        - "web" for web applications
+        - "network" for network/infrastructure
+        - "api" for API testing
+        - None for general tasks
+    """
+    prompt_lower = prompt.lower()
+    
+    # Pentest keywords - full penetration testing
+    pentest_keywords = [
+        "pentest", "penetration test", "penetration testing", "pen test",
+        "security assessment", "security audit", "security evaluation",
+        "red team", "attack surface", "exploit", "exploitation",
+        "comprehensive scan", "full scan", "full security",
+        "find vulnerabilities", "find security issues", "find all vulnerabilities",
+    ]
+    
+    # Vulnerability scanning keywords
+    scanning_keywords = [
+        "vulnerability scan", "vuln scan", "vulnerability assessment",
+        "scan for vulnerabilities", "check for vulnerabilities",
+        "nikto", "nuclei", "nessus", "openvas", "zap scan", "acunetix",
+        "sqlmap", "xss scan", "injection scan", "security scan",
+        "wpscan", "scan wordpress", "scan website",
+    ]
+    
+    # Reconnaissance / OSINT keywords
+    recon_keywords = [
+        "recon", "reconnaissance", "osint", "open source intelligence",
+        "information gathering", "gather information", "footprint",
+        "dns lookup", "whois", "subdomain", "email harvest",
+        "shodan", "censys", "virustotal", "hunter.io",
+        "certificate transparency", "crt.sh", "passive recon",
+        "find subdomains", "enumerate", "enumeration",
+        "discover assets", "asset discovery",
+    ]
+    
+    # Discovery / Scoping keywords
+    discovery_keywords = [
+        "discovery", "discover", "scoping", "scope",
+        "port scan", "nmap", "service detection", "host discovery",
+        "content discovery", "directory", "gobuster", "ffuf", "dirb",
+        "fuzzing", "brute force directory", "find directories",
+        "map", "mapping", "identify services", "fingerprint",
+    ]
+    
+    # Determine label based on keyword matching
+    label = TaskLabel.general
+    
+    # Check in order of specificity (most specific first)
+    for keyword in pentest_keywords:
+        if keyword in prompt_lower:
+            label = TaskLabel.pentest
+            break
+    
+    if label == TaskLabel.general:
+        for keyword in scanning_keywords:
+            if keyword in prompt_lower:
+                label = TaskLabel.scanning
+                break
+    
+    if label == TaskLabel.general:
+        for keyword in recon_keywords:
+            if keyword in prompt_lower:
+                label = TaskLabel.recon
+                break
+    
+    if label == TaskLabel.general:
+        for keyword in discovery_keywords:
+            if keyword in prompt_lower:
+                label = TaskLabel.discovery
+                break
+    
+    # Detect target type
+    target_type = None
+    
+    # Web application indicators
+    web_indicators = [
+        "http://", "https://", "website", "web app", "web application",
+        "webapp", "url", "domain", ".com", ".org", ".net", ".io",
+        "login page", "form", "api endpoint", "rest api", "graphql",
+        "wordpress", "drupal", "joomla", "cms",
+    ]
+    
+    # Network/Infrastructure indicators
+    network_indicators = [
+        "ip address", "port", "ports", "network", "infrastructure",
+        "server", "host", "ssh", "ftp", "rdp", "smb", "telnet",
+        "tcp", "udp", "firewall", "router", "switch",
+        "internal network", "subnet", "cidr",
+    ]
+    
+    # API indicators
+    api_indicators = [
+        "api", "rest api", "graphql", "endpoint", "json", "swagger",
+        "openapi", "postman", "api key", "oauth", "jwt", "token",
+    ]
+    
+    # Check for target type
+    for indicator in api_indicators:
+        if indicator in prompt_lower:
+            target_type = "api"
+            break
+    
+    if not target_type:
+        for indicator in web_indicators:
+            if indicator in prompt_lower:
+                target_type = "web"
+                break
+    
+    if not target_type:
+        for indicator in network_indicators:
+            if indicator in prompt_lower:
+                target_type = "network"
+                break
+    
+    return label, target_type
 
 # Provider settings storage with file persistence
 PROVIDER_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".provider_settings.json")
@@ -3017,6 +3152,9 @@ async def create_chain(request: CreateChainRequest):
         task_id = str(uuid.uuid4())
         task_name = task_input.name or f"Step {index + 1}"
         
+        # Classify the task
+        task_label, target_type = classify_task_prompt(task_input.prompt)
+        
         task = Task(
             id=task_id,
             name=task_name,
@@ -3027,7 +3165,9 @@ async def create_chain(request: CreateChainRequest):
             chain_id=chain_id,
             chain_order=index,
             use_previous_result=task_input.use_previous_result if index > 0 else False,
-            chain_name=request.name
+            chain_name=request.name,
+            label=task_label,
+            target_type=target_type
         )
         
         task_store[task_id] = task
@@ -3178,6 +3318,9 @@ async def add_task_to_chain(chain_id: str, request: AddChainTaskRequest):
     
     task_name = request.name or f"Step {position + 1}"
     
+    # Classify the task
+    task_label, target_type = classify_task_prompt(request.prompt)
+    
     task = Task(
         id=task_id,
         name=task_name,
@@ -3188,7 +3331,9 @@ async def add_task_to_chain(chain_id: str, request: AddChainTaskRequest):
         chain_id=chain_id,
         chain_order=position,
         use_previous_result=request.use_previous_result if position > 0 else False,
-        chain_name=chain.name
+        chain_name=chain.name,
+        label=task_label,
+        target_type=target_type
     )
     
     task_store[task_id] = task
@@ -4941,6 +5086,26 @@ h1 {
 .task-status.paused { background: var(--warning); color: white; }
 .task-status.cancelled, .task-status.failed { background: var(--danger); color: white; }
 .task-status.pending { background: var(--gray-600); color: white; }
+
+/* Task label and target type badges */
+.task-label-badge {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.target-type-badge {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--gray-700);
+  color: var(--gray-300);
+  margin-right: 8px;
+  font-weight: 500;
+}
+.task-title-row {
+  display: flex;
+  align-items: center;
+}
+
 .task-meta {
   font-size: 0.75rem;
   color: var(--gray-500);
@@ -7784,18 +7949,38 @@ function renderTasks() {
   // Sort by created_at descending
   tasks.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   
+  // Task label colors and icons
+  const labelStyles = {
+    'pentest': { icon: '🎯', color: '#dc3545', bg: 'rgba(220, 53, 69, 0.15)' },
+    'scanning': { icon: '🛡️', color: '#fd7e14', bg: 'rgba(253, 126, 20, 0.15)' },
+    'recon': { icon: '🔍', color: '#17a2b8', bg: 'rgba(23, 162, 184, 0.15)' },
+    'discovery': { icon: '📂', color: '#6f42c1', bg: 'rgba(111, 66, 193, 0.15)' },
+    'general': { icon: '📝', color: '#6c757d', bg: 'rgba(108, 117, 125, 0.1)' }
+  };
+  
   tasksList.innerHTML = tasks.map(task => {
     const isActive = ['pending', 'running', 'paused'].includes(task.status);
     const isFinished = ['completed', 'cancelled', 'failed'].includes(task.status);
     const createdAt = new Date(task.created_at).toLocaleTimeString();
     const truncatedPrompt = task.prompt.length > 50 ? task.prompt.substring(0, 50) + '...' : task.prompt;
     
+    // Get label style
+    const taskLabel = task.label || 'general';
+    const labelStyle = labelStyles[taskLabel] || labelStyles['general'];
+    const targetBadge = task.target_type ? `<span class="target-type-badge">${task.target_type.toUpperCase()}</span>` : '';
+    
     return `
       <div class="task-item ${task.status}" style="position: relative;">
         ${isFinished ? `<button class="task-delete-btn" onclick="deleteTask('${task.id}')" title="Remove task">×</button>` : ''}
         <div class="task-header">
-          <span class="task-title">${escapeHtml(truncatedPrompt)}</span>
+          <span class="task-label-badge" style="background: ${labelStyle.bg}; color: ${labelStyle.color}; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; margin-right: 8px;">
+            ${labelStyle.icon} ${taskLabel.toUpperCase()}
+          </span>
+          ${targetBadge}
           <span class="task-status ${task.status}">${task.status}</span>
+        </div>
+        <div class="task-title-row" style="margin-top: 6px;">
+          <span class="task-title">${escapeHtml(truncatedPrompt)}</span>
         </div>
         <div class="task-meta">
           Created: ${createdAt} | Steps: ${task.step_count} | Tools: ${task.tool_count}
@@ -11431,6 +11616,10 @@ The report should be comprehensive and professional, suitable for executive stak
             # Handle background task
             if background_task:
                 task_id = str(uuid.uuid4())
+                
+                # Classify the task based on prompt content
+                task_label, target_type = classify_task_prompt(msg_content)
+                
                 new_task = Task(
                     id=task_id,
                     prompt=msg_content[:200],
@@ -11441,15 +11630,28 @@ The report should be comprehensive and professional, suitable for executive stak
                     result=None,
                     error=None,
                     tool_count=0,
-                    step_count=0
+                    step_count=0,
+                    label=task_label,
+                    target_type=target_type
                 )
                 task_store[task_id] = new_task
                 
-                # Notify client that task was created
+                # Notify client that task was created with label info
+                label_icons = {
+                    "pentest": "🎯",
+                    "scanning": "🛡️",
+                    "recon": "🔍",
+                    "discovery": "📂",
+                    "general": "📝"
+                }
+                label_icon = label_icons.get(task_label.value, "📝")
+                
                 await ws.send_text(json.dumps({
                     "type": "task_created",
                     "task_id": task_id,
-                    "content": f"🔄 Background task created. Check the Tasks tab to monitor progress."
+                    "task_label": task_label.value,
+                    "target_type": target_type,
+                    "content": f"🔄 Background task created {label_icon} [{task_label.value.upper()}]. Check the Tasks tab to monitor progress."
                 }))
                 
                 # Run task in background thread with captured task_id and separate agent

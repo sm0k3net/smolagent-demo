@@ -601,8 +601,13 @@ def add_finding_to_report(
     
     _CURRENT_REPORT_DATA["findings"].append(finding)
     
+    # Record all tools used (supports comma-separated list like "nikto, sqlmap, curl")
     if tool_used:
-        _CURRENT_REPORT_DATA["tools"].add(tool_used)
+        # Split by comma and add each tool
+        tools = [t.strip() for t in tool_used.split(",")]
+        for t in tools:
+            if t:
+                _CURRENT_REPORT_DATA["tools"].add(t)
     
     return f"✅ Finding #{finding['id']} added: [{severity}] {title}"
 
