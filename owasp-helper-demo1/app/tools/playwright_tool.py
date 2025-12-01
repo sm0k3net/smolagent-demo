@@ -266,6 +266,15 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
             
             file_size = len(image_data) / 1024  # KB
             
+            # Auto-add to report if report mode is enabled
+            try:
+                from app.tools.report_tools import _REPORT_MODE_ENABLED, add_screenshot_to_report
+                if _REPORT_MODE_ENABLED:
+                    description = f"Screenshot: {title}" if title else f"Screenshot of {url}"
+                    add_screenshot_to_report(url=url, base64_data=base64_data, description=description)
+            except:
+                pass  # Continue even if report integration fails
+            
             # Return format optimized for chat display with embedded image
             # Use SCREENSHOT_IMAGE_DATA format that the UI recognizes
             return f"""📸 Screenshot Captured Successfully!

@@ -316,6 +316,16 @@ def _get_report_template_html() -> str:
             word-break: break-all;
         }
         .recon-data-list code:last-child { border-bottom: none; }
+        .infrastructure-table { margin-bottom: 2rem; }
+        .infrastructure-table h3 { color: #0d6efd; margin-bottom: 1rem; font-size: 1.1rem; }
+        .infrastructure-table table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+        .infrastructure-table th { background: #0d6efd; color: white; padding: 0.75rem; text-align: left; font-weight: 600; }
+        .infrastructure-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #e9ecef; font-size: 0.9rem; }
+        .infrastructure-table tr:nth-child(even) { background: #f8f9fa; }
+        .infrastructure-table code { background: #e9ecef; padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.85rem; }
+        .port-open { color: #198754; font-weight: 600; }
+        .port-filtered { color: #fd7e14; font-weight: 600; }
+        .port-closed { color: #dc3545; font-weight: 600; }
         .methodology { background: #fff3cd; border-left: 4px solid #ffc107; }
         .conclusion { background: #d4edda; border-left: 4px solid #28a745; }
         .artifacts-section { background: #f0f7ff; border-left: 4px solid #0d6efd; }
@@ -374,6 +384,7 @@ def _get_report_template_html() -> str:
             .finding { break-inside: avoid; }
             .recon-data-list { max-height: none; }
             .artifact-body pre { max-height: none; }
+            .infrastructure-table { break-inside: avoid; }
         }
     </style>
 </head>
@@ -768,6 +779,202 @@ def get_recon_summary() -> str:
     lines.append(f"Tools used: {', '.join(sorted(_CURRENT_REPORT_DATA.get('tools', set())))}")
     
     return "\n".join(lines)
+
+
+@tool
+def add_dns_record(
+    record_type: str,
+    name: str,
+    value: str,
+    ttl: str | None = None,
+    source_tool: str | None = None
+) -> str:
+    """Add a DNS record to the report's infrastructure section.
+
+    Args:
+        record_type: DNS record type (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR).
+        name: DNS name/hostname.
+        value: Record value (IP address, domain, etc.).
+        ttl: Time-to-live value (optional).
+        source_tool: Tool that discovered this record (e.g., 'dig', 'nslookup', 'dnsrecon').
+    Returns: Confirmation that DNS record was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    # Initialize infrastructure data if not exists
+    if "infrastructure" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["infrastructure"] = {
+            "dns_records": [],
+            "services": [],
+            "technologies": [],
+            "network_topology": []
+        }
+    
+    record = {
+        "type": record_type.upper(),
+        "name": name,
+        "value": value,
+        "ttl": ttl or "N/A"
+    }
+    
+    # Avoid duplicates
+    if record not in _CURRENT_REPORT_DATA["infrastructure"]["dns_records"]:
+        _CURRENT_REPORT_DATA["infrastructure"]["dns_records"].append(record)
+    
+    if source_tool:
+        _CURRENT_REPORT_DATA["tools"].add(source_tool)
+    
+    return f"✅ DNS record added: {record_type} {name} → {value}"
+
+
+@tool
+def add_service_discovery(
+    host: str,
+    port: int,
+    protocol: str,
+    service: str,
+    version: str | None = None,
+    state: str = "open",
+    source_tool: str | None = None
+) -> str:
+    """Add a discovered service/port to the report's infrastructure section.
+
+    Args:
+        host: IP address or hostname.
+        port: Port number.
+        protocol: Protocol (tcp, udp).
+        service: Service name (http, ssh, ftp, mysql, etc.).
+        version: Service version if detected (e.g., 'Apache httpd 2.4.41').
+        state: Port state (open, filtered, closed).
+        source_tool: Tool that discovered this service (e.g., 'nmap', 'masscan').
+    Returns: Confirmation that service was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    if "infrastructure" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["infrastructure"] = {
+            "dns_records": [],
+            "services": [],
+            "technologies": [],
+            "network_topology": []
+        }
+    
+    service_entry = {
+        "host": host,
+        "port": port,
+        "protocol": protocol.lower(),
+        "service": service,
+        "version": version or "Unknown",
+        "state": state
+    }
+    
+    # Avoid duplicates (same host:port:protocol)
+    existing = [s for s in _CURRENT_REPORT_DATA["infrastructure"]["services"] 
+                if s["host"] == host and s["port"] == port and s["protocol"] == protocol.lower()]
+    if not existing:
+        _CURRENT_REPORT_DATA["infrastructure"]["services"].append(service_entry)
+    
+    if source_tool:
+        _CURRENT_REPORT_DATA["tools"].add(source_tool)
+    
+    return f"✅ Service added: {host}:{port}/{protocol} ({service} {version or ''})"
+
+
+@tool
+def add_technology_stack(
+    technology: str,
+    category: str,
+    version: str | None = None,
+    url: str | None = None,
+    source_tool: str | None = None
+) -> str:
+    """Add an identified technology to the report's infrastructure section.
+
+    Args:
+        technology: Technology name (e.g., 'WordPress', 'Apache', 'PHP', 'jQuery').
+        category: Category (web_server, framework, cms, language, library, os, database).
+        version: Version if detected (e.g., '5.8.1').
+        url: URL where technology was detected (optional).
+        source_tool: Tool that detected this (e.g., 'whatweb', 'wappalyzer', 'nuclei').
+    Returns: Confirmation that technology was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    if "infrastructure" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["infrastructure"] = {
+            "dns_records": [],
+            "services": [],
+            "technologies": [],
+            "network_topology": []
+        }
+    
+    tech_entry = {
+        "technology": technology,
+        "category": category,
+        "version": version or "Unknown",
+        "url": url or _CURRENT_REPORT_DATA.get("target", "N/A")
+    }
+    
+    # Avoid duplicates
+    existing = [t for t in _CURRENT_REPORT_DATA["infrastructure"]["technologies"]
+                if t["technology"].lower() == technology.lower()]
+    if not existing:
+        _CURRENT_REPORT_DATA["infrastructure"]["technologies"].append(tech_entry)
+    
+    if source_tool:
+        _CURRENT_REPORT_DATA["tools"].add(source_tool)
+    
+    return f"✅ Technology added: {technology} ({category}) {version or ''}"
+
+
+@tool
+def add_network_topology(
+    source: str,
+    destination: str,
+    relationship: str,
+    details: str | None = None
+) -> str:
+    """Add a network topology relationship to the report.
+
+    Args:
+        source: Source entity (IP, hostname, or service).
+        destination: Destination entity (IP, hostname, or service).
+        relationship: Relationship type (resolves_to, proxies_to, redirects_to, connects_to, hosts).
+        details: Additional details about the relationship.
+    Returns: Confirmation that topology entry was added.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    if "infrastructure" not in _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["infrastructure"] = {
+            "dns_records": [],
+            "services": [],
+            "technologies": [],
+            "network_topology": []
+        }
+    
+    entry = {
+        "source": source,
+        "destination": destination,
+        "relationship": relationship,
+        "details": details or ""
+    }
+    
+    _CURRENT_REPORT_DATA["infrastructure"]["network_topology"].append(entry)
+    
+    return f"✅ Topology added: {source} → ({relationship}) → {destination}"
 
 
 @tool
@@ -1316,28 +1523,111 @@ def generate_html_report() -> str:
     
     # Build recon data section
     recon_data = data.get("recon_data", {})
+    infrastructure = data.get("infrastructure", {})
     recon_section = ""
-    if recon_data:
-        recon_cards = ""
-        for data_type, items in sorted(recon_data.items()):
-            items_html = "".join([f"<code>{item}</code>" for item in items])
-            recon_cards += f'''
-            <div class="recon-data-card">
-                <div class="recon-data-header">
-                    <span>{data_type.replace('_', ' ').title()}</span>
-                    <span class="recon-data-count">{len(items)} items</span>
+    
+    has_recon_data = bool(recon_data or infrastructure.get("dns_records") or 
+                         infrastructure.get("services") or infrastructure.get("technologies"))
+    
+    if has_recon_data:
+        recon_content = ""
+        
+        # Infrastructure: DNS Records Table
+        dns_records = infrastructure.get("dns_records", [])
+        if dns_records:
+            dns_rows = ""
+            for rec in sorted(dns_records, key=lambda x: (x["type"], x["name"])):
+                dns_rows += f'<tr><td>{rec["type"]}</td><td>{rec["name"]}</td><td><code>{rec["value"]}</code></td><td>{rec["ttl"]}</td></tr>'
+            
+            recon_content += f'''
+            <div class="infrastructure-table">
+                <h3>🌐 DNS Records</h3>
+                <table>
+                    <thead><tr><th>Type</th><th>Name</th><th>Value</th><th>TTL</th></tr></thead>
+                    <tbody>{dns_rows}</tbody>
+                </table>
+            </div>
+            '''
+        
+        # Infrastructure: Services/Ports Table
+        services = infrastructure.get("services", [])
+        if services:
+            svc_rows = ""
+            for svc in sorted(services, key=lambda x: (x["host"], x["port"])):
+                state_class = "open" if svc["state"] == "open" else "filtered"
+                svc_rows += f'<tr><td>{svc["host"]}</td><td>{svc["port"]}</td><td>{svc["protocol"].upper()}</td><td>{svc["service"]}</td><td>{svc["version"]}</td><td class="port-{state_class}">{svc["state"]}</td></tr>'
+            
+            recon_content += f'''
+            <div class="infrastructure-table">
+                <h3>🔌 Discovered Services</h3>
+                <table>
+                    <thead><tr><th>Host</th><th>Port</th><th>Protocol</th><th>Service</th><th>Version</th><th>State</th></tr></thead>
+                    <tbody>{svc_rows}</tbody>
+                </table>
+            </div>
+            '''
+        
+        # Infrastructure: Technology Stack
+        technologies = infrastructure.get("technologies", [])
+        if technologies:
+            tech_rows = ""
+            for tech in sorted(technologies, key=lambda x: x["category"]):
+                tech_rows += f'<tr><td>{tech["technology"]}</td><td>{tech["category"].replace("_", " ").title()}</td><td>{tech["version"]}</td><td><code>{tech["url"]}</code></td></tr>'
+            
+            recon_content += f'''
+            <div class="infrastructure-table">
+                <h3>💻 Technology Stack</h3>
+                <table>
+                    <thead><tr><th>Technology</th><th>Category</th><th>Version</th><th>Detected On</th></tr></thead>
+                    <tbody>{tech_rows}</tbody>
+                </table>
+            </div>
+            '''
+        
+        # Infrastructure: Network Topology
+        topology = infrastructure.get("network_topology", [])
+        if topology:
+            topo_rows = ""
+            for entry in topology:
+                topo_rows += f'<tr><td>{entry["source"]}</td><td>{entry["relationship"]}</td><td>{entry["destination"]}</td><td>{entry.get("details", "")}</td></tr>'
+            
+            recon_content += f'''
+            <div class="infrastructure-table">
+                <h3>🗺️ Network Topology</h3>
+                <table>
+                    <thead><tr><th>Source</th><th>Relationship</th><th>Destination</th><th>Details</th></tr></thead>
+                    <tbody>{topo_rows}</tbody>
+                </table>
+            </div>
+            '''
+        
+        # Recon Data Cards (subdomains, emails, IPs, etc.)
+        if recon_data:
+            recon_cards = ""
+            for data_type, items in sorted(recon_data.items()):
+                items_html = "".join([f"<code>{item}</code>" for item in items])
+                recon_cards += f'''
+                <div class="recon-data-card">
+                    <div class="recon-data-header">
+                        <span>{data_type.replace('_', ' ').title()}</span>
+                        <span class="recon-data-count">{len(items)} items</span>
+                    </div>
+                    <div class="recon-data-list">{items_html}</div>
                 </div>
-                <div class="recon-data-list">{items_html}</div>
+                '''
+            
+            recon_content += f'''
+            <h3>📊 Collected Data</h3>
+            <div class="recon-data-grid">
+                {recon_cards}
             </div>
             '''
         
         recon_section = f'''
         <div class="section recon-section">
-            <h2>📡 Reconnaissance Data</h2>
-            <p>The following data was collected during the reconnaissance phase:</p>
-            <div class="recon-data-grid">
-                {recon_cards}
-            </div>
+            <h2>📡 Reconnaissance & Infrastructure</h2>
+            <p>The following information was discovered during the reconnaissance and enumeration phases:</p>
+            {recon_content}
         </div>
         '''
     

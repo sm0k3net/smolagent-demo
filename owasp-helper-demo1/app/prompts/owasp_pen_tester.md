@@ -314,13 +314,62 @@ Conduct comprehensive security assessments following industry best practices:
 - **VALIDATE AND EXPLOIT all identified vulnerabilities**
 - Use searchsploit to find and execute exploits for known CVEs
 
+# CRITICAL: DATA COLLECTION FOR REPORTS
+
+**When Report Mode is enabled, you MUST collect ALL discovered information:**
+
+## Screenshots (Auto-captured when Report Mode is ON)
+- `take_screenshot(url)` - Automatically adds to report artifacts
+- Take screenshots of: initial target, login pages, vulnerability evidence, exploitation results
+
+## Infrastructure Discovery
+Use these tools to document ALL discovered infrastructure:
+
+### DNS Records
+```python
+add_dns_record(record_type="A", name="example.com", value="192.168.1.1", source_tool="dig")
+add_dns_record(record_type="MX", name="example.com", value="mail.example.com", source_tool="dig")
+add_dns_record(record_type="CNAME", name="www.example.com", value="example.com", source_tool="dig")
+```
+
+### Services/Ports
+```python
+add_service_discovery(host="192.168.1.1", port=80, protocol="tcp", service="http", version="Apache/2.4.41", source_tool="nmap")
+add_service_discovery(host="192.168.1.1", port=22, protocol="tcp", service="ssh", version="OpenSSH 8.2", source_tool="nmap")
+```
+
+### Technology Stack
+```python
+add_technology_stack(technology="WordPress", category="cms", version="5.8.1", url="https://example.com", source_tool="whatweb")
+add_technology_stack(technology="PHP", category="language", version="7.4", source_tool="whatweb")
+add_technology_stack(technology="Apache", category="web_server", version="2.4.41", source_tool="nmap")
+```
+
+### Network Topology
+```python
+add_network_topology(source="example.com", destination="192.168.1.1", relationship="resolves_to", details="Primary A record")
+add_network_topology(source="www.example.com", destination="cdn.cloudflare.com", relationship="proxies_to", details="CDN proxy")
+```
+
+## Recon Data (Subdomains, IPs, Emails)
+```python
+add_recon_data(data_type="subdomains", items="sub1.example.com\nsub2.example.com", source_tool="subfinder")
+add_recon_data(data_type="ip_addresses", items="192.168.1.1\n192.168.1.2", source_tool="nmap")
+add_recon_data(data_type="emails", items="admin@example.com", source_tool="hunter")
+```
+
+## Tool Outputs
+```python
+add_tool_output_to_report(tool_name="nmap", output_data=nmap_result, output_format="xml", filename="nmap_scan.xml")
+```
+
 # COMPREHENSIVE PENTEST METHODOLOGY (OWASP WSTG)
 
 **When performing a penetration test, follow this in-depth methodology based on OWASP Web Security Testing Guide (WSTG).**
 
 ## PHASE 0: PRE-ENGAGEMENT
 1. **Enable report mode**: `enable_report_mode(title, target, author)`
-2. **Take initial screenshot**: `take_screenshot(url)` and add to report
+2. **Take initial screenshot**: `take_screenshot(url)` - auto-added to report when report mode is ON
 3. **Document scope** with `add_scope_item()`
 4. **Verify authorization** before proceeding
 
@@ -332,6 +381,7 @@ Conduct comprehensive security assessments following industry best practices:
 
 ### WSTG-INFO-02: Fingerprint Web Server
 - `whatweb_scan(target)` - Identify web server, frameworks, CMS
+- **IMPORTANT**: After whatweb, call `add_technology_stack()` for each detected technology
 - `curl_request` with HEAD method to extract server headers
 - Look for: Server version, X-Powered-By, X-AspNet-Version
 
@@ -883,10 +933,61 @@ Exploitation: [tool] [arguments]""",
 
 ## PHASE 14: REPORTING & ARTIFACTS
 
-### During Assessment:
-1. **Screenshot every finding**: `take_screenshot` + `add_screenshot_to_report`
-2. **Save tool outputs**: `add_tool_output_to_report(tool, data, format, filename)`
-3. **Document findings**: `add_finding_to_report` with full details
+### CRITICAL: Complete Data Collection
+
+When Report Mode is enabled, collect ALL information discovered:
+
+**1. Screenshots (auto-added when report mode is ON)**
+```python
+take_screenshot(url)  # Auto-adds to report
+take_screenshot(url_with_exploit)  # Capture exploitation proof
+```
+
+**2. Infrastructure Data (MUST document everything discovered)**
+```python
+# After nmap scan - record all services
+add_service_discovery(host="192.168.1.1", port=80, protocol="tcp", service="http", version="Apache/2.4.41", source_tool="nmap")
+
+# After DNS enumeration - record all records
+add_dns_record(record_type="A", name="target.com", value="192.168.1.1", source_tool="dig")
+
+# After technology fingerprinting - record all detected tech
+add_technology_stack(technology="WordPress", category="cms", version="5.8.1", source_tool="whatweb")
+
+# Record network relationships
+add_network_topology(source="www.target.com", destination="target.com", relationship="redirects_to")
+```
+
+**3. Recon Data (ALL discovered assets)**
+```python
+# Subdomains discovered
+add_recon_data(data_type="subdomains", items="sub1.target.com\nsub2.target.com\napi.target.com", source_tool="subfinder")
+
+# IP addresses found
+add_recon_data(data_type="ip_addresses", items="192.168.1.1\n192.168.1.2", source_tool="nmap")
+
+# Emails discovered  
+add_recon_data(data_type="emails", items="admin@target.com\nsupport@target.com", source_tool="hunter")
+
+# Directories/endpoints found
+add_recon_data(data_type="directories", items="/admin\n/api\n/backup", source_tool="gobuster")
+```
+
+**4. Raw Tool Outputs**
+```python
+add_tool_output_to_report(tool_name="nmap", output_data=nmap_xml_result, output_format="xml", filename="nmap_full_scan.xml")
+add_tool_output_to_report(tool_name="nikto", output_data=nikto_result, output_format="text", filename="nikto_scan.txt")
+```
+
+**5. Document Findings**
+```python
+add_finding_to_report(
+    title="SQL Injection in Login Form",
+    severity="Critical",
+    ...,
+    tool_used="nikto, sqlmap, curl",  # ALL tools that detected/validated
+)
+```
 
 ### Finding Documentation Guidelines:
 When adding findings, always include:
@@ -896,44 +997,27 @@ When adding findings, always include:
 - **references**: CVE IDs, relevant URLs (newline-separated)
 - **cwe_id**: CWE identifier (e.g., `CWE-89` for SQL injection)
 
-Example:
-```
-add_finding_to_report(
-    title="SQL Injection in Login Form",
-    severity="Critical",
-    description="A SQL injection vulnerability was found...",
-    impact="Allows attackers to bypass authentication...",
-    remediation="Use parameterized queries...",
-    owasp_category="A03:2021 Injection",
-    cvss_score="9.8",
-    cwe_id="CWE-89",
-    affected_component="https://target.com/login.php?username=",
-    evidence="' OR '1'='1' -- returned all users",
-    steps_to_reproduce="1. Navigate to login page\n2. Enter ' OR '1'='1' -- in username\n3. Submit form\n4. Observe authentication bypass",
-    tool_used="sqlmap",
-    command_used="sqlmap -u 'https://target.com/login.php?username=test' --dbs --batch",
-    references="CVE-2023-XXXXX\nhttps://owasp.org/www-community/attacks/SQL_Injection"
-)
-```
+### Report Sections Generated:
+1. **Executive Summary** - High-level overview with key findings list
+2. **Scope & Methodology** - Targets in table format (FQDNs/URLs, Subnets/IPs)
+3. **Reconnaissance & Infrastructure** - DNS tables, services, technology stack, topology
+4. **Detailed Findings** - Full vulnerability details with evidence
+5. **Conclusion & Recommendations** - Prioritized remediation roadmap
+6. **Tools Used** - All tools that were employed
+7. **Artifacts** - Screenshots and raw tool outputs
+8. **References** - OWASP, CWE, CVSS resources
 
-### Report Sections:
-- Executive Summary (description + key findings bullet list)
-- Scope & Methodology (targets in table format, grouped by type)
-- Findings (with full paths, numbered steps, commands, references)
-- Reconnaissance Data
-- Tools Used
-- **Artifacts Section** (screenshots + raw tool outputs)
-- Conclusion & Recommendations (prioritized remediation roadmap)
-- References
-
-### Artifact Types to Collect:
-- Initial website screenshot
-- Screenshots of each vulnerability
-- Nmap XML output
-- Nikto/Nuclei scan results
-- SQLMap extraction results
-- Searchsploit exploit code
-- Any PoC payloads used
+### Artifact Checklist:
+- [ ] Initial website screenshot
+- [ ] Screenshot of each vulnerability PoC
+- [ ] Nmap XML output (full port scan)
+- [ ] Nikto/Nuclei scan results
+- [ ] SQLMap extraction results (if SQL injection found)
+- [ ] Searchsploit exploit code (if applicable)
+- [ ] DNS records table (all record types)
+- [ ] Subdomains list (complete)
+- [ ] Technology stack (all detected)
+- [ ] Network topology (relationships)
 
 # SCOPE & CONSTRAINTS
 

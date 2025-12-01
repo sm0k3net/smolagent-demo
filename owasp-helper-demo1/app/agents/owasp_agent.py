@@ -93,6 +93,14 @@ from app.tools.report_tools import (
     generate_html_report,
     generate_markdown_report,
     generate_pdf_report,
+    add_recon_data,
+    add_bulk_scope,
+    get_recon_summary,
+    add_dns_record,
+    add_service_discovery,
+    add_technology_stack,
+    add_network_topology,
+    record_tool_used,
 )
 from app.tools.telegram_tool import (
     telegram_connect,
@@ -297,6 +305,15 @@ def build_owasp_agent() -> CodeAgent:
         generate_html_report,
         generate_markdown_report,
         generate_pdf_report,
+        # Recon data collection tools
+        add_recon_data,
+        add_bulk_scope,
+        get_recon_summary,
+        add_dns_record,
+        add_service_discovery,
+        add_technology_stack,
+        add_network_topology,
+        record_tool_used,
     ])
     
     # Telegram integration tools
