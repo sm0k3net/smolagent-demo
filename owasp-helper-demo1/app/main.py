@@ -6071,11 +6071,14 @@ body.light-theme .provider-select optgroup {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 .activity-title-text {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  flex: 1;
+  min-width: 150px;
 }
 .activity-time {
   font-size: 0.7rem;
@@ -6103,6 +6106,195 @@ body.light-theme .provider-select optgroup {
   font-family: 'JetBrains Mono', monospace;
   border: 1px solid rgba(255,255,255,0.08);
   max-height: 150px;
+}
+
+/* Activity Phase Groups */
+.activity-phase-group {
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.15);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.phase-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.03);
+  border-left: 3px solid var(--phase-color, var(--primary));
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+.phase-header:hover {
+  background: rgba(255,255,255,0.08);
+}
+.phase-icon {
+  font-size: 0.85rem;
+}
+.phase-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-200);
+  flex: 1;
+}
+.phase-count {
+  background: rgba(255,255,255,0.15);
+  color: var(--gray-300);
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.phase-toggle {
+  font-size: 0.6rem;
+  color: var(--gray-500);
+  transition: transform 0.2s;
+}
+.activity-phase-group.collapsed .phase-toggle {
+  transform: rotate(-90deg);
+}
+.activity-phase-group.collapsed .phase-items {
+  display: none;
+}
+.phase-items {
+  padding: 0.5rem;
+}
+.phase-items .activity-item {
+  margin-bottom: 0.35rem;
+  padding: 0.5rem 0.75rem 0.5rem 2.5rem;
+}
+.phase-items .activity-icon {
+  left: 0.5rem;
+  top: 0.5rem;
+  width: 18px;
+  height: 18px;
+}
+
+/* Activity badges */
+.activity-main {
+  flex: 1;
+  min-width: 0;
+}
+.activity-badges {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+.activity-tool-badge {
+  background: rgba(14, 165, 233, 0.2);
+  color: #38bdf8;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+.activity-type-badge {
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+.activity-status-badge {
+  font-size: 0.55rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.status-ok {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+.status-failed {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+.status-done {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+/* Task classification header */
+.activity-panel-header {
+  padding: 0;
+  flex-shrink: 0;
+}
+.task-classification {
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.classification-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 6px;
+  border-left: 3px solid var(--primary);
+}
+.classification-icon {
+  font-size: 1.1rem;
+}
+.classification-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--gray-100);
+}
+.target-badge {
+  background: var(--gray-700);
+  color: var(--gray-300);
+  font-size: 0.6rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: auto;
+}
+.classification-plan {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+/* Tab progress bar */
+.activity-task-tab {
+  position: relative;
+  overflow: hidden;
+}
+.tab-progress-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%);
+  transition: width 0.5s ease;
+  z-index: 0;
+  pointer-events: none;
+}
+.activity-task-tab.completed .tab-progress-bar {
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.35) 100%);
+}
+.tab-label-icon {
+  position: relative;
+  z-index: 1;
+  font-size: 0.75rem;
+}
+.activity-task-tab .tab-label {
+  position: relative;
+  z-index: 1;
+}
+.activity-task-tab .tab-close {
+  position: relative;
+  z-index: 1;
 }
 
 /* Main content area */
@@ -9970,7 +10162,50 @@ const activityIcons = {
 // Activity Monitor - Multi-Task Management
 // ============================================
 
-function createActivityTask(taskId, prompt) {
+// Activity phases for categorization
+const ACTIVITY_PHASES = {
+  planning: { name: 'Planning & Analysis', icon: '🎯', color: '#8b5cf6' },
+  recon: { name: 'Reconnaissance', icon: '🔍', color: '#06b6d4' },
+  discovery: { name: 'Discovery & Scoping', icon: '📂', color: '#3b82f6' },
+  scanning: { name: 'Vulnerability Scanning', icon: '🛡️', color: '#f59e0b' },
+  exploitation: { name: 'Exploitation & Validation', icon: '💥', color: '#ef4444' },
+  reporting: { name: 'Reporting', icon: '📋', color: '#10b981' },
+  general: { name: 'Execution', icon: '⚡', color: '#64748b' }
+};
+
+// Map tool names to phases
+function getActivityPhase(toolName, activityType) {
+  if (!toolName) return 'general';
+  const tool = toolName.toLowerCase();
+  
+  if (activityType === 'thinking' || activityType === 'start') return 'planning';
+  if (activityType === 'complete') return 'reporting';
+  
+  // Reconnaissance tools
+  if (['virustotal', 'shodan', 'hunter', 'whois', 'dns', 'crt_sh', 'securitytrails', 'haveibeenpwned', 'osint', 'amass_intel'].some(t => tool.includes(t))) {
+    return 'recon';
+  }
+  // Discovery tools
+  if (['nmap', 'subfinder', 'httpx', 'whatweb', 'gobuster', 'ffuf', 'dirb', 'dirsearch', 'amass_enum', 'dnsrecon'].some(t => tool.includes(t))) {
+    return 'discovery';
+  }
+  // Scanning tools
+  if (['nikto', 'nuclei', 'zap', 'wpscan', 'sslyze', 'testssl', 'sqlmap_scan', 'xsser'].some(t => tool.includes(t))) {
+    return 'scanning';
+  }
+  // Exploitation tools
+  if (['sqlmap_dump', 'searchsploit', 'hydra', 'ncrack', 'curl', 'browse', 'fill_form', 'click', 'exploit'].some(t => tool.includes(t))) {
+    return 'exploitation';
+  }
+  // Reporting tools
+  if (['report', 'finding', 'summary', 'conclusion', 'screenshot', 'add_scope'].some(t => tool.includes(t))) {
+    return 'reporting';
+  }
+  
+  return 'general';
+}
+
+function createActivityTask(taskId, prompt, taskLabel = null, targetType = null) {
   const shortPrompt = prompt.length > 40 ? prompt.substring(0, 40) + '...' : prompt;
   
   activityTasks[taskId] = {
@@ -9982,13 +10217,28 @@ function createActivityTask(taskId, prompt) {
     startTime: Date.now(),
     stepCount: 0,
     toolCount: 0,
-    durationInterval: null
+    progress: 0,
+    durationInterval: null,
+    taskLabel: taskLabel || 'general',
+    targetType: targetType,
+    currentPhase: 'planning',
+    phaseGroups: {}  // Store activities by phase
   };
   
   // Hide no-tasks message
   noActivityMessage.style.display = 'none';
   
-  // Create tab
+  // Task label styles for tabs
+  const labelStyles = {
+    'pentest': { icon: '🎯', color: '#dc3545' },
+    'scanning': { icon: '🛡️', color: '#fd7e14' },
+    'recon': { icon: '🔍', color: '#17a2b8' },
+    'discovery': { icon: '📂', color: '#6f42c1' },
+    'general': { icon: '📝', color: '#6c757d' }
+  };
+  const labelStyle = labelStyles[taskLabel] || labelStyles['general'];
+  
+  // Create tab with progress bar background
   const tab = document.createElement('div');
   tab.className = 'activity-task-tab active running';
   tab.id = `activity-tab-${taskId}`;
@@ -9998,6 +10248,8 @@ function createActivityTask(taskId, prompt) {
     }
   };
   tab.innerHTML = `
+    <div class="tab-progress-bar" id="tab-progress-${taskId}" style="width: 0%;"></div>
+    <span class="tab-label-icon">${labelStyle.icon}</span>
     <span class="tab-label" title="${escapeHtml(prompt)}">${escapeHtml(shortPrompt)}</span>
     <span class="tab-close" onclick="closeActivityTask('${taskId}')" title="Close tab">✕</span>
   `;
@@ -10006,17 +10258,21 @@ function createActivityTask(taskId, prompt) {
   document.querySelectorAll('.activity-task-tab').forEach(t => t.classList.remove('active'));
   activityTabsHeader.appendChild(tab);
   
-  // Create panel
+  // Create panel with phase groups
   const panel = document.createElement('div');
   panel.className = 'activity-panel active';
   panel.id = `activity-panel-${taskId}`;
   panel.innerHTML = `
+    <div class="activity-panel-header" id="activity-header-${taskId}">
+      <div class="task-classification" style="display: none;" id="task-class-${taskId}"></div>
+    </div>
     <div class="activity-panel-log" id="activity-log-${taskId}"></div>
     <div class="activity-panel-footer">
       <div class="activity-panel-stats">
         <div class="stat"><span>Steps:</span> <span class="stat-value" id="stat-steps-${taskId}">0</span></div>
         <div class="stat"><span>Tools:</span> <span class="stat-value" id="stat-tools-${taskId}">0</span></div>
         <div class="stat"><span>Time:</span> <span class="stat-value" id="stat-duration-${taskId}">0s</span></div>
+        <div class="stat"><span>Progress:</span> <span class="stat-value" id="stat-progress-${taskId}">0%</span></div>
       </div>
       <div class="activity-panel-actions">
         <button class="activity-btn activity-btn-kill" id="kill-btn-${taskId}" onclick="killActivityTask('${taskId}')" title="Stop task">
@@ -10037,10 +10293,24 @@ function createActivityTask(taskId, prompt) {
   
   currentActivityTaskId = taskId;
   
-  // Start duration timer
-  activityTasks[taskId].durationInterval = setInterval(() => {
-    updateTaskDuration(taskId);
-  }, 1000);
+  // Start duration timer - use requestAnimationFrame for smoother updates
+  const startTime = Date.now();
+  activityTasks[taskId].timerStartTime = startTime;
+  
+  function updateTimer() {
+    if (!activityTasks[taskId] || activityTasks[taskId].status !== 'running') return;
+    
+    const elapsed = Date.now() - activityTasks[taskId].timerStartTime;
+    const durationEl = document.getElementById(`stat-duration-${taskId}`);
+    if (durationEl) {
+      durationEl.textContent = formatDuration(elapsed);
+    }
+    
+    activityTasks[taskId].durationInterval = requestAnimationFrame(() => {
+      setTimeout(updateTimer, 1000);
+    });
+  }
+  updateTimer();
   
   return activityTasks[taskId];
 }
@@ -10162,8 +10432,36 @@ function updateTaskStatus(taskId, status) {
     killBtn.style.display = 'none';
   }
   
-  if (status !== 'running' && task.durationInterval) {
-    clearInterval(task.durationInterval);
+  // Stop timer on completion
+  if (status !== 'running') {
+    // Clear the requestAnimationFrame timer
+    if (task.durationInterval) {
+      cancelAnimationFrame(task.durationInterval);
+    }
+    
+    // Set progress to 100% on completion
+    if (status === 'completed') {
+      updateTaskProgress(taskId, 100);
+    }
+  }
+}
+
+function updateTaskProgress(taskId, progress) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  task.progress = Math.min(100, Math.max(0, progress));
+  
+  // Update progress bar in tab
+  const progressBar = document.getElementById(`tab-progress-${taskId}`);
+  if (progressBar) {
+    progressBar.style.width = `${task.progress}%`;
+  }
+  
+  // Update progress stat
+  const progressStat = document.getElementById(`stat-progress-${taskId}`);
+  if (progressStat) {
+    progressStat.textContent = `${Math.round(task.progress)}%`;
   }
 }
 
@@ -10198,7 +10496,7 @@ function updateTaskStats(taskId, stepCount, toolCount) {
   if (toolsEl) toolsEl.textContent = toolCount;
 }
 
-function addActivity(type, title, content, details = null, taskId = null) {
+function addActivity(type, title, content, details = null, taskId = null, extra = {}) {
   // Use current task if not specified
   const targetTaskId = taskId || currentActivityTaskId;
   
@@ -10211,27 +10509,118 @@ function addActivity(type, title, content, details = null, taskId = null) {
   const time = new Date().toLocaleTimeString('en-US', { hour12: false });
   const icon = activityIcons[type] || activityIcons.step;
   
-  // Store in task logs
-  task.logs.push({ type, title, content, details, time });
+  // Determine phase based on tool name and activity type
+  const toolName = extra.tool || '';
+  const phase = getActivityPhase(toolName, type);
+  const phaseInfo = ACTIVITY_PHASES[phase] || ACTIVITY_PHASES.general;
   
-  // Create DOM element
+  // Determine status
+  const status = extra.status || (type === 'error' ? 'Failed' : type === 'complete' ? 'Done' : 'OK');
+  const statusClass = status === 'Failed' ? 'status-failed' : status === 'Done' ? 'status-done' : 'status-ok';
+  
+  // Store in task logs with phase info
+  const logEntry = { type, title, content, details, time, phase, tool: toolName, status };
+  task.logs.push(logEntry);
+  
+  // Initialize phase group if needed
+  if (!task.phaseGroups[phase]) {
+    task.phaseGroups[phase] = [];
+  }
+  task.phaseGroups[phase].push(logEntry);
+  
+  // Get or create phase container
+  const logEl = document.getElementById(`activity-log-${targetTaskId}`);
+  if (!logEl) return;
+  
+  let phaseContainer = document.getElementById(`phase-${phase}-${targetTaskId}`);
+  if (!phaseContainer) {
+    phaseContainer = document.createElement('div');
+    phaseContainer.className = 'activity-phase-group';
+    phaseContainer.id = `phase-${phase}-${targetTaskId}`;
+    phaseContainer.innerHTML = `
+      <div class="phase-header" onclick="togglePhaseGroup('${phase}', '${targetTaskId}')">
+        <span class="phase-icon">${phaseInfo.icon}</span>
+        <span class="phase-name">${phaseInfo.name}</span>
+        <span class="phase-count" id="phase-count-${phase}-${targetTaskId}">1</span>
+        <span class="phase-toggle">▼</span>
+      </div>
+      <div class="phase-items" id="phase-items-${phase}-${targetTaskId}"></div>
+    `;
+    phaseContainer.style.setProperty('--phase-color', phaseInfo.color);
+    logEl.appendChild(phaseContainer);
+  } else {
+    // Update count
+    const countEl = document.getElementById(`phase-count-${phase}-${targetTaskId}`);
+    if (countEl) {
+      countEl.textContent = task.phaseGroups[phase].length;
+    }
+  }
+  
+  // Create activity item
   const item = document.createElement('div');
   item.className = `activity-item activity-${type}`;
   
+  // Build tool badge if available
+  const toolBadge = toolName ? `<span class="activity-tool-badge">${toolName}</span>` : '';
+  const typeBadge = extra.activityType ? `<span class="activity-type-badge">${extra.activityType}</span>` : '';
+  const statusBadge = `<span class="activity-status-badge ${statusClass}">${status}</span>`;
+  
   item.innerHTML = `
     <div class="activity-icon">${icon}</div>
-    <div class="activity-title">
-      <span class="activity-title-text">${title}</span>
-      <span class="activity-time">${time}</span>
+    <div class="activity-main">
+      <div class="activity-title">
+        <span class="activity-title-text">${title}</span>
+        <div class="activity-badges">
+          ${toolBadge}
+          ${typeBadge}
+          ${statusBadge}
+        </div>
+        <span class="activity-time">${time}</span>
+      </div>
+      <div class="activity-content">${content}${details ? '<pre class="activity-details">' + escapeHtml(details) + '</pre>' : ''}</div>
     </div>
-    <div class="activity-content">${content}${details ? '<pre>' + escapeHtml(details) + '</pre>' : ''}</div>
   `;
   
-  const logEl = document.getElementById(`activity-log-${targetTaskId}`);
-  if (logEl) {
-    logEl.appendChild(item);
-    logEl.scrollTop = logEl.scrollHeight;
+  const phaseItemsEl = document.getElementById(`phase-items-${phase}-${targetTaskId}`);
+  if (phaseItemsEl) {
+    phaseItemsEl.appendChild(item);
   }
+  
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function togglePhaseGroup(phase, taskId) {
+  const phaseItems = document.getElementById(`phase-items-${phase}-${taskId}`);
+  const phaseContainer = document.getElementById(`phase-${phase}-${taskId}`);
+  if (phaseItems && phaseContainer) {
+    phaseContainer.classList.toggle('collapsed');
+  }
+}
+
+function showTaskClassification(taskId, label, targetType, plan = null) {
+  const classEl = document.getElementById(`task-class-${taskId}`);
+  if (!classEl) return;
+  
+  const labelStyles = {
+    'pentest': { icon: '🎯', name: 'Penetration Test', color: '#dc3545' },
+    'scanning': { icon: '🛡️', name: 'Vulnerability Scan', color: '#fd7e14' },
+    'recon': { icon: '🔍', name: 'Reconnaissance', color: '#17a2b8' },
+    'discovery': { icon: '📂', name: 'Discovery', color: '#6f42c1' },
+    'general': { icon: '📝', name: 'General Task', color: '#6c757d' }
+  };
+  
+  const style = labelStyles[label] || labelStyles['general'];
+  const targetBadge = targetType ? `<span class="target-badge">${targetType.toUpperCase()}</span>` : '';
+  
+  classEl.style.display = 'block';
+  classEl.innerHTML = `
+    <div class="classification-header" style="border-color: ${style.color};">
+      <span class="classification-icon">${style.icon}</span>
+      <span class="classification-label">${style.name}</span>
+      ${targetBadge}
+    </div>
+    ${plan ? `<div class="classification-plan">${plan}</div>` : ''}
+  `;
 }
 
 function escapeHtml(text) {
@@ -10246,7 +10635,9 @@ function escapeHtml(text) {
 function startTimer(taskId = null) {
   const id = taskId || currentActivityTaskId;
   if (id && activityTasks[id]) {
-    activityTasks[id].startTime = Date.now();
+    const now = Date.now();
+    activityTasks[id].startTime = now;
+    activityTasks[id].timerStartTime = now;  // Also update timerStartTime for the new timer
     activityTasks[id].stepCount = 0;
     activityTasks[id].toolCount = 0;
   }
@@ -10550,15 +10941,63 @@ ws.onmessage = (event) => {
     } else {
       addMessage('progress', data.content);
     }
+  } else if (data.type === 'task_classification') {
+    // Task classification received from backend
+    const targetTaskId = msgTaskId || currentActivityTaskId;
+    if (targetTaskId && activityTasks[targetTaskId]) {
+      // Update task metadata
+      activityTasks[targetTaskId].taskLabel = data.task_label;
+      activityTasks[targetTaskId].targetType = data.target_type;
+      
+      // Show classification in panel header
+      showTaskClassification(targetTaskId, data.task_label, data.target_type);
+      
+      // Update tab icon based on classification
+      const tab = document.getElementById(`activity-tab-${targetTaskId}`);
+      if (tab) {
+        const iconSpan = tab.querySelector('.tab-label-icon');
+        if (iconSpan) {
+          iconSpan.textContent = data.label_icon;
+        }
+      }
+      
+      // Add classification announcement as first activity
+      addActivity('thinking', `${data.label_icon} ${data.label_name}`, 
+        `Task classified as ${data.label_name}` + (data.target_type ? ` targeting ${data.target_type.toUpperCase()}` : ''),
+        null, targetTaskId, { tool: 'classifier' });
+    }
   } else if (data.type === 'activity') {
     // Activity log update from agent steps - route to correct task
     const targetTaskId = msgTaskId || currentActivityTaskId;
-    addActivity(data.activity_type, data.title || '', data.content, data.details, targetTaskId);
+    
+    // Extract tool name - prefer explicit tool_name field, fallback to parsing content
+    let toolName = data.tool_name || '';
+    if (!toolName) {
+      const toolMatch = (data.content || '').match(/Tool #\\d+: ([a-zA-Z_]+)/);
+      if (toolMatch) {
+        toolName = toolMatch[1];
+      } else if (data.activity_type === 'tool' && data.title) {
+        // Try to extract from title (format: "Running security scan: nmap")
+        const titleMatch = data.title.match(/: ([a-zA-Z_]+)$/);
+        if (titleMatch) {
+          toolName = titleMatch[1];
+        }
+      }
+    }
+    
+    addActivity(data.activity_type, data.title || '', data.content, data.details, targetTaskId, { tool: toolName });
     
     // Update task-specific stats if provided
     if (targetTaskId && activityTasks[targetTaskId]) {
       if (typeof data.tool_count === 'number' || typeof data.step_count === 'number') {
         updateTaskStats(targetTaskId, data.step_count || 0, data.tool_count || 0);
+      }
+      
+      // Auto-update progress based on tool/step counts (rough estimate)
+      // Typical pentest task: ~10-50 tools, so scale accordingly
+      if (data.tool_count) {
+        const estimatedProgress = Math.min(90, Math.floor(data.tool_count * 5));
+        updateTaskProgress(targetTaskId, estimatedProgress);
       }
     }
     
@@ -11728,11 +12167,40 @@ The report should be comprehensive and professional, suitable for executive stak
                 threading.Thread(target=run_background_task, args=(task_id, full_message), daemon=True).start()
                 continue  # Don't block, move to next message
             
+            # Classify the task for real-time tasks too
+            rt_task_label, rt_target_type = classify_task_prompt(msg_content)
+            
             # Stream real agent execution with proper step callbacks
             async def run_with_real_streaming():
                 # Capture chat_id and task_id for this request
                 request_chat_id = chat_id
                 request_task_id = task_id
+                
+                # Send task classification info first
+                label_icons = {
+                    "pentest": "🎯",
+                    "scanning": "🛡️",
+                    "recon": "🔍",
+                    "discovery": "📂",
+                    "general": "📝"
+                }
+                label_names = {
+                    "pentest": "Penetration Test",
+                    "scanning": "Vulnerability Scan",
+                    "recon": "Reconnaissance",
+                    "discovery": "Discovery",
+                    "general": "General Task"
+                }
+                
+                await ws.send_text(json.dumps({
+                    "type": "task_classification",
+                    "task_label": rt_task_label.value,
+                    "target_type": rt_target_type,
+                    "label_name": label_names.get(rt_task_label.value, "General Task"),
+                    "label_icon": label_icons.get(rt_task_label.value, "📝"),
+                    "chat_id": request_chat_id,
+                    "task_id": request_task_id
+                }))
                 
                 # Send initial progress
                 await ws.send_text(json.dumps({
@@ -11819,6 +12287,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                             "activity_type": activity_type,
                                             "title": activity_msg,
                                             "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                            "tool_name": tool_name,
                                             "tool_count": tool_count,
                                             "step_count": step_count
                                         })
@@ -11898,8 +12367,8 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 while True:
                     try:
-                        # Non-blocking check with timeout
-                        await asyncio.sleep(0.1)
+                        # Non-blocking check with minimal delay for responsiveness
+                        await asyncio.sleep(0.02)  # Reduced from 0.1 for faster updates
                         
                         while not event_queue.empty():
                             event = event_queue.get_nowait()
@@ -11909,12 +12378,13 @@ The report should be comprehensive and professional, suitable for executive stak
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                # Send activity update with counts, chat_id and task_id
+                                # Send activity update with counts, chat_id, task_id and tool_name
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": event["activity_type"],
                                     "title": event["title"],
                                     "content": event["content"],
+                                    "tool_name": event.get("tool_name", ""),
                                     "tool_count": last_tool_count,
                                     "step_count": last_step_count,
                                     "chat_id": request_chat_id,
