@@ -123,63 +123,264 @@ def _get_report_template_html() -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{title}}</title>
     <style>
+        :root {
+            --primary: #1e3a5f;
+            --primary-light: #2d5a8a;
+            --accent: #00b4d8;
+            --accent-light: #48cae4;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --danger-dark: #b91c1c;
+            --info: #6366f1;
+            --neutral-50: #f8fafc;
+            --neutral-100: #f1f5f9;
+            --neutral-200: #e2e8f0;
+            --neutral-300: #cbd5e1;
+            --neutral-400: #94a3b8;
+            --neutral-500: #64748b;
+            --neutral-600: #475569;
+            --neutral-700: #334155;
+            --neutral-800: #1e293b;
+            --neutral-900: #0f172a;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; 
             line-height: 1.6; 
-            color: #333;
-            background: #f5f5f5;
+            color: var(--neutral-800);
+            background: var(--neutral-100);
+            font-size: 15px;
         }
         .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        
+        /* Header */
         .report-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 50%, var(--accent) 100%);
             color: white;
-            padding: 3rem 2rem;
+            padding: 3rem 2.5rem;
             margin-bottom: 2rem;
-            border-radius: 8px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(30, 58, 95, 0.3);
+            position: relative;
+            overflow: hidden;
         }
-        .report-header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
-        .report-header .subtitle { opacity: 0.9; font-size: 1.2rem; }
-        .report-header .meta { margin-top: 1.5rem; font-size: 0.95rem; opacity: 0.85; }
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 60%;
+            height: 200%;
+            background: radial-gradient(ellipse, rgba(255,255,255,0.1) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .report-header h1 { 
+            font-size: 2.25rem; 
+            margin-bottom: 0.5rem; 
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .report-header .subtitle { 
+            opacity: 0.9; 
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        .report-header .meta { 
+            margin-top: 1.5rem; 
+            font-size: 0.9rem; 
+            opacity: 0.85;
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+        .report-header .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .report-header .meta-icon {
+            width: 18px;
+            height: 18px;
+            opacity: 0.8;
+        }
+        
+        /* Sections */
         .section {
             background: white;
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 2rem;
             margin-bottom: 1.5rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05);
+            border: 1px solid var(--neutral-200);
         }
         .section h2 {
-            color: #667eea;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 0.5rem;
+            color: var(--primary);
+            font-size: 1.35rem;
+            font-weight: 700;
             margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--neutral-200);
         }
-        .section h3 { color: #444; margin: 1.5rem 0 1rem; }
-        .executive-summary { background: #f8f9ff; border-left: 4px solid #667eea; }
+        .section h2 .section-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1rem;
+        }
+        .section h3 { 
+            color: var(--neutral-700); 
+            margin: 1.5rem 0 1rem; 
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        
+        /* Executive Summary */
+        .executive-summary { 
+            background: linear-gradient(135deg, var(--neutral-50) 0%, #f0f9ff 100%);
+            border-left: 4px solid var(--accent);
+        }
+        .exec-summary-content { margin-bottom: 1.5rem; }
+        .exec-summary-content p { 
+            margin-bottom: 1rem; 
+            line-height: 1.8; 
+            color: var(--neutral-700);
+        }
+        
+        /* Severity Chart */
+        .severity-chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            border: 1px solid var(--neutral-200);
+        }
+        .severity-chart-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--neutral-700);
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .severity-chart {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .severity-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .severity-label {
+            width: 80px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .severity-label.critical { color: var(--danger-dark); }
+        .severity-label.high { color: #ea580c; }
+        .severity-label.medium { color: var(--warning); }
+        .severity-label.low { color: var(--success); }
+        .severity-label.info { color: var(--info); }
+        .bar-container {
+            flex: 1;
+            height: 28px;
+            background: var(--neutral-100);
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 0.75rem;
+            color: white;
+            font-weight: 700;
+            font-size: 0.85rem;
+            min-width: 35px;
+            transition: width 0.5s ease;
+        }
+        .bar-fill.critical { background: linear-gradient(90deg, var(--danger-dark) 0%, var(--danger) 100%); }
+        .bar-fill.high { background: linear-gradient(90deg, #ea580c 0%, #f97316 100%); }
+        .bar-fill.medium { background: linear-gradient(90deg, #d97706 0%, var(--warning) 100%); }
+        .bar-fill.low { background: linear-gradient(90deg, #059669 0%, var(--success) 100%); }
+        .bar-fill.info { background: linear-gradient(90deg, #4f46e5 0%, var(--info) 100%); }
+        .bar-count {
+            width: 50px;
+            text-align: right;
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: var(--neutral-800);
+        }
+        
+        /* Stats Cards */
         .findings-summary {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(5, 1fr);
             gap: 1rem;
             margin: 1.5rem 0;
         }
         .stat-card {
             text-align: center;
-            padding: 1.5rem;
-            border-radius: 8px;
+            padding: 1.25rem 1rem;
+            border-radius: 12px;
             color: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            position: relative;
+            overflow: hidden;
         }
-        .stat-card.critical { background: #dc3545; }
-        .stat-card.high { background: #fd7e14; }
-        .stat-card.medium { background: #ffc107; color: #333; }
-        .stat-card.low { background: #28a745; }
-        .stat-card.info { background: #17a2b8; }
-        .stat-card .number { font-size: 2.5rem; font-weight: bold; }
-        .stat-card .label { text-transform: uppercase; font-size: 0.85rem; }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 50%;
+            height: 100%;
+            background: rgba(255,255,255,0.1);
+            clip-path: polygon(30% 0, 100% 0, 100% 100%, 0% 100%);
+        }
+        .stat-card.critical { background: linear-gradient(135deg, var(--danger-dark) 0%, var(--danger) 100%); }
+        .stat-card.high { background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
+        .stat-card.medium { background: linear-gradient(135deg, #d97706 0%, var(--warning) 100%); color: var(--neutral-800); }
+        .stat-card.low { background: linear-gradient(135deg, #059669 0%, var(--success) 100%); }
+        .stat-card.info { background: linear-gradient(135deg, #4f46e5 0%, var(--info) 100%); }
+        .stat-card .number { 
+            font-size: 2.5rem; 
+            font-weight: 800; 
+            line-height: 1;
+            position: relative;
+        }
+        .stat-card .label { 
+            text-transform: uppercase; 
+            font-size: 0.7rem; 
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin-top: 0.5rem;
+            opacity: 0.9;
+        }
+        
+        /* Findings */
         .finding {
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
+            border: 1px solid var(--neutral-200);
+            border-radius: 12px;
             margin-bottom: 1.5rem;
             overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         .finding-header {
             padding: 1rem 1.5rem;
@@ -187,204 +388,481 @@ def _get_report_template_html() -> str:
             justify-content: space-between;
             align-items: center;
         }
-        .finding-header.critical { background: #dc3545; color: white; }
-        .finding-header.high { background: #fd7e14; color: white; }
-        .finding-header.medium { background: #ffc107; color: #333; }
-        .finding-header.low { background: #28a745; color: white; }
-        .finding-header.info { background: #17a2b8; color: white; }
-        .finding-title { font-weight: 600; font-size: 1.1rem; }
+        .finding-header.critical { background: linear-gradient(90deg, var(--danger-dark) 0%, var(--danger) 100%); color: white; }
+        .finding-header.high { background: linear-gradient(90deg, #ea580c 0%, #f97316 100%); color: white; }
+        .finding-header.medium { background: linear-gradient(90deg, #d97706 0%, var(--warning) 100%); color: var(--neutral-800); }
+        .finding-header.low { background: linear-gradient(90deg, #059669 0%, var(--success) 100%); color: white; }
+        .finding-header.info { background: linear-gradient(90deg, #4f46e5 0%, var(--info) 100%); color: white; }
+        .finding-title { 
+            font-weight: 700; 
+            font-size: 1.05rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
         .finding-body { padding: 1.5rem; }
-        .finding-body h4 { color: #555; margin: 1rem 0 0.5rem; font-size: 0.95rem; }
-        .finding-body p, .finding-body pre { margin-bottom: 1rem; }
-        pre {
-            background: #282c34;
-            color: #abb2bf;
-            padding: 1rem;
-            border-radius: 6px;
-            overflow-x: auto;
-            font-size: 0.9rem;
-        }
-        .tag {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 4px;
+        .finding-body h4 { 
+            color: var(--neutral-600); 
+            margin: 1.25rem 0 0.5rem; 
             font-size: 0.85rem;
-            margin-right: 0.5rem;
-            background: rgba(255,255,255,0.2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
         }
+        .finding-body p { margin-bottom: 1rem; color: var(--neutral-700); }
+        .finding-meta {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--neutral-200);
+        }
+        .finding-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.85rem;
+            color: var(--neutral-600);
+            background: var(--neutral-100);
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+        }
+        .finding-screenshot {
+            margin: 1rem 0;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 2px solid var(--neutral-200);
+        }
+        .finding-screenshot img {
+            width: 100%;
+            display: block;
+        }
+        .finding-screenshot-caption {
+            background: var(--neutral-100);
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            color: var(--neutral-600);
+            font-style: italic;
+        }
+        
+        /* Code blocks */
+        pre {
+            background: var(--neutral-900);
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            margin: 0.75rem 0;
+        }
+        code {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.9em;
+        }
+        .command-block { 
+            background: var(--neutral-900); 
+            color: #e2e8f0; 
+            padding: 1rem 1.25rem; 
+            border-radius: 8px; 
+            margin: 0.5rem 0; 
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; 
+            font-size: 0.85rem; 
+            overflow-x: auto; 
+            border-left: 4px solid var(--accent);
+            position: relative;
+        }
+        .command-label { 
+            color: var(--accent); 
+            margin-bottom: 0.25rem; 
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        /* Tags */
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-right: 0.5rem;
+            background: rgba(255,255,255,0.25);
+        }
+        
+        /* Tables */
         table {
             width: 100%;
             border-collapse: collapse;
             margin: 1rem 0;
+            table-layout: fixed;
         }
         th, td {
-            padding: 0.75rem;
+            padding: 0.75rem 1rem;
             text-align: left;
-            border-bottom: 1px solid #dee2e6;
+            border-bottom: 1px solid var(--neutral-200);
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
-        th { background: #f8f9fa; font-weight: 600; }
-        .scope-list { list-style: none; }
-        .scope-list li { padding: 0.5rem 0; border-bottom: 1px solid #eee; }
-        .scope-list li:last-child { border-bottom: none; }
-        .scope-table { margin-bottom: 1.5rem; }
-        .scope-table th { background: #667eea; color: white; }
-        .scope-table td { font-family: monospace; font-size: 0.9rem; }
-        .scope-type-header { background: #f0f0f0; font-weight: 600; color: #495057; }
-        .exec-summary-content { margin-bottom: 1.5rem; }
-        .exec-summary-content p { margin-bottom: 1rem; line-height: 1.8; }
-        .exec-summary-findings { background: #f8f9fa; padding: 1.5rem; border-radius: 8px; margin-top: 1rem; }
-        .exec-summary-findings h4 { margin-bottom: 1rem; color: #495057; }
-        .exec-summary-findings ul { margin: 0; padding-left: 1.5rem; }
-        .exec-summary-findings li { margin-bottom: 0.5rem; }
-        .steps-list { counter-reset: step-counter; list-style: none; padding-left: 0; }
-        .steps-list li { counter-increment: step-counter; margin-bottom: 0.75rem; padding-left: 2rem; position: relative; }
-        .steps-list li::before { content: counter(step-counter); position: absolute; left: 0; background: #667eea; color: white; width: 1.5rem; height: 1.5rem; border-radius: 50%; text-align: center; font-size: 0.85rem; line-height: 1.5rem; }
-        .command-block { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px; margin: 0.5rem 0; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; overflow-x: auto; border-left: 3px solid #667eea; }
-        .command-label { color: #6a9955; margin-bottom: 0.25rem; font-size: 0.8rem; }
-        .references-list { list-style: none; padding: 0; margin: 0.5rem 0; }
-        .references-list li { padding: 0.25rem 0; }
-        .references-list a { color: #0d6efd; text-decoration: none; }
-        .references-list a:hover { text-decoration: underline; }
-        .conclusion-section { background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); }
-        .conclusion-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem; }
-        .conclusion-card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .conclusion-card h4 { color: #155724; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
-        .conclusion-card ul { margin: 0; padding-left: 1.25rem; }
-        .conclusion-card li { margin-bottom: 0.5rem; }
-        .priority-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
-        .priority-immediate { background: #dc3545; color: white; }
-        .priority-short { background: #fd7e14; color: white; }
-        .priority-medium { background: #ffc107; color: #333; }
-        .priority-long { background: #28a745; color: white; }
-        .risk-summary { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
-        @media (max-width: 768px) { .conclusion-grid { grid-template-columns: 1fr; } }
-        .tool-badge {
-            display: inline-block;
-            background: #e9ecef;
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+        th { 
+            background: var(--neutral-100); 
+            font-weight: 700; 
+            color: var(--neutral-700);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        tr:hover { background: var(--neutral-50); }
+        
+        .scope-table { margin-bottom: 1.5rem; overflow-x: auto; }
+        .scope-table table { min-width: 100%; }
+        .scope-table th { 
+            background: var(--primary); 
+            color: white; 
+        }
+        .scope-table td { 
+            font-family: 'JetBrains Mono', monospace; 
+            font-size: 0.85rem;
+        }
+        .scope-type-header { 
+            background: var(--neutral-200) !important; 
+            font-weight: 700; 
+            color: var(--neutral-700); 
+        }
+        
+        /* Infrastructure Tables - Fixed Overflow */
+        .infrastructure-table { 
+            margin-bottom: 2rem;
+            overflow-x: auto;
+        }
+        .infrastructure-table h3 { 
+            color: var(--primary); 
+            margin-bottom: 1rem; 
+            font-size: 1.05rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .infrastructure-table table { 
+            width: 100%;
+            min-width: 600px;
+            border-collapse: collapse; 
+            margin-top: 0.5rem;
+            table-layout: fixed;
+        }
+        .infrastructure-table th { 
+            background: var(--primary); 
+            color: white; 
+            padding: 0.75rem 1rem; 
+            text-align: left; 
+            font-weight: 600;
             font-size: 0.8rem;
-            margin: 0.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
+        .infrastructure-table td { 
+            padding: 0.65rem 1rem; 
+            border-bottom: 1px solid var(--neutral-200); 
+            font-size: 0.85rem;
+            word-break: break-word;
+            overflow-wrap: break-word;
         }
-        .tool-card {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 1rem;
-            text-align: center;
+        .infrastructure-table tr:nth-child(even) { background: var(--neutral-50); }
+        .infrastructure-table code { 
+            background: var(--neutral-200); 
+            padding: 0.15rem 0.4rem; 
+            border-radius: 4px; 
+            font-size: 0.8rem;
+            word-break: break-all;
         }
-        .tool-card .tool-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
-        .tool-card .tool-name { font-weight: 600; color: #495057; }
-        .recon-section { background: #e8f4fd; border-left: 4px solid #0d6efd; }
+        .port-open { color: var(--success); font-weight: 700; }
+        .port-filtered { color: #ea580c; font-weight: 700; }
+        .port-closed { color: var(--danger); font-weight: 700; }
+        
+        /* Recon Section */
+        .recon-section { 
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border-left: 4px solid var(--info);
+        }
         .recon-data-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
             margin-top: 1.5rem;
         }
         .recon-data-card {
             background: white;
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid var(--neutral-200);
         }
         .recon-data-header {
-            background: #0d6efd;
+            background: var(--primary);
             color: white;
             padding: 0.75rem 1rem;
             font-weight: 600;
+            font-size: 0.9rem;
             display: flex;
             justify-content: space-between;
+            align-items: center;
         }
-        .recon-data-count { background: rgba(255,255,255,0.2); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+        .recon-data-count { 
+            background: rgba(255,255,255,0.2); 
+            padding: 0.2rem 0.6rem; 
+            border-radius: 20px; 
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
         .recon-data-list {
-            max-height: 300px;
+            max-height: 250px;
             overflow-y: auto;
             padding: 0.5rem;
         }
         .recon-data-list code {
             display: block;
-            padding: 0.3rem 0.5rem;
+            padding: 0.4rem 0.75rem;
             font-size: 0.8rem;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--neutral-100);
             word-break: break-all;
+            background: transparent;
+            color: var(--neutral-700);
         }
         .recon-data-list code:last-child { border-bottom: none; }
-        .infrastructure-table { margin-bottom: 2rem; }
-        .infrastructure-table h3 { color: #0d6efd; margin-bottom: 1rem; font-size: 1.1rem; }
-        .infrastructure-table table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-        .infrastructure-table th { background: #0d6efd; color: white; padding: 0.75rem; text-align: left; font-weight: 600; }
-        .infrastructure-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #e9ecef; font-size: 0.9rem; }
-        .infrastructure-table tr:nth-child(even) { background: #f8f9fa; }
-        .infrastructure-table code { background: #e9ecef; padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.85rem; }
-        .port-open { color: #198754; font-weight: 600; }
-        .port-filtered { color: #fd7e14; font-weight: 600; }
-        .port-closed { color: #dc3545; font-weight: 600; }
-        .methodology { background: #fff3cd; border-left: 4px solid #ffc107; }
-        .conclusion { background: #d4edda; border-left: 4px solid #28a745; }
-        .artifacts-section { background: #f0f7ff; border-left: 4px solid #0d6efd; }
+        .recon-data-list code:hover { background: var(--neutral-50); }
+        
+        /* Tools Section */
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .tool-card {
+            background: var(--neutral-50);
+            border: 1px solid var(--neutral-200);
+            border-radius: 10px;
+            padding: 1.25rem 1rem;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .tool-card:hover {
+            background: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+        .tool-card .tool-icon { 
+            font-size: 1.5rem; 
+            margin-bottom: 0.5rem;
+            filter: grayscale(0);
+        }
+        .tool-card .tool-name { 
+            font-weight: 700; 
+            color: var(--neutral-700);
+            font-size: 0.95rem;
+        }
+        
+        /* Artifacts Section */
+        .artifacts-section { 
+            background: linear-gradient(135deg, #f0f9ff 0%, #faf5ff 100%);
+            border-left: 4px solid #8b5cf6;
+        }
         .artifacts-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
             gap: 1.5rem;
             margin-top: 1.5rem;
         }
         .artifact-card {
             background: white;
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid var(--neutral-200);
         }
         .artifact-header {
-            background: #0d6efd;
+            background: var(--primary);
             color: white;
             padding: 0.75rem 1rem;
             font-weight: 600;
+            font-size: 0.9rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-        .artifact-header.screenshot { background: #6f42c1; }
-        .artifact-header.tool-output { background: #198754; }
+        .artifact-header.screenshot { background: linear-gradient(90deg, #7c3aed 0%, #8b5cf6 100%); }
+        .artifact-header.tool-output { background: linear-gradient(90deg, #059669 0%, var(--success) 100%); }
         .artifact-body { padding: 1rem; }
         .artifact-body img { 
             max-width: 100%; 
             height: auto; 
-            border-radius: 4px;
-            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            border: 1px solid var(--neutral-200);
             cursor: pointer;
+            transition: transform 0.2s;
         }
+        .artifact-body img:hover { transform: scale(1.02); }
         .artifact-body pre {
-            max-height: 300px;
+            max-height: 280px;
             overflow: auto;
             font-size: 0.75rem;
             margin: 0;
+            border-radius: 6px;
         }
-        .artifact-meta { font-size: 0.8rem; color: #6c757d; margin-top: 0.5rem; }
+        .artifact-meta { 
+            font-size: 0.8rem; 
+            color: var(--neutral-500); 
+            margin-top: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
         .download-btn {
-            display: inline-block;
-            background: #0d6efd;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: var(--primary);
             color: white;
-            padding: 0.4rem 0.8rem;
-            border-radius: 4px;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
             text-decoration: none;
             font-size: 0.85rem;
-            margin-top: 0.5rem;
+            font-weight: 600;
+            margin-top: 0.75rem;
+            transition: all 0.2s;
         }
-        .download-btn:hover { background: #0b5ed7; }
+        .download-btn:hover { 
+            background: var(--primary-light);
+            transform: translateY(-1px);
+        }
+        
+        /* Conclusion Section */
+        .conclusion-section { 
+            background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+            border-left: 4px solid var(--success);
+        }
+        .conclusion-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 1.5rem; 
+            margin-top: 1.5rem; 
+        }
+        .conclusion-card { 
+            background: white; 
+            border-radius: 10px; 
+            padding: 1.5rem; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border: 1px solid var(--neutral-200);
+        }
+        .conclusion-card h4 { 
+            color: #065f46; 
+            margin-bottom: 1rem; 
+            display: flex; 
+            align-items: center; 
+            gap: 0.5rem;
+            font-size: 1rem;
+        }
+        .conclusion-card ul { margin: 0; padding-left: 1.25rem; }
+        .conclusion-card li { 
+            margin-bottom: 0.5rem;
+            color: var(--neutral-700);
+        }
+        .priority-badge { 
+            display: inline-block; 
+            padding: 0.2rem 0.6rem; 
+            border-radius: 20px; 
+            font-size: 0.7rem; 
+            font-weight: 700; 
+            margin-left: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .priority-immediate { background: var(--danger); color: white; }
+        .priority-short { background: #f97316; color: white; }
+        .priority-medium { background: var(--warning); color: var(--neutral-800); }
+        .priority-long { background: var(--success); color: white; }
+        
+        /* References */
+        .references-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+        .references-list li { 
+            padding: 0.5rem 0; 
+            border-bottom: 1px solid var(--neutral-100);
+        }
+        .references-list li:last-child { border-bottom: none; }
+        .references-list a { 
+            color: var(--info); 
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .references-list a:hover { text-decoration: underline; }
+        
+        /* Steps List */
+        .steps-list { 
+            counter-reset: step-counter; 
+            list-style: none; 
+            padding-left: 0; 
+        }
+        .steps-list li { 
+            counter-increment: step-counter; 
+            margin-bottom: 0.75rem; 
+            padding-left: 2.5rem; 
+            position: relative;
+            color: var(--neutral-700);
+        }
+        .steps-list li::before { 
+            content: counter(step-counter); 
+            position: absolute; 
+            left: 0; 
+            background: var(--primary); 
+            color: white; 
+            width: 1.75rem; 
+            height: 1.75rem; 
+            border-radius: 50%; 
+            text-align: center; 
+            font-size: 0.85rem; 
+            line-height: 1.75rem;
+            font-weight: 700;
+        }
+        
+        /* Print Styles */
         @media print {
-            .container { max-width: 100%; }
-            .section { break-inside: avoid; }
+            body { background: white; font-size: 12px; }
+            .container { max-width: 100%; padding: 0; }
+            .section { 
+                break-inside: avoid; 
+                box-shadow: none;
+                border: 1px solid #ddd;
+                margin-bottom: 1rem;
+            }
+            .report-header { 
+                background: var(--primary) !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
             .finding { break-inside: avoid; }
             .recon-data-list { max-height: none; }
             .artifact-body pre { max-height: none; }
             .infrastructure-table { break-inside: avoid; }
+            .stat-card {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) { 
+            .container { padding: 1rem; }
+            .report-header { padding: 2rem 1.5rem; }
+            .report-header h1 { font-size: 1.75rem; }
+            .findings-summary { grid-template-columns: repeat(3, 1fr); }
+            .conclusion-grid { grid-template-columns: 1fr; }
+            .artifacts-grid { grid-template-columns: 1fr; }
+            .infrastructure-table table { min-width: 500px; }
         }
     </style>
 </head>
@@ -394,17 +872,82 @@ def _get_report_template_html() -> str:
             <h1>{{title}}</h1>
             <div class="subtitle">{{subtitle}}</div>
             <div class="meta">
-                <strong>Target:</strong> {{target}} | 
-                <strong>Date:</strong> {{date}} | 
-                <strong>Prepared by:</strong> {{author}}
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                    <span>{{target}}</span>
+                </div>
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <span>{{date}}</span>
+                </div>
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    <span>{{author}}</span>
+                </div>
             </div>
         </div>
         
         <div class="section executive-summary">
-            <h2>📋 Executive Summary</h2>
+            <h2>
+                <span class="section-icon">📋</span>
+                Executive Summary
+            </h2>
             
             <div class="exec-summary-content">
                 {{executive_summary_html}}
+            </div>
+            
+            <!-- Severity Distribution Chart -->
+            <div class="severity-chart-container">
+                <div class="severity-chart-title">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                    </svg>
+                    Vulnerability Distribution by Severity
+                </div>
+                <div class="severity-chart">
+                    <div class="severity-bar">
+                        <span class="severity-label critical">Critical</span>
+                        <div class="bar-container">
+                            <div class="bar-fill critical" style="width: {{critical_percent}}%;">{{critical_count}}</div>
+                        </div>
+                        <span class="bar-count">{{critical_count}}</span>
+                    </div>
+                    <div class="severity-bar">
+                        <span class="severity-label high">High</span>
+                        <div class="bar-container">
+                            <div class="bar-fill high" style="width: {{high_percent}}%;">{{high_count}}</div>
+                        </div>
+                        <span class="bar-count">{{high_count}}</span>
+                    </div>
+                    <div class="severity-bar">
+                        <span class="severity-label medium">Medium</span>
+                        <div class="bar-container">
+                            <div class="bar-fill medium" style="width: {{medium_percent}}%;">{{medium_count}}</div>
+                        </div>
+                        <span class="bar-count">{{medium_count}}</span>
+                    </div>
+                    <div class="severity-bar">
+                        <span class="severity-label low">Low</span>
+                        <div class="bar-container">
+                            <div class="bar-fill low" style="width: {{low_percent}}%;">{{low_count}}</div>
+                        </div>
+                        <span class="bar-count">{{low_count}}</span>
+                    </div>
+                    <div class="severity-bar">
+                        <span class="severity-label info">Info</span>
+                        <div class="bar-container">
+                            <div class="bar-fill info" style="width: {{info_percent}}%;">{{info_count}}</div>
+                        </div>
+                        <span class="bar-count">{{info_count}}</span>
+                    </div>
+                </div>
             </div>
             
             <div class="findings-summary">
@@ -432,7 +975,10 @@ def _get_report_template_html() -> str:
         </div>
         
         <div class="section">
-            <h2>🎯 Scope & Methodology</h2>
+            <h2>
+                <span class="section-icon">🎯</span>
+                Scope & Methodology
+            </h2>
             <h3>Targets in Scope</h3>
             {{scope_table}}
             
@@ -443,17 +989,26 @@ def _get_report_template_html() -> str:
         {{recon_section}}
         
         <div class="section">
-            <h2>🔍 Detailed Findings</h2>
+            <h2>
+                <span class="section-icon">🔍</span>
+                Detailed Findings
+            </h2>
             {{findings_html}}
         </div>
         
         <div class="section conclusion-section">
-            <h2>📝 Conclusion & Recommendations</h2>
+            <h2>
+                <span class="section-icon">📝</span>
+                Conclusion & Recommendations
+            </h2>
             {{conclusion_html}}
         </div>
         
         <div class="section">
-            <h2>🛠️ Tools Used</h2>
+            <h2>
+                <span class="section-icon">🛠️</span>
+                Tools Used
+            </h2>
             <p>The following tools were used during this assessment:</p>
             <div class="tools-grid">
                 {{tools_used}}
@@ -463,8 +1018,11 @@ def _get_report_template_html() -> str:
         {{artifacts_section}}
         
         <div class="section">
-            <h2>📚 References</h2>
-            <ul>
+            <h2>
+                <span class="section-icon">📚</span>
+                References
+            </h2>
+            <ul class="references-list">
                 {{references}}
             </ul>
         </div>
@@ -1007,7 +1565,8 @@ def add_screenshot_to_report(
     url: str,
     base64_data: str,
     description: str = "Website Screenshot",
-    timestamp: str | None = None
+    timestamp: str | None = None,
+    screenshot_type: str = "website"
 ) -> str:
     """Add a screenshot to the report artifacts section.
 
@@ -1016,6 +1575,7 @@ def add_screenshot_to_report(
         base64_data: Base64 encoded PNG image data.
         description: Description of the screenshot (e.g., 'Homepage', 'Login Page').
         timestamp: Optional timestamp when screenshot was taken.
+        screenshot_type: Type of screenshot - "website" goes to Artifacts, "exploitation" can be linked to findings.
     Returns: Confirmation that screenshot was added.
     """
     global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS
@@ -1028,13 +1588,59 @@ def add_screenshot_to_report(
         "url": url,
         "description": description,
         "data": base64_data,
-        "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "screenshot_type": screenshot_type  # "website" or "exploitation"
     }
     
     # Only add to _REPORT_ARTIFACTS to avoid duplication
     _REPORT_ARTIFACTS.append(artifact)
     
-    return f"✅ Screenshot added to report: {description} ({url})"
+    return f"✅ Screenshot added to report ({screenshot_type}): {description} ({url})"
+
+
+@tool
+def add_screenshot_to_finding(
+    finding_id: int,
+    url: str,
+    base64_data: str,
+    caption: str = "Exploitation Evidence"
+) -> str:
+    """Add an exploitation screenshot directly to a finding's evidence section.
+    
+    Use this to add proof-of-concept screenshots that should appear inline with the 
+    vulnerability finding, rather than in the general Artifacts section.
+
+    Args:
+        finding_id: The ID of the finding to attach the screenshot to.
+        url: The URL where the exploitation was performed.
+        base64_data: Base64 encoded PNG image data.
+        caption: Caption describing what the screenshot shows.
+    Returns: Confirmation that screenshot was attached to finding.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    findings = _CURRENT_REPORT_DATA.get("findings", [])
+    
+    # Find the finding by ID
+    for finding in findings:
+        if finding.get("id") == finding_id:
+            # Initialize screenshots list if not exists
+            if "screenshots" not in finding:
+                finding["screenshots"] = []
+            
+            finding["screenshots"].append({
+                "url": url,
+                "data": base64_data,
+                "caption": caption,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            return f"✅ Screenshot attached to finding #{finding_id}: {caption}"
+    
+    return f"⚠️ Finding #{finding_id} not found. Available IDs: {[f.get('id') for f in findings]}"
 
 
 @tool
@@ -1298,6 +1904,25 @@ def _build_finding_steps_html(steps: str) -> str:
         return html
     else:
         return f"<p>{steps}</p>"
+
+
+def _build_finding_screenshots_html(screenshots: list) -> str:
+    """Build HTML for screenshots attached to a finding."""
+    if not screenshots:
+        return ""
+    
+    html = '<h4>Exploitation Screenshots</h4>'
+    for screenshot in screenshots:
+        html += f'''
+        <div class="finding-screenshot">
+            <img src="data:image/png;base64,{screenshot.get("data", "")}" alt="{screenshot.get("caption", "Screenshot")}">
+            <div class="finding-screenshot-caption">
+                {screenshot.get("caption", "Exploitation evidence")} - {screenshot.get("url", "")}
+            </div>
+        </div>
+        '''
+    
+    return html
 
 
 def _build_finding_references_html(references: str, owasp_cat: str, cwe_id: str) -> str:
@@ -1625,7 +2250,10 @@ def generate_html_report() -> str:
         
         recon_section = f'''
         <div class="section recon-section">
-            <h2>📡 Reconnaissance & Infrastructure</h2>
+            <h2>
+                <span class="section-icon">📡</span>
+                Reconnaissance & Infrastructure
+            </h2>
             <p>The following information was discovered during the reconnaissance and enumeration phases:</p>
             {recon_content}
         </div>
@@ -1680,6 +2308,8 @@ def generate_html_report() -> str:
                 
                 {"<h4>Evidence / Proof of Concept</h4><pre>" + f['evidence'] + "</pre>" if f.get('evidence') else ""}
                 
+                {_build_finding_screenshots_html(f.get('screenshots', []))}
+                
                 {steps_html}
                 
                 {command_html}
@@ -1710,12 +2340,21 @@ def generate_html_report() -> str:
         <li><a href="https://www.first.org/cvss/calculator/3.1">CVSS v3.1 Calculator</a></li>
     """
     
-    # Build artifacts section - use only _REPORT_ARTIFACTS to avoid duplication
+    # Build artifacts section - only include "website" screenshots and tool outputs
+    # Exploitation screenshots are embedded in findings
     artifacts = _REPORT_ARTIFACTS
     artifacts_section = ""
-    if artifacts:
+    
+    # Filter artifacts: website screenshots and tool outputs go to Artifacts section
+    filtered_artifacts = [
+        a for a in artifacts 
+        if a.get("type") == "tool_output" or 
+           (a.get("type") == "screenshot" and a.get("screenshot_type", "website") == "website")
+    ]
+    
+    if filtered_artifacts:
         artifacts_html = ""
-        for artifact in artifacts:
+        for artifact in filtered_artifacts:
             if artifact.get("type") == "screenshot":
                 artifacts_html += f'''
                 <div class="artifact-card">
@@ -1755,7 +2394,10 @@ def generate_html_report() -> str:
         
         artifacts_section = f'''
         <div class="section artifacts-section">
-            <h2>📦 Artifacts</h2>
+            <h2>
+                <span class="section-icon">📦</span>
+                Artifacts
+            </h2>
             <p>Screenshots and raw tool outputs collected during the assessment:</p>
             <div class="artifacts-grid">
                 {artifacts_html}
@@ -1783,6 +2425,24 @@ def generate_html_report() -> str:
     html = html.replace("{{medium_count}}", str(severity_counts["Medium"]))
     html = html.replace("{{low_count}}", str(severity_counts["Low"]))
     html = html.replace("{{info_count}}", str(severity_counts["Info"]))
+    
+    # Calculate percentages for bar chart
+    total_findings = sum(severity_counts.values())
+    if total_findings > 0:
+        critical_pct = max(5, int((severity_counts["Critical"] / total_findings) * 100)) if severity_counts["Critical"] > 0 else 0
+        high_pct = max(5, int((severity_counts["High"] / total_findings) * 100)) if severity_counts["High"] > 0 else 0
+        medium_pct = max(5, int((severity_counts["Medium"] / total_findings) * 100)) if severity_counts["Medium"] > 0 else 0
+        low_pct = max(5, int((severity_counts["Low"] / total_findings) * 100)) if severity_counts["Low"] > 0 else 0
+        info_pct = max(5, int((severity_counts["Info"] / total_findings) * 100)) if severity_counts["Info"] > 0 else 0
+    else:
+        critical_pct = high_pct = medium_pct = low_pct = info_pct = 0
+    
+    html = html.replace("{{critical_percent}}", str(critical_pct))
+    html = html.replace("{{high_percent}}", str(high_pct))
+    html = html.replace("{{medium_percent}}", str(medium_pct))
+    html = html.replace("{{low_percent}}", str(low_pct))
+    html = html.replace("{{info_percent}}", str(info_pct))
+    
     html = html.replace("{{scope_table}}", scope_table)
     html = html.replace("{{methodology}}", data.get("methodology", ""))
     html = html.replace("{{recon_section}}", recon_section)

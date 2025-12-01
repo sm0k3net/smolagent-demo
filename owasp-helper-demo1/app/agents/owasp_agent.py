@@ -16,7 +16,7 @@ from app.tools.playwright_tool import (
     intercept_requests,
     check_console_errors,
 )
-from app.tools.nmap_tool import nmap_scan
+from app.tools.nmap_tool import nmap_scan, nmap_scan_full
 from app.tools.curl_tool import curl_request
 from app.tools.osint_tools import (
     virustotal_domain_report,
@@ -89,6 +89,7 @@ from app.tools.report_tools import (
     set_executive_summary,
     set_conclusion,
     add_screenshot_to_report,
+    add_screenshot_to_finding,
     add_tool_output_to_report,
     generate_html_report,
     generate_markdown_report,
@@ -217,6 +218,7 @@ def build_owasp_agent() -> CodeAgent:
     # Network tools
     tools.extend([
         nmap_scan,
+        nmap_scan_full,
         curl_request,
     ])
     
@@ -301,6 +303,7 @@ def build_owasp_agent() -> CodeAgent:
         set_executive_summary,
         set_conclusion,
         add_screenshot_to_report,
+        add_screenshot_to_finding,
         add_tool_output_to_report,
         generate_html_report,
         generate_markdown_report,

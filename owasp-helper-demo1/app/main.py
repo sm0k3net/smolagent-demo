@@ -10162,13 +10162,13 @@ const activityIcons = {
 // Activity Monitor - Multi-Task Management
 // ============================================
 
-// Activity phases for categorization
+// Activity phases for categorization - aligned with pentest methodology
 const ACTIVITY_PHASES = {
-  planning: { name: 'Planning & Analysis', icon: '🎯', color: '#8b5cf6' },
-  recon: { name: 'Reconnaissance', icon: '🔍', color: '#06b6d4' },
-  discovery: { name: 'Discovery & Scoping', icon: '📂', color: '#3b82f6' },
+  discovery: { name: 'Discovery', icon: '🔎', color: '#3b82f6' },
+  info_gathering: { name: 'Information Gathering', icon: '📡', color: '#06b6d4' },
   scanning: { name: 'Vulnerability Scanning', icon: '🛡️', color: '#f59e0b' },
-  exploitation: { name: 'Exploitation & Validation', icon: '💥', color: '#ef4444' },
+  manual: { name: 'Manual Research', icon: '🔬', color: '#8b5cf6' },
+  exploitation: { name: 'Validation & Exploitation', icon: '💥', color: '#ef4444' },
   reporting: { name: 'Reporting', icon: '📋', color: '#10b981' },
   general: { name: 'Execution', icon: '⚡', color: '#64748b' }
 };
@@ -10178,28 +10178,35 @@ function getActivityPhase(toolName, activityType) {
   if (!toolName) return 'general';
   const tool = toolName.toLowerCase();
   
-  if (activityType === 'thinking' || activityType === 'start') return 'planning';
+  // Reporting phase
   if (activityType === 'complete') return 'reporting';
-  
-  // Reconnaissance tools
-  if (['virustotal', 'shodan', 'hunter', 'whois', 'dns', 'crt_sh', 'securitytrails', 'haveibeenpwned', 'osint', 'amass_intel'].some(t => tool.includes(t))) {
-    return 'recon';
+  if (['report', 'finding', 'summary', 'conclusion', 'executive', 'add_scope', 'add_recon', 'add_dns', 'add_service', 'add_technology', 'add_network', 'generate_html', 'generate_markdown', 'generate_pdf'].some(t => tool.includes(t))) {
+    return 'reporting';
   }
-  // Discovery tools
-  if (['nmap', 'subfinder', 'httpx', 'whatweb', 'gobuster', 'ffuf', 'dirb', 'dirsearch', 'amass_enum', 'dnsrecon'].some(t => tool.includes(t))) {
+  
+  // Discovery phase - initial target discovery
+  if (['nmap', 'masscan', 'subfinder', 'amass', 'httpx', 'dnsrecon', 'fierce', 'dnsenum'].some(t => tool.includes(t))) {
     return 'discovery';
   }
-  // Scanning tools
-  if (['nikto', 'nuclei', 'zap', 'wpscan', 'sslyze', 'testssl', 'sqlmap_scan', 'xsser'].some(t => tool.includes(t))) {
+  
+  // Information Gathering phase - OSINT and fingerprinting
+  if (['virustotal', 'shodan', 'hunter', 'whois', 'dns_lookup', 'crt_sh', 'securitytrails', 'haveibeenpwned', 'osint', 'whatweb', 'wappalyzer', 'theharvester'].some(t => tool.includes(t))) {
+    return 'info_gathering';
+  }
+  
+  // Vulnerability Scanning phase - automated scanners
+  if (['nikto', 'nuclei', 'zap', 'wpscan', 'sslyze', 'testssl', 'xsser', 'gobuster', 'ffuf', 'dirb', 'dirsearch', 'feroxbuster'].some(t => tool.includes(t))) {
     return 'scanning';
   }
-  // Exploitation tools
-  if (['sqlmap_dump', 'searchsploit', 'hydra', 'ncrack', 'curl', 'browse', 'fill_form', 'click', 'exploit'].some(t => tool.includes(t))) {
-    return 'exploitation';
+  
+  // Manual Research phase - browsing, forms, analysis
+  if (['browse', 'page', 'get_page', 'fill_form', 'click', 'intercept', 'console', 'screenshot', 'curl_request', 'classify', 'owasp', 'scenario'].some(t => tool.includes(t))) {
+    return 'manual';
   }
-  // Reporting tools
-  if (['report', 'finding', 'summary', 'conclusion', 'screenshot', 'add_scope'].some(t => tool.includes(t))) {
-    return 'reporting';
+  
+  // Validation & Exploitation phase - exploiting vulnerabilities
+  if (['sqlmap', 'searchsploit', 'hydra', 'ncrack', 'exploit', 'metasploit', 'msfvenom', 'john', 'hashcat'].some(t => tool.includes(t))) {
+    return 'exploitation';
   }
   
   return 'general';
