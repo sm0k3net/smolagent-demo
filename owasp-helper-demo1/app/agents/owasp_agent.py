@@ -68,6 +68,8 @@ from app.tools.pentest_tools import (
     hydra_mysql_brute,
     hydra_http_form_brute,
     nmap_with_brute,
+    # Proxy status tool
+    check_proxy_status,
     # Installation tools
     install_python_package,
     install_playwright_browsers,
@@ -263,6 +265,7 @@ def build_owasp_agent() -> CodeAgent:
         hydra_mysql_brute,
         hydra_http_form_brute,
         nmap_with_brute,
+        check_proxy_status,
     ])
     
     # Installation tools

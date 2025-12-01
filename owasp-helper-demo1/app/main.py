@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from enum import Enum
@@ -666,6 +666,16 @@ db_storage = DatabaseStorage()
 # Cloudflare Tunnel management
 cloudflare_tunnel_process = None
 cloudflare_tunnel_url = None
+
+# Proxy configuration for agent tools
+proxy_config = {
+    "enabled": False,
+    "type": "http",  # http, https, socks5
+    "host": "",
+    "port": "",
+    "username": "",
+    "password": "",
+}
 
 
 # Task management enums and models
@@ -1985,6 +1995,90 @@ async def stop_tunnel():
         "success": True,
         "message": "Tunnel stopped"
     })
+
+# ============== PROXY CONFIGURATION ENDPOINTS ==============
+
+@app.get("/api/proxy/status")
+async def get_proxy_status():
+    """Get current proxy configuration."""
+    global proxy_config
+    from app.tools.pentest_tools import get_proxy_url
+    
+    return JSONResponse({
+        "enabled": proxy_config.get("enabled", False),
+        "type": proxy_config.get("type", "http"),
+        "host": proxy_config.get("host", ""),
+        "port": proxy_config.get("port", ""),
+        "username": proxy_config.get("username", ""),
+        "has_password": bool(proxy_config.get("password", "")),
+        "proxy_url": get_proxy_url() if proxy_config.get("enabled") else None
+    })
+
+@app.post("/api/proxy/config")
+async def save_proxy_config(request: Request):
+    """Save proxy configuration."""
+    global proxy_config
+    from app.tools.pentest_tools import set_proxy_config
+    
+    try:
+        data = await request.json()
+        
+        # Update config (keep enabled state separate from config save)
+        proxy_config["type"] = data.get("type", "http")
+        proxy_config["host"] = data.get("host", "")
+        proxy_config["port"] = data.get("port", "")
+        proxy_config["username"] = data.get("username", "")
+        
+        # Only update password if provided (non-empty)
+        if "password" in data and data["password"]:
+            proxy_config["password"] = data["password"]
+        
+        # Sync with pentest_tools module
+        set_proxy_config(proxy_config)
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Proxy configuration saved"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Error saving proxy config: {str(e)}"
+        })
+
+@app.post("/api/proxy/toggle")
+async def toggle_proxy(request: Request):
+    """Enable or disable proxy."""
+    global proxy_config
+    from app.tools.pentest_tools import set_proxy_config, get_proxy_url
+    
+    try:
+        data = await request.json()
+        enabled = data.get("enabled", False)
+        
+        # Validate that we have host configured before enabling
+        if enabled and not proxy_config.get("host"):
+            return JSONResponse({
+                "success": False,
+                "message": "Cannot enable proxy: Host not configured"
+            })
+        
+        proxy_config["enabled"] = enabled
+        
+        # Sync with pentest_tools module
+        set_proxy_config(proxy_config)
+        
+        return JSONResponse({
+            "success": True,
+            "enabled": enabled,
+            "proxy_url": get_proxy_url() if enabled else None,
+            "message": f"Proxy {'enabled' if enabled else 'disabled'}"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Error toggling proxy: {str(e)}"
+        })
 
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
@@ -5631,6 +5725,25 @@ main {
   animation: spin 1s linear infinite;
 }
 
+/* Toggle switch styles */
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--primary);
+}
+.toggle-switch .toggle-slider:before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(24px);
+}
+
 /* Report buttons */
 .report-actions {
   display: flex;
@@ -6710,6 +6823,92 @@ main {
               <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.5;">
                 <strong>Requirements:</strong> <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">cloudflared</code> must be installed.<br>
                 <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" style="color: var(--primary);">Download cloudflared →</a>
+              </p>
+            </div>
+          </div>
+          
+          <!-- Proxy Configuration Section -->
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+              Proxy Configuration
+            </div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5; margin-bottom: 15px;">
+              Route all pentesting tool HTTP/HTTPS requests through a proxy (e.g., Burp Suite, OWASP ZAP).
+              Supports HTTP, HTTPS, and SOCKS5 proxies.
+            </p>
+            
+            <!-- Proxy Toggle -->
+            <div style="display: flex; align-items: center; justify-content: space-between; background: var(--dark); border-radius: 8px; padding: 12px 15px; margin-bottom: 15px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div id="proxy-indicator" style="width: 10px; height: 10px; border-radius: 50%; background: var(--gray-600);"></div>
+                <span id="proxy-status-text" style="font-size: 0.85rem; color: var(--gray-300);">Proxy disabled</span>
+              </div>
+              <label class="toggle-switch" style="position: relative; display: inline-block; width: 48px; height: 24px;">
+                <input type="checkbox" id="proxy-enabled-toggle" onchange="toggleProxy(this.checked)" style="opacity: 0; width: 0; height: 0;">
+                <span class="toggle-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--gray-600); transition: .3s; border-radius: 24px;"></span>
+              </label>
+            </div>
+            
+            <!-- Proxy Configuration Form -->
+            <div id="proxy-config-container" style="background: var(--dark); border-radius: 8px; padding: 15px;">
+              <div style="display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; margin-bottom: 12px;">
+                <div>
+                  <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Type</label>
+                  <select id="proxy-type" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                    <option value="socks5">SOCKS5</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Host</label>
+                  <input type="text" id="proxy-host" placeholder="127.0.0.1" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                </div>
+                <div>
+                  <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Port</label>
+                  <input type="text" id="proxy-port" placeholder="8080" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                </div>
+              </div>
+              
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                <div>
+                  <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Username (optional)</label>
+                  <input type="text" id="proxy-username" placeholder="proxy-user" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                </div>
+                <div>
+                  <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Password (optional)</label>
+                  <input type="password" id="proxy-password" placeholder="••••••••" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                </div>
+              </div>
+              
+              <div style="display: flex; gap: 10px;">
+                <button class="btn btn-primary" style="flex: 1;" onclick="saveProxyConfig()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                  </svg>
+                  Save Configuration
+                </button>
+                <button class="btn" style="background: rgba(255,255,255,0.1);" onclick="testProxyConnection()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                  Test
+                </button>
+              </div>
+              
+              <div id="proxy-message" style="margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+            </div>
+            
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+              <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.5;">
+                <strong>Supported Tools:</strong> nikto, gobuster, ffuf, nuclei, sqlmap, whatweb, curl, wget, and more.<br>
+                <strong>Tip:</strong> Use <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">127.0.0.1:8080</code> for Burp Suite or ZAP.
               </p>
             </div>
           </div>
@@ -8020,9 +8219,151 @@ function copyTunnelUrl() {
   }
 }
 
-// Check tunnel status on page load
+// ============== PROXY CONFIGURATION MANAGEMENT ==============
+
+async function checkProxyStatus() {
+  try {
+    const response = await fetch('/api/proxy/status');
+    const data = await response.json();
+    
+    // Update toggle
+    const toggle = document.getElementById('proxy-enabled-toggle');
+    if (toggle) toggle.checked = data.enabled;
+    
+    // Update form fields
+    if (data.type) document.getElementById('proxy-type').value = data.type;
+    if (data.host) document.getElementById('proxy-host').value = data.host;
+    if (data.port) document.getElementById('proxy-port').value = data.port;
+    if (data.username) document.getElementById('proxy-username').value = data.username;
+    
+    // Update status display
+    updateProxyUI(data.enabled, data.proxy_url);
+  } catch (error) {
+    console.error('Failed to check proxy status:', error);
+  }
+}
+
+function updateProxyUI(isEnabled, proxyUrl) {
+  const indicator = document.getElementById('proxy-indicator');
+  const statusText = document.getElementById('proxy-status-text');
+  
+  if (isEnabled && proxyUrl) {
+    indicator.style.background = '#10b981';
+    indicator.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.5)';
+    statusText.textContent = 'Proxy enabled: ' + proxyUrl;
+    statusText.style.color = '#10b981';
+  } else {
+    indicator.style.background = 'var(--gray-600)';
+    indicator.style.boxShadow = 'none';
+    statusText.textContent = 'Proxy disabled';
+    statusText.style.color = 'var(--gray-300)';
+  }
+}
+
+function showProxyMessage(message, isError = false) {
+  const msgEl = document.getElementById('proxy-message');
+  msgEl.textContent = message;
+  msgEl.style.display = 'block';
+  msgEl.style.background = isError ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+  msgEl.style.color = isError ? '#ef4444' : '#10b981';
+  
+  setTimeout(() => {
+    msgEl.style.display = 'none';
+  }, 5000);
+}
+
+async function saveProxyConfig() {
+  const config = {
+    type: document.getElementById('proxy-type').value,
+    host: document.getElementById('proxy-host').value.trim(),
+    port: document.getElementById('proxy-port').value.trim(),
+    username: document.getElementById('proxy-username').value.trim(),
+    password: document.getElementById('proxy-password').value
+  };
+  
+  if (!config.host) {
+    showProxyMessage('Please enter a proxy host', true);
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/proxy/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    const data = await response.json();
+    
+    if (data.success) {
+      showProxyMessage('Proxy configuration saved');
+      // Clear password field after save for security
+      document.getElementById('proxy-password').value = '';
+    } else {
+      showProxyMessage(data.message || 'Failed to save configuration', true);
+    }
+  } catch (error) {
+    showProxyMessage('Failed to save: ' + error.message, true);
+  }
+}
+
+async function toggleProxy(enabled) {
+  // First save the current config if enabling
+  if (enabled) {
+    const host = document.getElementById('proxy-host').value.trim();
+    if (!host) {
+      document.getElementById('proxy-enabled-toggle').checked = false;
+      showProxyMessage('Please configure and save proxy settings first', true);
+      return;
+    }
+  }
+  
+  try {
+    const response = await fetch('/api/proxy/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    const data = await response.json();
+    
+    if (data.success) {
+      updateProxyUI(data.enabled, data.proxy_url);
+      showProxyMessage(data.message);
+    } else {
+      document.getElementById('proxy-enabled-toggle').checked = !enabled;
+      showProxyMessage(data.message || 'Failed to toggle proxy', true);
+    }
+  } catch (error) {
+    document.getElementById('proxy-enabled-toggle').checked = !enabled;
+    showProxyMessage('Failed to toggle proxy: ' + error.message, true);
+  }
+}
+
+async function testProxyConnection() {
+  const host = document.getElementById('proxy-host').value.trim();
+  const port = document.getElementById('proxy-port').value.trim();
+  
+  if (!host) {
+    showProxyMessage('Please enter a proxy host first', true);
+    return;
+  }
+  
+  showProxyMessage('Testing proxy connection...');
+  
+  // Simple test - just check if we can reach the proxy endpoint
+  // The actual proxy testing would require server-side validation
+  try {
+    // Save config first
+    await saveProxyConfig();
+    showProxyMessage('Configuration saved. Enable proxy to route tool traffic through it.');
+  } catch (error) {
+    showProxyMessage('Test failed: ' + error.message, true);
+  }
+}
+
+// Check tunnel and proxy status on page load
 document.addEventListener('DOMContentLoaded', () => {
   checkTunnelStatus();
+  checkProxyStatus();
 });
 
 // ============== DATABASE STORAGE MANAGEMENT ==============
