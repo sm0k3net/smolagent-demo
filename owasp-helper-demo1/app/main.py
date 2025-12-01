@@ -2185,15 +2185,15 @@ async def test_proxy():
 @app.get("/api/tools/list")
 async def get_tools_list():
     """Get list of all tools with their status."""
-    import shutil
-    
     tools_list = []
     for tool_id, tool_info in TOOLS_REGISTRY.items():
-        # Check if tool is installed
+        # Check if tool is installed using the shared binary finder
         binary = tool_info.get("binary")
         installed = False
+        binary_path = None
         if binary:
-            installed = shutil.which(binary) is not None
+            binary_path = _find_binary_path(binary)
+            installed = binary_path is not None
         elif tool_id == "playwright":
             try:
                 import playwright
@@ -2208,6 +2208,7 @@ async def get_tools_list():
             "description": tool_info["description"],
             "install_cmd": tool_info["install_cmd"],
             "installed": installed,
+            "path": binary_path,
             "enabled": tools_enabled_state.get(tool_id, True),
         })
     
@@ -2296,9 +2297,28 @@ async def install_tool(tool_id: str):
                 timeout=300
             )
             if result.returncode == 0:
+                # For nuclei, also download templates after installation
+                extra_msg = ""
+                if tool_id == "nuclei":
+                    nuclei_path = _find_binary_path("nuclei")
+                    if nuclei_path:
+                        try:
+                            template_result = subprocess.run(
+                                [nuclei_path, "-update-templates"],
+                                capture_output=True,
+                                text=True,
+                                timeout=300
+                            )
+                            if template_result.returncode == 0:
+                                extra_msg = "\nNuclei templates also downloaded successfully."
+                            else:
+                                extra_msg = "\nNote: Templates download may have had issues. Run 'nuclei -update-templates' manually."
+                        except:
+                            extra_msg = "\nNote: Please run 'nuclei -update-templates' to download templates."
+                
                 return JSONResponse({
                     "success": True,
-                    "message": f"{tool_info['name']} installed successfully",
+                    "message": f"{tool_info['name']} installed successfully{extra_msg}",
                     "output": result.stdout
                 })
             else:
@@ -2352,6 +2372,45 @@ async def install_tool(tool_id: str):
     })
 
 
+def _find_binary_path(binary_name: str) -> str | None:
+    """Find binary path, checking system PATH and Go installation directories."""
+    import shutil
+    import os
+    import glob
+    
+    # First check standard PATH
+    path = shutil.which(binary_name)
+    if path:
+        return path
+    
+    # Check Go bin directories for Go-installed tools
+    go_paths = [
+        os.path.expanduser('~/go/bin'),
+        '/root/go/bin',
+        '/usr/local/go/bin',
+    ]
+    
+    # Also check GOPATH/bin and GOBIN if set
+    gopath = os.environ.get('GOPATH')
+    if gopath:
+        go_paths.insert(0, os.path.join(gopath, 'bin'))
+    
+    gobin = os.environ.get('GOBIN')
+    if gobin:
+        go_paths.insert(0, gobin)
+    
+    # Expand /home/*/go/bin pattern using glob
+    home_go_bins = glob.glob('/home/*/go/bin')
+    go_paths.extend(home_go_bins)
+    
+    for go_path in go_paths:
+        tool_path = os.path.join(go_path, binary_name)
+        if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
+            return tool_path
+    
+    return None
+
+
 @app.get("/api/tools/check/{tool_id}")
 async def check_tool_installed(tool_id: str):
     """Check if a specific tool is installed."""
@@ -2369,16 +2428,17 @@ async def check_tool_installed(tool_id: str):
     
     installed = False
     version = None
+    binary_path = None
     
     if binary:
-        path = shutil.which(binary)
-        installed = path is not None
+        binary_path = _find_binary_path(binary)
+        installed = binary_path is not None
         if installed:
             # Try to get version
             try:
                 import subprocess
                 result = subprocess.run(
-                    [binary, "--version"],
+                    [binary_path, "--version"],
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -2400,6 +2460,7 @@ async def check_tool_installed(tool_id: str):
         "name": tool_info["name"],
         "installed": installed,
         "version": version,
+        "path": binary_path,
         "enabled": tools_enabled_state.get(tool_id, True)
     })
 
