@@ -139,12 +139,16 @@ Conduct comprehensive security assessments following industry best practices:
 - `gobuster_scan(target, "-x bak,old,txt,log,sql,zip")`
 
 ### WSTG-CONF-04: Review Old/Backup Files
-- `ffuf_scan(target, "-w common-backup.txt")`
+- Use embedded wordlists: `get_wordlist("web-content")` for content discovery
+- `ffuf_scan(target)` - Uses embedded wordlist by default
+- `gobuster_scan(target)` - Directory enumeration with embedded wordlist
 - Look for: `web.config.bak`, `.htaccess.old`, `config.php~`
 
 ### WSTG-CONF-05: Enumerate Admin Interfaces
-- `gobuster_scan(target)` with admin wordlists
+- `gobuster_scan(target)` with embedded common.txt or web-content.txt wordlists
+- `ffuf_scan(target)` - Fast fuzzer for content discovery
 - Check: `/admin`, `/administrator`, `/manage`, `/cpanel`
+- Available wordlists: `list_wordlists()` to see all options
 
 ### WSTG-CONF-06: Test HTTP Methods
 - `curl_request(url, method="OPTIONS")` - Check allowed methods
@@ -202,10 +206,29 @@ Conduct comprehensive security assessments following industry best practices:
 ### WSTG-ATHN-02: Test for Default Credentials
 - `nuclei_scan(target, "-t default-logins/")` - Default creds
 - Test: admin/admin, admin/password, root/root
+- Use `list_wordlists()` to see available credential lists
 
 ### WSTG-ATHN-03: Test for Weak Lockout Mechanism
 - Brute force protection testing
 - Check for account lockout, rate limiting
+- If no lockout detected, proceed with controlled brute force
+
+### WSTG-ATHN-03a: Brute Force Authentication (if lockout is weak/missing)
+**IMPORTANT: Use embedded wordlists for brute force attacks:**
+- `list_wordlists()` - View all available wordlists
+- `get_wordlist("usernames-short")` - Get short effective username list
+- `get_wordlist("passwords-extended")` - Get extended password list
+
+**Service-specific brute force:**
+- SSH: `hydra_ssh_brute(target, port=22)` - Uses short usernames + extended passwords
+- FTP: `hydra_ftp_brute(target, port=21)`
+- RDP: `hydra_rdp_brute(target, username="administrator", port=3389)`
+- MySQL: `hydra_mysql_brute(target, username="root", port=3306)`
+- HTTP Form: `hydra_http_form_brute(target, "/login.php", failure_string="Invalid")`
+- Generic: `hydra_brute_force(target, service, username_list, password_list)`
+
+**Combined scan + brute force:**
+- `nmap_with_brute(target)` - Scans for auth services and suggests brute force commands
 
 ### WSTG-ATHN-04: Test for Bypassing Authentication
 - Test authentication bypass techniques

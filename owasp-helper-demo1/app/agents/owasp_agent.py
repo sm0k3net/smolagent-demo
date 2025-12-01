@@ -58,6 +58,17 @@ from app.tools.pentest_tools import (
     amass_intel,
     xsser_scan,
     xsser_fuzzing,
+    # Wordlist and brute force tools
+    get_wordlist,
+    list_wordlists,
+    hydra_brute_force,
+    hydra_ssh_brute,
+    hydra_ftp_brute,
+    hydra_rdp_brute,
+    hydra_mysql_brute,
+    hydra_http_form_brute,
+    nmap_with_brute,
+    # Installation tools
     install_python_package,
     install_playwright_browsers,
     install_system_tool,
@@ -239,6 +250,23 @@ def build_owasp_agent() -> CodeAgent:
         amass_intel,
         xsser_scan,
         xsser_fuzzing,
+    ])
+    
+    # Wordlist and brute force tools
+    tools.extend([
+        get_wordlist,
+        list_wordlists,
+        hydra_brute_force,
+        hydra_ssh_brute,
+        hydra_ftp_brute,
+        hydra_rdp_brute,
+        hydra_mysql_brute,
+        hydra_http_form_brute,
+        nmap_with_brute,
+    ])
+    
+    # Installation tools
+    tools.extend([
         install_python_package,
         install_playwright_browsers,
         install_system_tool,
