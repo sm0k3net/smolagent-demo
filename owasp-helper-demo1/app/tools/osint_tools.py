@@ -384,7 +384,7 @@ def haveibeenpwned_domain(domain: str) -> str:
     try:
         headers = {
             "hibp-api-key": api_key,
-            "user-agent": "OWASP-SmolAgent"
+            "user-agent": "Pentest-Systems-Assistant"
         }
         url = f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}"
         with httpx.Client(timeout=30.0) as client:

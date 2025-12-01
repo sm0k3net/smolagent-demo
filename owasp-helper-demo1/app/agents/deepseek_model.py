@@ -49,7 +49,7 @@ class DeepSeekChatModel:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "owasp-smolagent/0.1",
+            "User-Agent": "pentest-systems-assistant/0.1",
         }
         try:
             with httpx.Client(timeout=60) as client:

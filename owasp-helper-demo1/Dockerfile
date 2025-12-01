@@ -1,4 +1,4 @@
-# OWASP SmolAgent - Penetration Testing Assistant
+# Pentest.Systems Assistant - Penetration Testing
 # Multi-stage build for optimized container
 
 # ============================================
@@ -144,9 +144,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE ${PORT}
 
 # Labels for container metadata
-LABEL maintainer="OWASP SmolAgent" \
+LABEL maintainer="Pentest.Systems Assistant" \
       version="0.2.0" \
-      description="AI-powered penetration testing assistant with OWASP methodology" \
+      description="AI-powered penetration testing assistant" \
       org.opencontainers.image.source="https://github.com/sm0k3net/smolagent-demo"
 
 # Run the application

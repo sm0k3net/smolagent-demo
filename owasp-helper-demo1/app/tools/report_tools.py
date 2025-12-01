@@ -1,6 +1,7 @@
 """Professional pentest report generation tools."""
 from __future__ import annotations
 import os
+import re
 import json
 from datetime import datetime
 from smolagents import tool
@@ -13,6 +14,90 @@ _CURRENT_REPORT_DATA: dict = {}
 _SESSION_TOOLS_USED: set = set()
 # Artifacts storage (screenshots, raw tool outputs)
 _REPORT_ARTIFACTS: list = []
+
+
+# Mapping of function names to real tool names for command display
+_TOOL_NAME_MAPPING = {
+    "sqlmap_scan": "sqlmap",
+    "sqlmap_dump": "sqlmap",
+    "nmap_scan": "nmap",
+    "nikto_scan": "nikto",
+    "gobuster_scan": "gobuster",
+    "gobuster_dir": "gobuster",
+    "ffuf_scan": "ffuf",
+    "ffuf_vhost": "ffuf",
+    "nuclei_scan": "nuclei",
+    "nuclei_update_templates": "nuclei",
+    "whatweb_scan": "whatweb",
+    "httpx_probe": "httpx",
+    "subfinder_scan": "subfinder",
+    "wpscan_scan": "wpscan",
+    "amass_enum": "amass",
+    "theharvester_scan": "theharvester",
+    "fierce_scan": "fierce",
+    "dirb_scan": "dirb",
+    "searchsploit_search": "searchsploit",
+    "searchsploit_examine": "searchsploit",
+    "hydra_brute": "hydra",
+    "ncrack_brute": "ncrack",
+    "curl_request": "curl",
+    "curl_tool": "curl",
+}
+
+
+def normalize_tool_name(name: str) -> str:
+    """Convert function name (like sqlmap_scan) to real tool name (sqlmap).
+    
+    Args:
+        name: Tool or function name (e.g., 'sqlmap_scan', 'sqlmap_scan()', 'sqlmap')
+    Returns:
+        Normalized tool name (e.g., 'sqlmap')
+    """
+    if not name:
+        return "Tool"
+    
+    # Remove parentheses and arguments if present
+    clean_name = re.sub(r'\([^)]*\)', '', name).strip()
+    
+    # Check mapping first
+    if clean_name in _TOOL_NAME_MAPPING:
+        return _TOOL_NAME_MAPPING[clean_name]
+    
+    # Try to extract base tool name from pattern: tool_action or tool_scan
+    parts = clean_name.split('_')
+    if len(parts) >= 2 and parts[-1] in ('scan', 'dump', 'brute', 'enum', 'search', 
+                                           'examine', 'probe', 'request', 'dir', 'vhost'):
+        return '_'.join(parts[:-1])
+    
+    return clean_name
+
+
+def normalize_command_text(command: str, tool_name: str = None) -> str:
+    """Clean up command text for display in reports.
+    
+    Args:
+        command: Raw command text (may contain function calls like sqlmap_scan(...))
+        tool_name: Optional tool name for context
+    Returns:
+        Cleaned command suitable for display
+    """
+    if not command:
+        return ""
+    
+    # If it looks like a Python function call, try to convert it
+    # Pattern: function_name(arg1, arg2, ...) or function_name(key=value, ...)
+    func_call_pattern = r'^(\w+)\s*\((.+)\)\s*$'
+    match = re.match(func_call_pattern, command.strip(), re.DOTALL)
+    
+    if match:
+        func_name = match.group(1)
+        real_tool = normalize_tool_name(func_name)
+        
+        # If we recognized the function, indicate it's a tool command
+        if real_tool != func_name:
+            return f"# Executed via {real_tool}\n{command}"
+    
+    return command
 
 
 def track_tool_usage(tool_name: str):
@@ -381,7 +466,7 @@ def _get_report_template_html() -> str:
 def enable_report_mode(
     title: str,
     target: str,
-    author: str = "OWASP SmolAgent",
+    author: str = "Pentest.Systems Assistant",
     report_type: str = "Penetration Test"
 ) -> str:
     """Enable report generation mode. All subsequent findings will be collected for the report.
@@ -389,7 +474,7 @@ def enable_report_mode(
     Args:
         title: Report title (e.g., 'Security Assessment of Example Corp').
         target: Primary target (e.g., 'https://example.com').
-        author: Report author name (default 'OWASP SmolAgent').
+        author: Report author name (default 'Pentest.Systems Assistant').
         report_type: Type of assessment (default 'Penetration Test').
     Returns: Confirmation that report mode is enabled.
     """
@@ -734,10 +819,8 @@ def add_screenshot_to_report(
         "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
+    # Only add to _REPORT_ARTIFACTS to avoid duplication
     _REPORT_ARTIFACTS.append(artifact)
-    if "artifacts" not in _CURRENT_REPORT_DATA:
-        _CURRENT_REPORT_DATA["artifacts"] = []
-    _CURRENT_REPORT_DATA["artifacts"].append(artifact)
     
     return f"✅ Screenshot added to report: {description} ({url})"
 
@@ -780,10 +863,8 @@ def add_tool_output_to_report(
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
+    # Only add to _REPORT_ARTIFACTS to avoid duplication
     _REPORT_ARTIFACTS.append(artifact)
-    if "artifacts" not in _CURRENT_REPORT_DATA:
-        _CURRENT_REPORT_DATA["artifacts"] = []
-    _CURRENT_REPORT_DATA["artifacts"].append(artifact)
     
     # Also track the tool
     _CURRENT_REPORT_DATA["tools"].add(tool_name)
@@ -854,8 +935,90 @@ def _build_scope_table(scope_items: list) -> str:
     return table_html
 
 
+def _convert_markdown_to_html(text: str) -> str:
+    """Convert common markdown elements to HTML.
+    
+    Handles: bold (**text**), italic (*text*), inline code (`code`),
+    headers (# ## ###), bullet lists (- item), numbered lists (1. item),
+    and links ([text](url)).
+    """
+    if not text:
+        return ""
+    
+    import re
+    
+    # Escape HTML special characters first (except for intentional HTML)
+    # Don't escape < and > as they might be intentional HTML
+    text = text.replace('&', '&amp;')
+    
+    # Convert headers (## Header -> <h3>Header</h3>)
+    text = re.sub(r'^#{4}\s+(.+)$', r'<h5>\1</h5>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#{3}\s+(.+)$', r'<h4>\1</h4>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#{2}\s+(.+)$', r'<h4>\1</h4>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#\s+(.+)$', r'<h4>\1</h4>', text, flags=re.MULTILINE)
+    
+    # Convert bold (**text** or __text__)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'__(.+?)__', r'<strong>\1</strong>', text)
+    
+    # Convert italic (*text* or _text_) - but not inside words
+    text = re.sub(r'(?<!\w)\*([^*]+)\*(?!\w)', r'<em>\1</em>', text)
+    text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'<em>\1</em>', text)
+    
+    # Convert inline code (`code`)
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    
+    # Convert links ([text](url))
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" target="_blank">\1</a>', text)
+    
+    # Convert bullet lists (- item or * item at start of line)
+    lines = text.split('\n')
+    result_lines = []
+    in_list = False
+    list_type = None
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Check for bullet list item
+        bullet_match = re.match(r'^[-*]\s+(.+)$', stripped)
+        # Check for numbered list item  
+        number_match = re.match(r'^(\d+)[.)]\s+(.+)$', stripped)
+        
+        if bullet_match:
+            if not in_list or list_type != 'ul':
+                if in_list:
+                    result_lines.append(f'</{list_type}>')
+                result_lines.append('<ul>')
+                in_list = True
+                list_type = 'ul'
+            result_lines.append(f'<li>{bullet_match.group(1)}</li>')
+        elif number_match:
+            if not in_list or list_type != 'ol':
+                if in_list:
+                    result_lines.append(f'</{list_type}>')
+                result_lines.append('<ol>')
+                in_list = True
+                list_type = 'ol'
+            result_lines.append(f'<li>{number_match.group(2)}</li>')
+        else:
+            if in_list:
+                result_lines.append(f'</{list_type}>')
+                in_list = False
+                list_type = None
+            result_lines.append(line)
+    
+    if in_list:
+        result_lines.append(f'</{list_type}>')
+    
+    return '\n'.join(result_lines)
+
+
 def _build_executive_summary_html(summary: str, findings: list, severity_counts: dict) -> str:
-    """Build structured executive summary HTML."""
+    """Build structured executive summary HTML with proper formatting."""
+    # Convert any markdown in the summary to HTML
+    summary = _convert_markdown_to_html(summary)
+    
     # Split summary into paragraphs
     paragraphs = [p.strip() for p in summary.split('\n\n') if p.strip()]
     if not paragraphs:
@@ -864,9 +1027,13 @@ def _build_executive_summary_html(summary: str, findings: list, severity_counts:
     # Build description section
     desc_html = ""
     for p in paragraphs:
-        # Convert single newlines to <br> within paragraphs
-        p = p.replace('\n', '<br>')
-        desc_html += f"<p>{p}</p>"
+        # Check if it's already wrapped in HTML tags
+        if p.startswith('<h') or p.startswith('<ul') or p.startswith('<ol') or p.startswith('<p'):
+            desc_html += p
+        else:
+            # Convert single newlines to <br> within paragraphs
+            p = p.replace('\n', '<br>')
+            desc_html += f"<p>{p}</p>"
     
     # Build key findings bullet list
     key_findings = []
@@ -999,13 +1166,18 @@ def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dic
         else:
             long_term_actions.append(item)
     
-    # Parse conclusion text into paragraphs
+    # Parse conclusion text into paragraphs - convert markdown to HTML first
     conclusion_paragraphs = ""
     if conclusion:
+        conclusion = _convert_markdown_to_html(conclusion)
         for p in conclusion.split('\n\n'):
             p = p.strip()
             if p:
-                conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
+                # Check if already wrapped in HTML tags
+                if p.startswith('<h') or p.startswith('<ul') or p.startswith('<ol') or p.startswith('<p'):
+                    conclusion_paragraphs += p
+                else:
+                    conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
     
     html = f'''
     <div class="risk-summary" style="border-color: {risk_color};">
@@ -1174,13 +1346,14 @@ def generate_html_report() -> str:
         if steps_html:
             steps_html = f"<h4>Steps to Reproduce</h4>{steps_html}"
         
-        # Build command used HTML
+        # Build command used HTML - normalize tool name for display
         command_html = ""
         if f.get("command_used"):
+            tool_display_name = normalize_tool_name(f.get("tool_used", "Tool"))
             command_html = f'''
             <h4>Command Executed</h4>
             <div class="command-block">
-                <div class="command-label"># {f.get("tool_used", "Tool")} command</div>
+                <div class="command-label"># {tool_display_name} command</div>
                 {f["command_used"]}
             </div>
             '''
@@ -1225,7 +1398,7 @@ def generate_html_report() -> str:
                 <table>
                     <tr><th>CVSS Score</th><td>{f['cvss_score']}</td></tr>
                     <tr><th>CWE ID</th><td>{f.get('cwe_id', 'N/A')}</td></tr>
-                    <tr><th>Tool Used</th><td>{f['tool_used']}</td></tr>
+                    <tr><th>Tool Used</th><td>{normalize_tool_name(f['tool_used'])}</td></tr>
                 </table>
             </div>
         </div>
@@ -1242,8 +1415,8 @@ def generate_html_report() -> str:
         <li><a href="https://www.first.org/cvss/calculator/3.1">CVSS v3.1 Calculator</a></li>
     """
     
-    # Build artifacts section
-    artifacts = data.get("artifacts", []) + _REPORT_ARTIFACTS
+    # Build artifacts section - use only _REPORT_ARTIFACTS to avoid duplication
+    artifacts = _REPORT_ARTIFACTS
     artifacts_section = ""
     if artifacts:
         artifacts_html = ""
@@ -1308,7 +1481,7 @@ def generate_html_report() -> str:
     html = html.replace("{{subtitle}}", data.get("subtitle", "Penetration Test Report"))
     html = html.replace("{{target}}", data.get("target", "N/A"))
     html = html.replace("{{date}}", data.get("date", datetime.now().strftime("%Y-%m-%d")))
-    html = html.replace("{{author}}", data.get("author", "OWASP SmolAgent"))
+    html = html.replace("{{author}}", data.get("author", "Pentest.Systems Assistant"))
     html = html.replace("{{executive_summary_html}}", exec_summary_html)
     html = html.replace("{{critical_count}}", str(severity_counts["Critical"]))
     html = html.replace("{{high_count}}", str(severity_counts["High"]))
@@ -1358,7 +1531,7 @@ def generate_markdown_report() -> str:
     lines.append("")
     lines.append(f"- **Target:** {data.get('target', 'N/A')}")
     lines.append(f"- **Date:** {data.get('date', datetime.now().strftime('%Y-%m-%d'))}")
-    lines.append(f"- **Author:** {data.get('author', 'OWASP SmolAgent')}")
+    lines.append(f"- **Author:** {data.get('author', 'Pentest.Systems Assistant')}")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -1520,11 +1693,12 @@ def generate_markdown_report() -> str:
                 lines.append(f"{i}. {cleaned}")
             lines.append("")
         
-        # Command used
+        # Command used - normalize tool name for display
         if f.get("command_used"):
+            tool_display_name = normalize_tool_name(f.get("tool_used", "Tool"))
             lines.append("#### Command Executed")
             lines.append("```bash")
-            lines.append(f"# {f.get('tool_used', 'Tool')} command")
+            lines.append(f"# {tool_display_name} command")
             lines.append(f.get("command_used", ""))
             lines.append("```")
             lines.append("")
@@ -1561,7 +1735,7 @@ def generate_markdown_report() -> str:
             lines.extend(refs)
             lines.append("")
         
-        lines.append(f"*Tool Used: {f.get('tool_used', 'Manual Testing')}*")
+        lines.append(f"*Tool Used: {normalize_tool_name(f.get('tool_used', 'Manual Testing'))}*")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -1688,8 +1862,8 @@ def generate_markdown_report() -> str:
     lines.append("---")
     lines.append("")
     
-    # Artifacts Section
-    artifacts = data.get("artifacts", []) + _REPORT_ARTIFACTS
+    # Artifacts Section - use only _REPORT_ARTIFACTS to avoid duplication
+    artifacts = _REPORT_ARTIFACTS
     if artifacts:
         lines.append("## 📦 Artifacts")
         lines.append("")
@@ -1746,7 +1920,7 @@ def generate_markdown_report() -> str:
     lines.append("- [NIST NVD](https://nvd.nist.gov/)")
     lines.append("")
     lines.append("---")
-    lines.append(f"*Report generated by OWASP SmolAgent on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+    lines.append(f"*Report generated by Pentest.Systems Assistant on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
     
     return "\n".join(lines)
 

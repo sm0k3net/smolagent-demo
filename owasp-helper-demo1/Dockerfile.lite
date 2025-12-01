@@ -1,4 +1,4 @@
-# OWASP SmolAgent - Lightweight Dockerfile
+# Pentest.Systems Assistant - Lightweight Dockerfile
 # Use this for faster builds without pre-installed security tools
 # Security tools can be installed at runtime or via volume mounts
 

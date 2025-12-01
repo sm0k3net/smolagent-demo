@@ -26,7 +26,7 @@ def searxng_search(query: str, engines: str | None = None, categories: str | Non
     if language:
         params["language"] = language
     try:
-        headers = {"User-Agent": "owasp-smolagent/0.1", **(settings.searxng_headers or {})}
+        headers = {"User-Agent": "pentest-systems-assistant/0.1", **(settings.searxng_headers or {})}
         with httpx.Client(timeout=20.0, headers=headers) as client:
             r = client.get(f"{base.rstrip('/')}/search", params=params)
             r.raise_for_status()

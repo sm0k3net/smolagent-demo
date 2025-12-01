@@ -1,7 +1,7 @@
 [project]
-name = "owasp-smolagent"
+name = "pentest-systems-assistant"
 version = "0.2.0"
-description = "SmolAgent powered OWASP penetration testing assistant with OSINT, scanning tools, browser automation, and professional reporting."
+description = "AI-powered penetration testing assistant with OSINT, scanning tools, browser automation, and professional reporting."
 authors = [ { name = "Your Name" } ]
 readme = "README.md"
 requires-python = ">=3.10"

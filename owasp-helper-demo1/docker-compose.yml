@@ -1,4 +1,4 @@
-# OWASP SmolAgent - Docker Compose Configuration
+# Pentest.Systems Assistant - Docker Compose Configuration
 # Usage:
 #   Build:     docker-compose build
 #   Start:     docker-compose up -d

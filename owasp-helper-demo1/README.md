@@ -1,4 +1,4 @@
-# OWASP SmolAgent - Professional Penetration Testing Assistant
+# Pentest.Systems Assistant - Professional Penetration Testing
 
 An AI-powered penetration testing assistant built with smolagents. Features a professional web UI with real-time activity monitoring, OSINT tools, security scanners, and automated report generation.
 

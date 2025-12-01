@@ -677,6 +677,51 @@ proxy_config = {
     "password": "",
 }
 
+# Tools state management - enabled/disabled status for agent tools
+# Defines all available tools with their metadata
+TOOLS_REGISTRY = {
+    # Reconnaissance Tools
+    "nmap": {"name": "Nmap", "category": "recon", "description": "Network scanner for port/service discovery", "install_cmd": "apt install nmap", "binary": "nmap"},
+    "dnsrecon": {"name": "DNSRecon", "category": "recon", "description": "DNS enumeration and reconnaissance", "install_cmd": "pip install dnsrecon", "binary": "dnsrecon"},
+    "subfinder": {"name": "Subfinder", "category": "recon", "description": "Fast subdomain discovery", "install_cmd": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", "binary": "subfinder"},
+    "amass": {"name": "Amass", "category": "recon", "description": "In-depth attack surface mapping", "install_cmd": "go install github.com/owasp-amass/amass/v4/...@master", "binary": "amass"},
+    "httpx": {"name": "HTTPX", "category": "recon", "description": "HTTP toolkit for probing web servers", "install_cmd": "go install github.com/projectdiscovery/httpx/cmd/httpx@latest", "binary": "httpx"},
+    "whatweb": {"name": "WhatWeb", "category": "recon", "description": "Web technology fingerprinting", "install_cmd": "apt install whatweb", "binary": "whatweb"},
+    
+    # Vulnerability Scanning
+    "nuclei": {"name": "Nuclei", "category": "vuln", "description": "Template-based vulnerability scanner", "install_cmd": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", "binary": "nuclei"},
+    "nikto": {"name": "Nikto", "category": "vuln", "description": "Web server vulnerability scanner", "install_cmd": "apt install nikto", "binary": "nikto"},
+    "sqlmap": {"name": "SQLMap", "category": "vuln", "description": "Automated SQL injection tool", "install_cmd": "apt install sqlmap", "binary": "sqlmap"},
+    "xsser": {"name": "XSSer", "category": "vuln", "description": "XSS vulnerability scanner", "install_cmd": "pip install xsser", "binary": "xsser"},
+    "sslyze": {"name": "SSLyze", "category": "vuln", "description": "SSL/TLS configuration analyzer", "install_cmd": "pip install sslyze", "binary": "sslyze"},
+    "testssl": {"name": "testssl.sh", "category": "vuln", "description": "TLS/SSL testing tool", "install_cmd": "git clone https://github.com/drwetter/testssl.sh.git", "binary": "testssl.sh"},
+    
+    # Content Discovery
+    "gobuster": {"name": "Gobuster", "category": "discovery", "description": "Directory/DNS/vhost bruteforcing", "install_cmd": "go install github.com/OJ/gobuster/v3@latest", "binary": "gobuster"},
+    "ffuf": {"name": "FFUF", "category": "discovery", "description": "Fast web fuzzer", "install_cmd": "go install github.com/ffuf/ffuf/v2@latest", "binary": "ffuf"},
+    "dirb": {"name": "Dirb", "category": "discovery", "description": "Web content scanner", "install_cmd": "apt install dirb", "binary": "dirb"},
+    
+    # Web Application
+    "wpscan": {"name": "WPScan", "category": "webapp", "description": "WordPress vulnerability scanner", "install_cmd": "gem install wpscan", "binary": "wpscan"},
+    "curl": {"name": "cURL", "category": "webapp", "description": "HTTP request tool", "install_cmd": "apt install curl", "binary": "curl"},
+    
+    # Brute Force
+    "hydra": {"name": "Hydra", "category": "bruteforce", "description": "Network login cracker", "install_cmd": "apt install hydra", "binary": "hydra"},
+    "ncrack": {"name": "Ncrack", "category": "bruteforce", "description": "High-speed network authentication cracker", "install_cmd": "apt install ncrack", "binary": "ncrack"},
+    
+    # Exploitation
+    "searchsploit": {"name": "SearchSploit", "category": "exploit", "description": "ExploitDB CLI search", "install_cmd": "apt install exploitdb", "binary": "searchsploit"},
+    
+    # Browser Automation  
+    "playwright": {"name": "Playwright", "category": "browser", "description": "Browser automation for testing", "install_cmd": "pip install playwright && playwright install", "binary": None},
+    
+    # Infrastructure
+    "cloudflared": {"name": "Cloudflared", "category": "infra", "description": "Cloudflare Tunnel client", "install_cmd": "See cloudflare docs", "binary": "cloudflared"},
+}
+
+# Tool enabled state (persisted in memory, could be saved to file/db)
+tools_enabled_state = {tool: True for tool in TOOLS_REGISTRY}
+
 
 # Task management enums and models
 class TaskStatus(str, Enum):
@@ -723,7 +768,7 @@ class TaskChain(BaseModel):
     current_task_index: int = 0
 
 
-app = FastAPI(title="OWASP SmolAgent")
+app = FastAPI(title="Pentest.Systems Assistant")
 agent = None
 startup_lock = asyncio.Lock()
 agent_lock = threading.Lock()  # Lock for concurrent agent access
@@ -2135,6 +2180,230 @@ async def test_proxy():
             "ip": None
         })
 
+# ============== TOOLS MANAGEMENT ENDPOINTS ==============
+
+@app.get("/api/tools/list")
+async def get_tools_list():
+    """Get list of all tools with their status."""
+    import shutil
+    
+    tools_list = []
+    for tool_id, tool_info in TOOLS_REGISTRY.items():
+        # Check if tool is installed
+        binary = tool_info.get("binary")
+        installed = False
+        if binary:
+            installed = shutil.which(binary) is not None
+        elif tool_id == "playwright":
+            try:
+                import playwright
+                installed = True
+            except ImportError:
+                installed = False
+        
+        tools_list.append({
+            "id": tool_id,
+            "name": tool_info["name"],
+            "category": tool_info["category"],
+            "description": tool_info["description"],
+            "install_cmd": tool_info["install_cmd"],
+            "installed": installed,
+            "enabled": tools_enabled_state.get(tool_id, True),
+        })
+    
+    # Group by category
+    categories = {}
+    for tool in tools_list:
+        cat = tool["category"]
+        if cat not in categories:
+            categories[cat] = {
+                "recon": "🔍 Reconnaissance",
+                "vuln": "🛡️ Vulnerability Scanning",
+                "discovery": "📂 Content Discovery",
+                "webapp": "🌐 Web Application",
+                "bruteforce": "🔓 Brute Force",
+                "exploit": "💥 Exploitation",
+                "browser": "🖥️ Browser Automation",
+                "infra": "⚙️ Infrastructure",
+            }.get(cat, cat)
+        
+    return JSONResponse({
+        "tools": tools_list,
+        "categories": {
+            "recon": "🔍 Reconnaissance",
+            "vuln": "🛡️ Vulnerability Scanning", 
+            "discovery": "📂 Content Discovery",
+            "webapp": "🌐 Web Application",
+            "bruteforce": "🔓 Brute Force",
+            "exploit": "💥 Exploitation",
+            "browser": "🖥️ Browser Automation",
+            "infra": "⚙️ Infrastructure",
+        }
+    })
+
+
+@app.post("/api/tools/toggle/{tool_id}")
+async def toggle_tool(tool_id: str, request: Request):
+    """Enable or disable a tool."""
+    global tools_enabled_state
+    
+    if tool_id not in TOOLS_REGISTRY:
+        return JSONResponse({
+            "success": False,
+            "message": f"Unknown tool: {tool_id}"
+        }, status_code=404)
+    
+    data = await request.json()
+    enabled = data.get("enabled", True)
+    
+    tools_enabled_state[tool_id] = enabled
+    
+    return JSONResponse({
+        "success": True,
+        "tool_id": tool_id,
+        "enabled": enabled,
+        "message": f"{TOOLS_REGISTRY[tool_id]['name']} {'enabled' if enabled else 'disabled'}"
+    })
+
+
+@app.post("/api/tools/install/{tool_id}")
+async def install_tool(tool_id: str):
+    """Install a tool (runs installation command)."""
+    import subprocess
+    
+    if tool_id not in TOOLS_REGISTRY:
+        return JSONResponse({
+            "success": False,
+            "message": f"Unknown tool: {tool_id}"
+        }, status_code=404)
+    
+    tool_info = TOOLS_REGISTRY[tool_id]
+    install_cmd = tool_info.get("install_cmd", "")
+    
+    if not install_cmd:
+        return JSONResponse({
+            "success": False,
+            "message": f"No installation command defined for {tool_info['name']}"
+        })
+    
+    # Special handling for go install commands
+    if install_cmd.startswith("go install"):
+        try:
+            result = subprocess.run(
+                install_cmd.split(),
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if result.returncode == 0:
+                return JSONResponse({
+                    "success": True,
+                    "message": f"{tool_info['name']} installed successfully",
+                    "output": result.stdout
+                })
+            else:
+                return JSONResponse({
+                    "success": False,
+                    "message": f"Installation failed",
+                    "error": result.stderr
+                })
+        except subprocess.TimeoutExpired:
+            return JSONResponse({
+                "success": False,
+                "message": "Installation timed out"
+            })
+        except Exception as e:
+            return JSONResponse({
+                "success": False,
+                "message": f"Error: {str(e)}"
+            })
+    
+    # For pip install commands
+    elif install_cmd.startswith("pip install"):
+        try:
+            result = subprocess.run(
+                install_cmd.split(),
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            if result.returncode == 0:
+                return JSONResponse({
+                    "success": True,
+                    "message": f"{tool_info['name']} installed successfully"
+                })
+            else:
+                return JSONResponse({
+                    "success": False,
+                    "message": f"Installation failed: {result.stderr}"
+                })
+        except Exception as e:
+            return JSONResponse({
+                "success": False,
+                "message": f"Error: {str(e)}"
+            })
+    
+    # For other commands, return the command for user to run manually
+    return JSONResponse({
+        "success": False,
+        "message": f"Manual installation required",
+        "install_cmd": install_cmd,
+        "instructions": f"Run this command to install {tool_info['name']}: {install_cmd}"
+    })
+
+
+@app.get("/api/tools/check/{tool_id}")
+async def check_tool_installed(tool_id: str):
+    """Check if a specific tool is installed."""
+    import shutil
+    
+    if tool_id not in TOOLS_REGISTRY:
+        return JSONResponse({
+            "success": False,
+            "installed": False,
+            "message": f"Unknown tool: {tool_id}"
+        }, status_code=404)
+    
+    tool_info = TOOLS_REGISTRY[tool_id]
+    binary = tool_info.get("binary")
+    
+    installed = False
+    version = None
+    
+    if binary:
+        path = shutil.which(binary)
+        installed = path is not None
+        if installed:
+            # Try to get version
+            try:
+                import subprocess
+                result = subprocess.run(
+                    [binary, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                version = result.stdout.strip().split("\n")[0][:100] if result.returncode == 0 else None
+            except:
+                pass
+    elif tool_id == "playwright":
+        try:
+            import playwright
+            installed = True
+            version = getattr(playwright, "__version__", "installed")
+        except ImportError:
+            installed = False
+    
+    return JSONResponse({
+        "success": True,
+        "tool_id": tool_id,
+        "name": tool_info["name"],
+        "installed": installed,
+        "version": version,
+        "enabled": tools_enabled_state.get(tool_id, True)
+    })
+
+
 @app.get("/api/database/history")
 async def get_command_history(session_id: Optional[str] = None, 
                                task_id: Optional[str] = None,
@@ -2977,7 +3246,7 @@ HTML = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OWASP SmolAgent - Professional Security Testing Assistant</title>
+<title>Pentest.Systems Assistant - Professional Security Testing</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -6243,7 +6512,7 @@ main {
       </svg>
     </div>
     <div>
-      <h1>OWASP SmolAgent</h1>
+      <h1>Pentest.Systems Assistant</h1>
       <div class="header-subtitle">AI-Powered Security Testing Platform</div>
     </div>
     <span class="status-badge disconnected" id="status-badge">
@@ -6443,6 +6712,12 @@ main {
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
               </svg>
               Comm
+            </button>
+            <button class="settings-subtab" data-subtab="tools" onclick="switchSettingsSubtab('tools')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              </svg>
+              Tools
             </button>
             <button class="settings-subtab" data-subtab="general" onclick="switchSettingsSubtab('general')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -6814,6 +7089,108 @@ main {
               Configure notification channels for scan results and alerts.
               (Coming soon: Discord, Slack, Email integrations)
             </p>
+          </div>
+        </div>
+        
+        <!-- Tools Management Sub-Tab -->
+        <div class="settings-subtab-content" id="settings-tools">
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              </svg>
+              Security Tools
+            </div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5; margin-bottom: 15px;">
+              Manage pentesting tools available to the agent. Install, enable, or disable tools as needed.
+            </p>
+            
+            <!-- Tools Filter -->
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+              <input type="text" id="tools-search" placeholder="Search tools..." 
+                style="flex: 1; padding: 8px 12px; background: var(--dark); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--light); font-size: 0.85rem;"
+                oninput="filterTools()">
+              <select id="tools-category-filter" style="padding: 8px 12px; background: var(--dark); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--light); font-size: 0.85rem;" onchange="filterTools()">
+                <option value="">All Categories</option>
+                <option value="recon">🔍 Reconnaissance</option>
+                <option value="vuln">🛡️ Vulnerability</option>
+                <option value="discovery">📂 Discovery</option>
+                <option value="webapp">🌐 Web App</option>
+                <option value="bruteforce">🔓 Brute Force</option>
+                <option value="exploit">💥 Exploitation</option>
+                <option value="browser">🖥️ Browser</option>
+                <option value="infra">⚙️ Infrastructure</option>
+              </select>
+              <button class="btn btn-primary" onclick="refreshToolsList()" title="Refresh tools list">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6"/>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+            </div>
+            
+            <!-- Tools List Container -->
+            <div id="tools-list-container" style="background: var(--dark); border-radius: 8px; padding: 15px; max-height: 500px; overflow-y: auto;">
+              <div id="tools-list" style="display: flex; flex-direction: column; gap: 10px;">
+                <!-- Tools will be loaded dynamically -->
+                <div style="text-align: center; color: var(--gray-400); padding: 20px;">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite;">
+                    <circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="10"/>
+                  </svg>
+                  <p style="margin-top: 10px;">Loading tools...</p>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Legend -->
+            <div style="display: flex; gap: 20px; margin-top: 15px; font-size: 0.75rem; color: var(--gray-500);">
+              <div style="display: flex; align-items: center; gap: 5px;">
+                <div style="width: 8px; height: 8px; border-radius: 50%; background: #10b981;"></div>
+                <span>Installed & Enabled</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 5px;">
+                <div style="width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;"></div>
+                <span>Installed & Disabled</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 5px;">
+                <div style="width: 8px; height: 8px; border-radius: 50%; background: #6b7280;"></div>
+                <span>Not Installed</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Quick Install Section -->
+          <div class="settings-section">
+            <div class="settings-section-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Quick Install
+            </div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5; margin-bottom: 15px;">
+              Install common tool bundles with one click.
+            </p>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+              <button class="btn" style="background: rgba(255,255,255,0.05); padding: 12px; text-align: left;" onclick="installToolBundle('recon')">
+                <div style="font-weight: 500; margin-bottom: 4px;">🔍 Recon Bundle</div>
+                <div style="font-size: 0.75rem; color: var(--gray-400);">nmap, subfinder, httpx, whatweb</div>
+              </button>
+              <button class="btn" style="background: rgba(255,255,255,0.05); padding: 12px; text-align: left;" onclick="installToolBundle('vuln')">
+                <div style="font-weight: 500; margin-bottom: 4px;">🛡️ Vuln Scanner Bundle</div>
+                <div style="font-size: 0.75rem; color: var(--gray-400);">nuclei, nikto, sqlmap</div>
+              </button>
+              <button class="btn" style="background: rgba(255,255,255,0.05); padding: 12px; text-align: left;" onclick="installToolBundle('discovery')">
+                <div style="font-weight: 500; margin-bottom: 4px;">📂 Discovery Bundle</div>
+                <div style="font-size: 0.75rem; color: var(--gray-400);">gobuster, ffuf, dirb</div>
+              </button>
+              <button class="btn" style="background: rgba(255,255,255,0.05); padding: 12px; text-align: left;" onclick="installToolBundle('all')">
+                <div style="font-weight: 500; margin-bottom: 4px;">⚡ All Essential Tools</div>
+                <div style="font-size: 0.75rem; color: var(--gray-400);">Install all recommended tools</div>
+              </button>
+            </div>
           </div>
         </div>
         
@@ -8098,6 +8475,9 @@ function switchSettingsSubtab(subtab) {
     loadDatabaseSettings();
   } else if (subtab === 'general') {
     checkTunnelStatus();
+    checkProxyStatus();
+  } else if (subtab === 'tools') {
+    loadToolsList();
   }
   
   // Update scroll arrows visibility
@@ -8452,6 +8832,297 @@ async function testProxyConnection() {
   } catch (error) {
     showProxyMessage('Test failed: ' + error.message, true);
   }
+}
+
+// ============== TOOLS MANAGEMENT ==============
+let toolsData = [];
+
+async function loadToolsList() {
+  const container = document.getElementById('tools-list');
+  
+  try {
+    const response = await fetch('/api/tools/list');
+    const data = await response.json();
+    
+    toolsData = data.tools;
+    renderToolsList(toolsData);
+  } catch (error) {
+    container.innerHTML = `
+      <div style="text-align: center; color: #ef4444; padding: 20px;">
+        <p>Failed to load tools: ${error.message}</p>
+        <button class="btn btn-primary" style="margin-top: 10px;" onclick="loadToolsList()">Retry</button>
+      </div>
+    `;
+  }
+}
+
+function renderToolsList(tools) {
+  const container = document.getElementById('tools-list');
+  
+  if (!tools || tools.length === 0) {
+    container.innerHTML = '<p style="text-align: center; color: var(--gray-400);">No tools found</p>';
+    return;
+  }
+  
+  // Group by category
+  const grouped = {};
+  const categoryNames = {
+    'recon': '🔍 Reconnaissance',
+    'vuln': '🛡️ Vulnerability Scanning',
+    'discovery': '📂 Content Discovery',
+    'webapp': '🌐 Web Application',
+    'bruteforce': '🔓 Brute Force',
+    'exploit': '💥 Exploitation',
+    'browser': '🖥️ Browser Automation',
+    'infra': '⚙️ Infrastructure',
+  };
+  
+  tools.forEach(tool => {
+    if (!grouped[tool.category]) {
+      grouped[tool.category] = [];
+    }
+    grouped[tool.category].push(tool);
+  });
+  
+  let html = '';
+  
+  for (const [category, categoryTools] of Object.entries(grouped)) {
+    html += `
+      <div class="tools-category" style="margin-bottom: 15px;">
+        <div style="font-weight: 500; color: var(--gray-300); margin-bottom: 8px; font-size: 0.9rem;">
+          ${categoryNames[category] || category}
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+    `;
+    
+    categoryTools.forEach(tool => {
+      const statusColor = tool.installed 
+        ? (tool.enabled ? '#10b981' : '#f59e0b') 
+        : '#6b7280';
+      const statusText = tool.installed 
+        ? (tool.enabled ? 'Enabled' : 'Disabled') 
+        : 'Not Installed';
+      
+      html += `
+        <div class="tool-item" data-tool-id="${tool.id}" data-category="${tool.category}"
+          style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; transition: all 0.2s;">
+          
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; flex-shrink: 0;"></div>
+          
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-weight: 500; color: var(--light); font-size: 0.9rem;">${tool.name}</div>
+            <div style="font-size: 0.75rem; color: var(--gray-500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${tool.description}</div>
+          </div>
+          
+          <div style="display: flex; gap: 6px; flex-shrink: 0;">
+            ${tool.installed ? `
+              <label class="toggle-switch" style="width: 40px; height: 20px;">
+                <input type="checkbox" ${tool.enabled ? 'checked' : ''} onchange="toggleTool('${tool.id}', this.checked)" style="opacity: 0; width: 0; height: 0;">
+                <span class="toggle-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--gray-600); transition: .3s; border-radius: 20px;"></span>
+              </label>
+            ` : `
+              <button class="btn btn-sm" style="padding: 4px 10px; font-size: 0.75rem; background: rgba(59,130,246,0.2); color: #3b82f6;" onclick="installTool('${tool.id}')">
+                Install
+              </button>
+            `}
+            <button class="btn btn-sm" style="padding: 4px 8px; background: transparent;" onclick="showToolDetails('${tool.id}')" title="Details">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 16v-4"/>
+                <path d="M12 8h.01"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += '</div></div>';
+  }
+  
+  container.innerHTML = html;
+}
+
+function filterTools() {
+  const searchTerm = document.getElementById('tools-search').value.toLowerCase();
+  const categoryFilter = document.getElementById('tools-category-filter').value;
+  
+  const filtered = toolsData.filter(tool => {
+    const matchesSearch = !searchTerm || 
+      tool.name.toLowerCase().includes(searchTerm) || 
+      tool.description.toLowerCase().includes(searchTerm) ||
+      tool.id.toLowerCase().includes(searchTerm);
+    const matchesCategory = !categoryFilter || tool.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+  
+  renderToolsList(filtered);
+}
+
+async function refreshToolsList() {
+  await loadToolsList();
+}
+
+async function toggleTool(toolId, enabled) {
+  try {
+    const response = await fetch(`/api/tools/toggle/${toolId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    const data = await response.json();
+    
+    if (data.success) {
+      // Update local state
+      const tool = toolsData.find(t => t.id === toolId);
+      if (tool) tool.enabled = enabled;
+      
+      showToolsMessage(data.message);
+    } else {
+      showToolsMessage(data.message || 'Failed to toggle tool', true);
+      // Revert toggle
+      await loadToolsList();
+    }
+  } catch (error) {
+    showToolsMessage('Error: ' + error.message, true);
+    await loadToolsList();
+  }
+}
+
+async function installTool(toolId) {
+  const tool = toolsData.find(t => t.id === toolId);
+  
+  showToolsMessage(`Installing ${tool?.name || toolId}... This may take a while.`);
+  
+  try {
+    const response = await fetch(`/api/tools/install/${toolId}`, {
+      method: 'POST'
+    });
+    const data = await response.json();
+    
+    if (data.success) {
+      showToolsMessage(data.message);
+      await loadToolsList();
+    } else if (data.instructions) {
+      // Manual installation required
+      showToolsMessage(`Manual installation required: ${data.install_cmd}`, true);
+      // Copy to clipboard
+      navigator.clipboard.writeText(data.install_cmd).then(() => {
+        showToolsMessage(`Install command copied to clipboard: ${data.install_cmd}`);
+      });
+    } else {
+      showToolsMessage(data.message || 'Installation failed', true);
+    }
+  } catch (error) {
+    showToolsMessage('Installation error: ' + error.message, true);
+  }
+}
+
+function showToolDetails(toolId) {
+  const tool = toolsData.find(t => t.id === toolId);
+  if (!tool) return;
+  
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;';
+  
+  modal.innerHTML = `
+    <div style="background: var(--darker); border-radius: 12px; padding: 24px; max-width: 450px; width: 90%; max-height: 80vh; overflow-y: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0; color: var(--light);">${tool.name}</h3>
+        <button onclick="this.closest('.modal-overlay').remove()" style="background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 1.5rem;">&times;</button>
+      </div>
+      
+      <div style="margin-bottom: 16px;">
+        <div style="font-size: 0.85rem; color: var(--gray-400); margin-bottom: 8px;">Description</div>
+        <p style="margin: 0; color: var(--gray-200);">${tool.description}</p>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <div style="font-size: 0.75rem; color: var(--gray-500);">Category</div>
+          <div style="color: var(--gray-300);">${tool.category}</div>
+        </div>
+        <div>
+          <div style="font-size: 0.75rem; color: var(--gray-500);">Status</div>
+          <div style="color: ${tool.installed ? '#10b981' : '#6b7280'};">${tool.installed ? 'Installed' : 'Not Installed'}</div>
+        </div>
+      </div>
+      
+      <div style="margin-bottom: 16px;">
+        <div style="font-size: 0.85rem; color: var(--gray-400); margin-bottom: 8px;">Installation Command</div>
+        <div style="background: var(--dark); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; color: var(--gray-300); word-break: break-all;">
+          ${tool.install_cmd}
+        </div>
+        <button class="btn btn-sm" style="margin-top: 8px; padding: 6px 12px; font-size: 0.8rem;" onclick="navigator.clipboard.writeText('${tool.install_cmd.replace(/'/g, "\\'")}'); this.textContent = 'Copied!'">
+          Copy Command
+        </button>
+      </div>
+      
+      ${!tool.installed ? `
+        <button class="btn btn-primary" style="width: 100%;" onclick="installTool('${tool.id}'); this.closest('.modal-overlay').remove();">
+          Install ${tool.name}
+        </button>
+      ` : ''}
+    </div>
+  `;
+  
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  
+  document.body.appendChild(modal);
+}
+
+function showToolsMessage(message, isError = false) {
+  // Use a toast notification
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    background: ${isError ? 'rgba(239,68,68,0.9)' : 'rgba(16,185,129,0.9)'};
+    color: white;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    z-index: 10000;
+    animation: slideIn 0.3s ease;
+  `;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  
+  setTimeout(() => {
+    toast.style.animation = 'slideOut 0.3s ease';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+async function installToolBundle(bundleName) {
+  const bundles = {
+    'recon': ['nmap', 'subfinder', 'httpx', 'whatweb'],
+    'vuln': ['nuclei', 'nikto', 'sqlmap'],
+    'discovery': ['gobuster', 'ffuf', 'dirb'],
+    'all': ['nmap', 'subfinder', 'httpx', 'whatweb', 'nuclei', 'nikto', 'sqlmap', 'gobuster', 'ffuf']
+  };
+  
+  const tools = bundles[bundleName];
+  if (!tools) return;
+  
+  showToolsMessage(`Starting bundle installation: ${bundleName}...`);
+  
+  for (const toolId of tools) {
+    const tool = toolsData.find(t => t.id === toolId);
+    if (tool && !tool.installed) {
+      showToolsMessage(`Installing ${tool.name}...`);
+      await installTool(toolId);
+      // Wait a bit between installs
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  showToolsMessage('Bundle installation completed!');
+  await loadToolsList();
 }
 
 // Check tunnel and proxy status on page load
@@ -9588,7 +10259,7 @@ function downloadReport(type) {
 ws.onopen = () => {
   statusBadge.className = 'status-badge connected';
   statusText.textContent = 'Connected';
-  addMessage('system', '🟢 Connected to OWASP SmolAgent - Ready for security analysis');
+  addMessage('system', '🟢 Connected to Pentest.Systems Assistant - Ready for security analysis');
 };
 
 ws.onclose = () => {
@@ -10634,7 +11305,7 @@ async def ws_endpoint(ws: WebSocket):
                 enable_report_mode(
                     title="Security Assessment Report",
                     target="Target to be specified",
-                    author="OWASP SmolAgent"
+                    author="Pentest.Systems Assistant"
                 )
                 await ws.send_text(json.dumps({
                     "type": "report_mode",
