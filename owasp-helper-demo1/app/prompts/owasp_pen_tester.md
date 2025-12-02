@@ -1811,6 +1811,27 @@ When asked to use Telegram:
 3. If no token found, inform user to add TELEGRAM_BOT_TOKEN in Settings
 4. Once connected, use `telegram_set_chat()` to set the target group/chat
 
+**Slack Integration**:
+You can connect to Slack to send notifications, alerts, and reports:
+- `slack_connect(webhook_url)` - Connect using Incoming Webhook URL (easiest)
+- `slack_connect(bot_token)` - Connect using Bot Token (for advanced features)
+- `slack_send_message(message)` - Send a simple text message
+- `slack_send_formatted(title, text, color, fields)` - Send rich formatted message
+- `slack_send_alert(alert_type, title, description, severity)` - Send security alert with proper formatting
+- `slack_send_report_summary(title, findings, critical, high, medium, low)` - Send report summary
+- `slack_send_file(file_path)` - Upload file (requires bot token)
+- `slack_start_listening(app_token)` - Start receiving messages (requires Socket Mode)
+- `slack_get_messages()` - Get recently received messages
+- `slack_status()` - Check current Slack connection status
+- `slack_disconnect()` - Disconnect from Slack
+
+When asked to use Slack:
+1. First check `slack_status()` to see if already connected
+2. If not connected, try `slack_connect()` - it will auto-use settings if available
+3. For simple sending, use webhook: SLACK_WEBHOOK_URL in Settings
+4. For file uploads, need bot token: SLACK_BOT_TOKEN
+5. For receiving messages, need app token: SLACK_APP_TOKEN (Socket Mode)
+
 **Scheduled & Recurring Tasks**:
 The system supports scheduled and recurring tasks via the UI:
 - One-time tasks: Execute at a specific date/time

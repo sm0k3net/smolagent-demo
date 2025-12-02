@@ -1614,6 +1614,10 @@ def load_api_keys_from_file():
         "ALIENVAULT_API_KEY": "",
         "TELEGRAM_BOT_TOKEN": "",
         "TELEGRAM_CHAT_ID": "",
+        "SLACK_WEBHOOK_URL": "",
+        "SLACK_BOT_TOKEN": "",
+        "SLACK_APP_TOKEN": "",
+        "SLACK_CHANNEL": "",
     }
     
     # Try to load from file first
@@ -3548,9 +3552,59 @@ async def export_note(note_id: str, format: str = "html"):
             )
         
         elif format == "pdf":
-            # Generate PDF using html2pdf approach via JavaScript
-            # Create an HTML page that will trigger print-to-PDF
-            html_for_pdf = f"""<!DOCTYPE html>
+            # Generate PDF using Playwright
+            try:
+                from playwright.sync_api import sync_playwright
+                import tempfile
+                import os
+                
+                # Create HTML content for PDF
+                html_for_pdf = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{name}</title>
+    <style>
+        @page {{ size: A4; margin: 1.5cm; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 100%; margin: 0; padding: 20px; line-height: 1.6; font-size: 12pt; color: #333; background: white; }}
+        h1 {{ color: #1a1a1a; font-size: 24pt; margin-bottom: 0.5em; }}
+        h2 {{ color: #333; font-size: 18pt; }}
+        h3 {{ color: #444; font-size: 14pt; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-family: 'Consolas', monospace; }}
+        pre {{ background: #f4f4f4; padding: 16px; border-radius: 8px; overflow-x: auto; }}
+        blockquote {{ border-left: 4px solid #22c55e; margin: 16px 0; padding-left: 16px; color: #666; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 1em 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f5f5f5; }}
+        img {{ max-width: 100%; height: auto; }}
+        @media print {{ body {{ print-color-adjust: exact; -webkit-print-color-adjust: exact; }} }}
+    </style>
+</head>
+<body>
+    <h1>{name}</h1>
+    {content}
+</body>
+</html>"""
+                
+                # Generate PDF using Playwright
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.set_content(html_for_pdf)
+                    
+                    # Generate PDF
+                    pdf_bytes = page.pdf(format="A4", print_background=True)
+                    browser.close()
+                
+                return Response(
+                    content=pdf_bytes,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'}
+                )
+                
+            except ImportError:
+                # Fallback to HTML with print instructions
+                html_for_pdf = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -3568,19 +3622,25 @@ async def export_note(note_id: str, format: str = "html"):
         th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         th {{ background-color: #f5f5f5; }}
         @media print {{ body {{ print-color-adjust: exact; -webkit-print-color-adjust: exact; }} }}
+        .print-notice {{ background: #fef3c7; border: 1px solid #f59e0b; padding: 16px; border-radius: 8px; margin-bottom: 20px; }}
+        @media print {{ .print-notice {{ display: none; }} }}
     </style>
 </head>
 <body>
+    <div class="print-notice">
+        <strong>Note:</strong> Playwright is not installed. Use Ctrl+P (Cmd+P on Mac) to print this page as PDF.
+    </div>
     <h1>{name}</h1>
     {content}
 </body>
 </html>"""
-            # Return the HTML that user can print to PDF
-            return Response(
-                content=html_for_pdf,
-                media_type="text/html",
-                headers={"Content-Disposition": f'attachment; filename="{name}_print_to_pdf.html"'}
-            )
+                return Response(
+                    content=html_for_pdf,
+                    media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="{name}_print_as_pdf.html"'}
+                )
+            except Exception as e:
+                return JSONResponse({"error": f"PDF generation failed: {str(e)}"}, status_code=500)
         
         else:
             return JSONResponse({"error": f"Unsupported format: {format}"}, status_code=400)
@@ -10414,6 +10474,34 @@ main {
               </div>
             </div>
             
+            <!-- Recurring Toggle -->
+            <div class="schedule-recurring-toggle">
+              <label class="schedule-checkbox" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="schedule-recurring" style="width: 18px; height: 18px; accent-color: var(--warning); cursor: pointer;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span>Recurring Task</span>
+              </label>
+            </div>
+            
+            <!-- Recurring Options (shown when recurring is checked) -->
+            <div id="recurring-options" class="recurring-options">
+              <div class="recurring-interval-row">
+                <span class="interval-label">Repeat every</span>
+                <input type="number" id="schedule-interval" class="schedule-input interval-input" value="60" min="5" style="width: 80px;">
+                <span class="interval-label">minutes</span>
+              </div>
+              <div class="recurring-presets">
+                <button type="button" class="preset-btn" onclick="setInterval(30)">30 min</button>
+                <button type="button" class="preset-btn" onclick="setInterval(60)">1 hour</button>
+                <button type="button" class="preset-btn" onclick="setInterval(360)">6 hours</button>
+                <button type="button" class="preset-btn" onclick="setInterval(1440)">Daily</button>
+              </div>
+            </div>
+            
             <div class="schedule-summary" id="schedule-summary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                 <circle cx="12" cy="12" r="10"></circle>
@@ -12845,10 +12933,16 @@ async function moveNoteToFolder(noteId, noteType, targetFolderId) {
 }
 
 function createTaskFromNote() {
-  if (!currentNoteId) return;
+  console.log('createTaskFromNote called, currentNoteId:', currentNoteId);
+  if (!currentNoteId) {
+    alert('Please select or create a note first');
+    return;
+  }
   
   const content = document.getElementById('notes-editor').innerText;
   const title = document.getElementById('note-title-input').value;
+  
+  console.log('Creating task from note:', title, 'content length:', content.length);
   
   // Pre-fill the schedule modal with note content
   document.getElementById('schedule-name').value = title;

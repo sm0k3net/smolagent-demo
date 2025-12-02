@@ -145,6 +145,19 @@ from app.tools.telegram_tool import (
     telegram_status,
     telegram_disconnect,
 )
+from app.tools.slack_tool import (
+    slack_connect,
+    slack_send_message,
+    slack_send_formatted,
+    slack_send_alert,
+    slack_send_report_summary,
+    slack_send_file,
+    slack_start_listening,
+    slack_stop_listening,
+    slack_get_messages,
+    slack_status,
+    slack_disconnect,
+)
 from app.tools.zap_tools import (
     zap_start_daemon,
     zap_stop_daemon,
@@ -408,6 +421,21 @@ def build_owasp_agent() -> CodeAgent:
         telegram_get_updates,
         telegram_status,
         telegram_disconnect,
+    ])
+    
+    # Slack integration tools
+    tools.extend([
+        slack_connect,
+        slack_send_message,
+        slack_send_formatted,
+        slack_send_alert,
+        slack_send_report_summary,
+        slack_send_file,
+        slack_start_listening,
+        slack_stop_listening,
+        slack_get_messages,
+        slack_status,
+        slack_disconnect,
     ])
     
     # OWASP ZAP - Web Application Vulnerability Scanner
