@@ -3827,3 +3827,307 @@ def update_conclusion(new_conclusion: str) -> str:
     _CURRENT_REPORT_DATA["conclusion"] = new_conclusion
     return f"✅ Conclusion updated ({len(new_conclusion)} characters)."
 
+
+# ============== NOTE CREATION AND MODIFICATION TOOLS ==============
+
+@tool
+def create_note(name: str, content: str, folder_name: str = None) -> str:
+    """Create a new note with the specified name and content.
+    
+    Use this tool to store research results, gathered information, or any structured
+    data that needs to be saved for later reference. The content can include markdown
+    formatting for better organization.
+    
+    Args:
+        name: Name/title for the new note (e.g., "OSINT Research - Target.com")
+        content: The content to store in the note. Can include markdown formatting.
+        folder_name: Optional folder name to place the note in. If folder doesn't exist, note goes to root.
+        
+    Returns: Confirmation with note ID and name, or error message.
+    
+    Example:
+        create_note("Security Research", "## Findings\\n\\n- CVE-2024-1234 found\\n- Open ports: 22, 80, 443")
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    
+    notes_dir = Path("data/notes")
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    
+    index_file = notes_dir / "index.json"
+    
+    # Load or create index
+    if index_file.exists():
+        try:
+            notes_index = json.loads(index_file.read_text())
+        except:
+            notes_index = {"files": [], "folders": [], "next_id": 1}
+    else:
+        notes_index = {"files": [], "folders": [], "next_id": 1}
+    
+    # Generate note ID
+    note_id = str(notes_index.get("next_id", 1))
+    notes_index["next_id"] = int(note_id) + 1
+    
+    # Convert markdown-style content to HTML for the notes editor
+    html_content = _markdown_to_html(content)
+    
+    # Create note data
+    note_data = {
+        "id": note_id,
+        "name": name,
+        "content": html_content,
+        "attachments": [],
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    
+    # Find folder if specified
+    folder_id = None
+    if folder_name:
+        for folder in notes_index.get("folders", []):
+            if folder.get("name", "").lower() == folder_name.lower():
+                folder_id = folder.get("id")
+                note_data["folder_id"] = folder_id
+                break
+    
+    # Save note file
+    note_file = notes_dir / f"{note_id}.json"
+    note_file.write_text(json.dumps(note_data, indent=2))
+    
+    # Add to index
+    note_entry = {"id": note_id, "name": name, "type": "file"}
+    
+    if folder_id:
+        # Add to folder
+        def add_to_folder(folders, target_id, entry):
+            for folder in folders:
+                if folder.get("id") == target_id:
+                    if "children" not in folder:
+                        folder["children"] = []
+                    folder["children"].append(entry)
+                    return True
+                if "children" in folder:
+                    if add_to_folder([c for c in folder["children"] if c.get("type") == "folder"], target_id, entry):
+                        return True
+            return False
+        
+        if not add_to_folder(notes_index.get("folders", []), folder_id, note_entry):
+            notes_index["files"].append(note_entry)
+    else:
+        notes_index["files"].append(note_entry)
+    
+    # Save index
+    index_file.write_text(json.dumps(notes_index, indent=2))
+    
+    folder_info = f" in folder '{folder_name}'" if folder_name and folder_id else ""
+    return f"✅ Note '{name}' created successfully (ID: {note_id}){folder_info}. Content length: {len(content)} characters."
+
+
+@tool
+def update_note(note_name: str, content: str, append: bool = False) -> str:
+    """Update an existing note's content.
+    
+    Use this tool to add more information to an existing note or replace its content entirely.
+    
+    Args:
+        note_name: Name or partial name of the note to update.
+        content: New content to set or append. Can include markdown formatting.
+        append: If True, append to existing content. If False, replace content entirely.
+        
+    Returns: Confirmation of update or error message.
+    
+    Example:
+        update_note("Security Research", "\\n\\n## Additional Findings\\n- New CVE discovered", append=True)
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    
+    notes_dir = Path("data/notes")
+    if not notes_dir.exists():
+        return "Error: Notes directory not found."
+    
+    # Find the note
+    matching_note = None
+    note_file = None
+    
+    for nf in notes_dir.glob("*.json"):
+        if nf.name == "index.json":
+            continue
+        try:
+            note_data = json.loads(nf.read_text())
+            if note_name.lower() in note_data.get("name", "").lower():
+                if matching_note:
+                    # Multiple matches
+                    return f"Multiple notes match '{note_name}'. Please use a more specific name."
+                matching_note = note_data
+                note_file = nf
+        except:
+            continue
+    
+    if not matching_note:
+        return f"No note found matching '{note_name}'. Use list_available_notes() to see available notes, or create_note() to create a new one."
+    
+    # Update content
+    html_content = _markdown_to_html(content)
+    
+    if append:
+        # Append to existing content
+        existing_content = matching_note.get("content", "")
+        matching_note["content"] = existing_content + "<br><br>" + html_content
+    else:
+        # Replace content
+        matching_note["content"] = html_content
+    
+    matching_note["updated_at"] = datetime.now().isoformat()
+    
+    # Save updated note
+    note_file.write_text(json.dumps(matching_note, indent=2))
+    
+    action = "appended to" if append else "updated"
+    return f"✅ Note '{matching_note.get('name')}' {action} successfully. New content length: {len(matching_note['content'])} characters."
+
+
+@tool
+def create_note_folder(folder_name: str) -> str:
+    """Create a new folder to organize notes.
+    
+    Args:
+        folder_name: Name for the new folder.
+        
+    Returns: Confirmation with folder ID or error message.
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    import uuid
+    
+    notes_dir = Path("data/notes")
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    
+    index_file = notes_dir / "index.json"
+    
+    # Load or create index
+    if index_file.exists():
+        try:
+            notes_index = json.loads(index_file.read_text())
+        except:
+            notes_index = {"files": [], "folders": [], "next_id": 1}
+    else:
+        notes_index = {"files": [], "folders": [], "next_id": 1}
+    
+    # Check if folder already exists
+    for folder in notes_index.get("folders", []):
+        if folder.get("name", "").lower() == folder_name.lower():
+            return f"Folder '{folder_name}' already exists (ID: {folder.get('id')})."
+    
+    # Create folder
+    folder_id = f"folder_{uuid.uuid4().hex[:8]}"
+    folder_entry = {
+        "id": folder_id,
+        "name": folder_name,
+        "type": "folder",
+        "children": [],
+        "created_at": datetime.now().isoformat()
+    }
+    
+    notes_index.setdefault("folders", []).append(folder_entry)
+    
+    # Save index
+    index_file.write_text(json.dumps(notes_index, indent=2))
+    
+    return f"✅ Folder '{folder_name}' created successfully (ID: {folder_id})."
+
+
+def _markdown_to_html(text: str) -> str:
+    """Convert basic markdown to HTML for note content."""
+    import re
+    
+    # Process line by line
+    lines = text.split('\n')
+    html_lines = []
+    in_list = False
+    in_code_block = False
+    
+    for line in lines:
+        # Code blocks
+        if line.strip().startswith('```'):
+            if in_code_block:
+                html_lines.append('</pre>')
+                in_code_block = False
+            else:
+                html_lines.append('<pre style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; overflow-x: auto;">')
+                in_code_block = True
+            continue
+        
+        if in_code_block:
+            html_lines.append(line)
+            continue
+        
+        # Headers
+        if line.startswith('#### '):
+            html_lines.append(f'<h4>{line[5:]}</h4>')
+            continue
+        if line.startswith('### '):
+            html_lines.append(f'<h3>{line[4:]}</h3>')
+            continue
+        if line.startswith('## '):
+            html_lines.append(f'<h2>{line[3:]}</h2>')
+            continue
+        if line.startswith('# '):
+            html_lines.append(f'<h1>{line[2:]}</h1>')
+            continue
+        
+        # Horizontal rule
+        if line.strip() in ['---', '***', '___']:
+            html_lines.append('<hr>')
+            continue
+        
+        # Lists
+        if re.match(r'^[-*+]\s', line.strip()):
+            if not in_list:
+                html_lines.append('<ul>')
+                in_list = True
+            content = re.sub(r'^[-*+]\s', '', line.strip())
+            html_lines.append(f'<li>{content}</li>')
+            continue
+        elif re.match(r'^\d+\.\s', line.strip()):
+            if not in_list:
+                html_lines.append('<ol>')
+                in_list = True
+            content = re.sub(r'^\d+\.\s', '', line.strip())
+            html_lines.append(f'<li>{content}</li>')
+            continue
+        else:
+            if in_list:
+                html_lines.append('</ul>' if html_lines[-2].startswith('<ul>') or '<li>' in html_lines[-1] else '</ol>')
+                in_list = False
+        
+        # Bold and italic
+        line = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', line)
+        line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
+        line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
+        line = re.sub(r'__(.+?)__', r'<strong>\1</strong>', line)
+        line = re.sub(r'_(.+?)_', r'<em>\1</em>', line)
+        
+        # Inline code
+        line = re.sub(r'`(.+?)`', r'<code style="background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 3px;">\1</code>', line)
+        
+        # Links
+        line = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2" target="_blank">\1</a>', line)
+        
+        # Empty line = paragraph break
+        if line.strip() == '':
+            html_lines.append('<br>')
+        else:
+            html_lines.append(f'<p>{line}</p>' if not line.startswith('<') else line)
+    
+    # Close any open list
+    if in_list:
+        html_lines.append('</ul>')
+    if in_code_block:
+        html_lines.append('</pre>')
+    
+    return '\n'.join(html_lines)

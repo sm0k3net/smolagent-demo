@@ -127,6 +127,10 @@ from app.tools.report_tools import (
     get_note_content,
     list_available_notes,
     insert_note_content_to_report,
+    # Note creation/modification tools
+    create_note,
+    update_note,
+    create_note_folder,
     # Report regeneration tools
     save_pentest_session,
     restore_pentest_session,
@@ -402,6 +406,10 @@ def build_owasp_agent() -> CodeAgent:
         get_note_content,
         list_available_notes,
         insert_note_content_to_report,
+        # Note creation/modification tools
+        create_note,
+        update_note,
+        create_note_folder,
         # Report regeneration tools
         save_pentest_session,
         restore_pentest_session,
