@@ -3185,6 +3185,33 @@ async def delete_report(data: dict):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/api/reports/save")
+async def save_report(data: dict):
+    """Save a report to disk."""
+    content = data.get("content", "")
+    name = data.get("name", "report")
+    format_type = data.get("format", "html")
+    
+    if not content:
+        return JSONResponse({"error": "Content required"}, status_code=400)
+    
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in name)
+    filename = f"{safe_name}_{timestamp}.{format_type}"
+    
+    file_path = REPORTS_DIR / filename
+    
+    try:
+        file_path.write_text(content, encoding='utf-8')
+        return JSONResponse({
+            "success": True,
+            "path": str(file_path),
+            "filename": filename
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 # ============== NOTES ENDPOINTS ==============
 
 NOTES_DIR = Path("data/notes")
@@ -3467,13 +3494,68 @@ async def export_note(note_id: str, format: str = "html"):
             )
         
         elif format == "pdf":
-            # For PDF, we'd need a library like weasyprint or pdfkit
-            # For now, return HTML with PDF suggestion
-            return JSONResponse({"error": "PDF export requires additional setup. Use HTML export and print to PDF."}, status_code=501)
+            # Generate PDF using html2pdf approach via JavaScript
+            # Create an HTML page that will trigger print-to-PDF
+            html_for_pdf = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{name}</title>
+    <style>
+        @page {{ size: A4; margin: 1.5cm; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 100%; margin: 0; padding: 20px; line-height: 1.6; font-size: 12pt; }}
+        h1 {{ color: #1a1a1a; font-size: 24pt; margin-bottom: 0.5em; }}
+        h2 {{ color: #333; font-size: 18pt; }}
+        h3 {{ color: #444; font-size: 14pt; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-family: 'Consolas', monospace; }}
+        pre {{ background: #f4f4f4; padding: 16px; border-radius: 8px; overflow-x: auto; }}
+        blockquote {{ border-left: 4px solid #22c55e; margin: 16px 0; padding-left: 16px; color: #666; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 1em 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f5f5f5; }}
+        @media print {{ body {{ print-color-adjust: exact; -webkit-print-color-adjust: exact; }} }}
+    </style>
+</head>
+<body>
+    <h1>{name}</h1>
+    {content}
+</body>
+</html>"""
+            # Return the HTML that user can print to PDF
+            return Response(
+                content=html_for_pdf,
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="{name}_print_to_pdf.html"'}
+            )
         
         else:
             return JSONResponse({"error": f"Unsupported format: {format}"}, status_code=400)
             
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/notes/{note_id}/move")
+async def move_note(note_id: str, data: dict):
+    """Move a note or folder to a different parent folder."""
+    target_folder_id = data.get("target_folder_id")  # None means root
+    
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        # Load note data
+        note_data = json.loads(note_file.read_text())
+        
+        # Update parent folder
+        note_data["folder_id"] = target_folder_id
+        note_data["updated_at"] = datetime.now().isoformat()
+        
+        # Save updated note
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse({"success": True, "note_id": note_id, "new_folder": target_folder_id})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -5893,6 +5975,313 @@ h1 {
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(139, 92, 246, 0.15) 100%);
   border-color: rgba(139, 92, 246, 0.5);
 }
+
+/* Notes Fullscreen Modal */
+.notes-fullscreen-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  padding: 2rem;
+}
+.notes-fullscreen-modal.active {
+  display: flex;
+  flex-direction: column;
+}
+.notes-fullscreen-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--gray-900);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+}
+.notes-fullscreen-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.notes-fullscreen-title {
+  flex: 1;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--light);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+.notes-fullscreen-close {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.notes-fullscreen-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+.notes-fullscreen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-wrap: wrap;
+}
+.notes-fullscreen-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+}
+.notes-fullscreen-editor {
+  min-height: 100%;
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--gray-200);
+  outline: none;
+}
+
+/* AI Processing Modal */
+.ai-process-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(8px);
+  z-index: 10001;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.ai-process-modal.active {
+  display: flex;
+}
+.ai-process-container {
+  width: 100%;
+  max-width: 500px;
+  background: var(--gray-900);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(139, 92, 246, 0.25);
+}
+.ai-process-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 100%);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+}
+.ai-process-header svg {
+  width: 24px;
+  height: 24px;
+  color: #a78bfa;
+}
+.ai-process-header span {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--light);
+}
+.ai-process-close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ai-process-close:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--light);
+}
+.ai-process-body {
+  padding: 1.5rem;
+}
+.ai-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.ai-quick-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  color: var(--gray-300);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ai-quick-btn:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.3);
+  color: #a78bfa;
+}
+.ai-quick-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.ai-custom-section {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 1.25rem;
+}
+.ai-custom-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--gray-400);
+  margin-bottom: 0.5rem;
+}
+.ai-custom-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.9rem;
+  resize: none;
+}
+.ai-custom-input:focus {
+  outline: none;
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+}
+.ai-process-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.ai-process-btn {
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ai-process-btn-cancel {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--gray-400);
+}
+.ai-process-btn-cancel:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--gray-200);
+}
+.ai-process-btn-submit {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  border: none;
+  color: white;
+}
+.ai-process-btn-submit:hover {
+  background: linear-gradient(135deg, #9d6fff 0%, #8b5cf6 100%);
+  transform: translateY(-1px);
+}
+.ai-processing-indicator {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  color: #a78bfa;
+}
+.ai-processing-indicator.active {
+  display: flex;
+}
+
+/* Notes Table Styles */
+.notes-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.notes-editor table th,
+.notes-editor table td {
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255,255,255,0.1);
+  text-align: left;
+}
+.notes-editor table th {
+  background: rgba(255,255,255,0.05);
+  font-weight: 600;
+  color: var(--gray-200);
+}
+.notes-editor table tr:hover td {
+  background: rgba(255,255,255,0.03);
+}
+
+/* Drag and Drop Styles for Notes Tree */
+.notes-file.dragging,
+.notes-folder.dragging {
+  opacity: 0.5;
+}
+.notes-file.drag-over,
+.notes-folder-header.drag-over {
+  background: rgba(34, 197, 94, 0.2);
+  border-radius: 6px;
+}
+.notes-drop-indicator {
+  height: 2px;
+  background: var(--success);
+  margin: 2px 0;
+  border-radius: 1px;
+}
+
+/* Expand Button for Notes */
+.notes-expand-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: 0.5rem;
+}
+.notes-expand-btn:hover {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+
 .notes-export-dropdown {
   position: relative;
 }
@@ -8841,10 +9230,27 @@ main {
                     <polyline points="21 15 16 10 5 21"></polyline>
                   </svg>
                 </button>
+                <button class="notes-toolbar-btn" onclick="insertNoteTable()" title="Insert Table">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                    <line x1="3" y1="9" x2="21" y2="9"></line>
+                    <line x1="3" y1="15" x2="21" y2="15"></line>
+                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                    <line x1="15" y1="3" x2="15" y2="21"></line>
+                  </svg>
+                </button>
               </div>
               <div class="notes-toolbar-spacer"></div>
               <div class="notes-toolbar-group notes-toolbar-actions">
-                <button class="notes-toolbar-btn notes-ai-btn" onclick="processNoteWithAI()" title="Process with AI">
+                <button class="notes-toolbar-btn notes-expand-btn" onclick="openNotesFullscreen()" title="Open in Fullscreen">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <polyline points="9 21 3 21 3 15"></polyline>
+                    <line x1="21" y1="3" x2="14" y2="10"></line>
+                    <line x1="3" y1="21" x2="10" y2="14"></line>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn notes-ai-btn" onclick="openAIProcessModal()" title="Process with AI">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                     <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
                     <circle cx="7.5" cy="14.5" r="1.5"></circle>
@@ -9827,6 +10233,169 @@ main {
     <img id="image-modal-img" src="" alt="Full size screenshot">
   </div>
   
+  <!-- Notes Fullscreen Modal -->
+  <div class="notes-fullscreen-modal" id="notes-fullscreen-modal">
+    <div class="notes-fullscreen-container">
+      <div class="notes-fullscreen-header">
+        <input type="text" class="notes-fullscreen-title" id="fullscreen-note-title" placeholder="Note Title">
+        <button class="notes-fullscreen-close" onclick="closeNotesFullscreen()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="notes-fullscreen-toolbar">
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('bold')" title="Bold"><strong>B</strong></button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('italic')" title="Italic"><em>I</em></button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('underline')" title="Underline"><u>U</u></button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('strikethrough')" title="Strikethrough"><s>S</s></button>
+        <div class="notes-toolbar-separator"></div>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('h1')" title="Heading 1">H1</button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('h2')" title="Heading 2">H2</button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('h3')" title="Heading 3">H3</button>
+        <div class="notes-toolbar-separator"></div>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('ul')" title="Bullet List">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <circle cx="3" cy="6" r="1" fill="currentColor"></circle>
+            <circle cx="3" cy="12" r="1" fill="currentColor"></circle>
+            <circle cx="3" cy="18" r="1" fill="currentColor"></circle>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('ol')" title="Numbered List">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <line x1="10" y1="6" x2="21" y2="6"></line>
+            <line x1="10" y1="12" x2="21" y2="12"></line>
+            <line x1="10" y1="18" x2="21" y2="18"></line>
+            <text x="3" y="8" font-size="8" fill="currentColor">1</text>
+            <text x="3" y="14" font-size="8" fill="currentColor">2</text>
+            <text x="3" y="20" font-size="8" fill="currentColor">3</text>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('quote')" title="Quote">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+            <path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="formatFullscreenText('code')" title="Code Block">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+        </button>
+        <div class="notes-toolbar-separator"></div>
+        <button class="notes-toolbar-btn" onclick="insertFullscreenTable()" title="Insert Table">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+            <line x1="3" y1="9" x2="21" y2="9"></line>
+            <line x1="3" y1="15" x2="21" y2="15"></line>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+            <line x1="15" y1="3" x2="15" y2="21"></line>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="insertFullscreenLink()" title="Insert Link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="notes-fullscreen-content">
+        <div class="notes-fullscreen-editor notes-editor" id="fullscreen-note-editor" contenteditable="true"></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- AI Process Modal -->
+  <div class="ai-process-modal" id="ai-process-modal">
+    <div class="ai-process-container">
+      <div class="ai-process-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          <circle cx="7.5" cy="14.5" r="1.5"></circle>
+          <circle cx="16.5" cy="14.5" r="1.5"></circle>
+        </svg>
+        <span>AI Note Processing</span>
+        <button class="ai-process-close" onclick="closeAIProcessModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="ai-process-body">
+        <div class="ai-quick-actions">
+          <button class="ai-quick-btn" onclick="executeAIAction('summarize')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <line x1="21" y1="10" x2="3" y2="10"></line>
+              <line x1="21" y1="6" x2="3" y2="6"></line>
+              <line x1="21" y1="14" x2="3" y2="14"></line>
+              <line x1="21" y1="18" x2="10" y2="18"></line>
+            </svg>
+            Summarize
+          </button>
+          <button class="ai-quick-btn" onclick="executeAIAction('fix_grammar')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+            Fix Grammar
+          </button>
+          <button class="ai-quick-btn" onclick="executeAIAction('extract_tasks')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="9 11 12 14 22 4"></polyline>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+            </svg>
+            Extract Tasks
+          </button>
+          <button class="ai-quick-btn" onclick="executeAIAction('expand')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <polyline points="19 12 12 19 5 12"></polyline>
+            </svg>
+            Expand Content
+          </button>
+          <button class="ai-quick-btn" onclick="executeAIAction('bullet_points')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+            To Bullet Points
+          </button>
+          <button class="ai-quick-btn" onclick="executeAIAction('security_analysis')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            Security Analysis
+          </button>
+        </div>
+        <div class="ai-custom-section">
+          <label class="ai-custom-label">Or enter custom instructions:</label>
+          <textarea class="ai-custom-input" id="ai-custom-prompt" rows="3" placeholder="E.g., Translate to Spanish, Add more technical details, Format as a report..."></textarea>
+        </div>
+        <div class="ai-processing-indicator" id="ai-processing-indicator">
+          <svg width="24" height="24" viewBox="0 0 24 24" class="spinner">
+            <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="31.4" stroke-linecap="round">
+              <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+            </circle>
+          </svg>
+          <span>Processing with AI...</span>
+        </div>
+      </div>
+      <div class="ai-process-footer">
+        <button class="ai-process-btn ai-process-btn-cancel" onclick="closeAIProcessModal()">Cancel</button>
+        <button class="ai-process-btn ai-process-btn-submit" onclick="executeAIAction('custom')">Process</button>
+      </div>
+    </div>
+  </div>
+  
   <main>
     <div id="chat-container">
       <div id="messages"></div>
@@ -10730,6 +11299,13 @@ document.addEventListener('keydown', (e) => {
     closeTaskModal();
     closeChainBuilder();
     document.getElementById('image-modal').classList.remove('active');
+    // Close notes modals
+    if (document.getElementById('notes-fullscreen-modal')?.classList.contains('active')) {
+      closeNotesFullscreen();
+    }
+    if (document.getElementById('ai-process-modal')?.classList.contains('active')) {
+      closeAIProcessModal();
+    }
   }
 });
 
@@ -11233,6 +11809,8 @@ async function loadNotesTree() {
     if (!response.ok) throw new Error('Failed to load notes');
     notesStore = await response.json();
     renderNotesTree(notesStore);
+    // Initialize drag and drop after rendering
+    initNotesDragDrop();
   } catch (error) {
     console.error('Error loading notes:', error);
     treeEl.innerHTML = '<div class="notes-tree-loading">Failed to load notes</div>';
@@ -11273,7 +11851,7 @@ function renderNoteFolder(folder) {
   }).join('');
   
   return `
-    <div class="notes-folder" data-path="${escapeHtml(folder.path)}">
+    <div class="notes-folder" data-id="${folder.id || folder.path}" data-path="${escapeHtml(folder.path)}" draggable="true">
       <div class="notes-folder-header" onclick="toggleNoteFolder(this)">
         <svg class="folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 18 15 12 9 6"></polyline>
@@ -11291,7 +11869,7 @@ function renderNoteFolder(folder) {
 function renderNoteFile(file) {
   const activeClass = currentNoteId === file.id ? 'active' : '';
   return `
-    <div class="notes-file ${activeClass}" data-id="${file.id}" onclick="selectNote('${file.id}')">
+    <div class="notes-file ${activeClass}" data-id="${file.id}" onclick="selectNote('${file.id}')" draggable="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
         <polyline points="14 2 14 8 20 8"></polyline>
@@ -11555,8 +12133,12 @@ async function insertNoteImage() {
   input.click();
 }
 
-async function processNoteWithAI() {
-  if (!currentNoteId) return;
+// AI Process Modal Functions
+function openAIProcessModal() {
+  if (!currentNoteId) {
+    alert('Please select a note first');
+    return;
+  }
   
   const content = document.getElementById('notes-editor').innerText;
   if (!content.trim()) {
@@ -11564,8 +12146,53 @@ async function processNoteWithAI() {
     return;
   }
   
-  const action = prompt('What should AI do with this note?\\n\\nExamples:\\n- Summarize\\n- Fix grammar\\n- Convert to task list\\n- Extract key points\\n- Translate to Spanish');
-  if (!action) return;
+  document.getElementById('ai-custom-prompt').value = '';
+  document.getElementById('ai-processing-indicator').classList.remove('active');
+  document.getElementById('ai-process-modal').classList.add('active');
+}
+
+function closeAIProcessModal() {
+  document.getElementById('ai-process-modal').classList.remove('active');
+}
+
+async function executeAIAction(actionType) {
+  if (!currentNoteId) return;
+  
+  let action = '';
+  switch(actionType) {
+    case 'summarize':
+      action = 'Summarize this content concisely, keeping key points';
+      break;
+    case 'fix_grammar':
+      action = 'Fix grammar, spelling, and improve readability';
+      break;
+    case 'extract_tasks':
+      action = 'Extract action items and tasks as a checkbox list';
+      break;
+    case 'expand':
+      action = 'Expand this content with more details and examples';
+      break;
+    case 'bullet_points':
+      action = 'Convert this content into organized bullet points';
+      break;
+    case 'security_analysis':
+      action = 'Analyze this from a security perspective, identify risks and recommendations';
+      break;
+    case 'custom':
+      action = document.getElementById('ai-custom-prompt').value.trim();
+      if (!action) {
+        alert('Please enter custom instructions');
+        return;
+      }
+      break;
+    default:
+      return;
+  }
+  
+  const content = document.getElementById('notes-editor').innerText;
+  
+  // Show processing indicator
+  document.getElementById('ai-processing-indicator').classList.add('active');
   
   try {
     const response = await fetch('/api/notes/' + currentNoteId + '/process', {
@@ -11581,9 +12208,245 @@ async function processNoteWithAI() {
       document.getElementById('notes-editor').innerHTML = result.content;
       onNoteContentChange();
     }
+    
+    closeAIProcessModal();
   } catch (error) {
     console.error('Error processing note:', error);
     alert('Failed to process note with AI: ' + error.message);
+  } finally {
+    document.getElementById('ai-processing-indicator').classList.remove('active');
+  }
+}
+
+// Keep old function for backward compatibility
+async function processNoteWithAI() {
+  openAIProcessModal();
+}
+
+// Fullscreen Notes Modal Functions
+function openNotesFullscreen() {
+  if (!currentNoteId) {
+    alert('Please select a note first');
+    return;
+  }
+  
+  const title = document.getElementById('note-title-input').value;
+  const content = document.getElementById('notes-editor').innerHTML;
+  
+  document.getElementById('fullscreen-note-title').value = title;
+  document.getElementById('fullscreen-note-editor').innerHTML = content;
+  document.getElementById('notes-fullscreen-modal').classList.add('active');
+  
+  // Focus the editor
+  document.getElementById('fullscreen-note-editor').focus();
+}
+
+function closeNotesFullscreen() {
+  // Sync content back to main editor
+  const title = document.getElementById('fullscreen-note-title').value;
+  const content = document.getElementById('fullscreen-note-editor').innerHTML;
+  
+  document.getElementById('note-title-input').value = title;
+  document.getElementById('notes-editor').innerHTML = content;
+  
+  document.getElementById('notes-fullscreen-modal').classList.remove('active');
+  
+  // Save note
+  onNoteContentChange();
+  onNoteTitleChange();
+}
+
+function formatFullscreenText(command) {
+  const editor = document.getElementById('fullscreen-note-editor');
+  editor.focus();
+  
+  switch(command) {
+    case 'bold':
+      document.execCommand('bold', false, null);
+      break;
+    case 'italic':
+      document.execCommand('italic', false, null);
+      break;
+    case 'underline':
+      document.execCommand('underline', false, null);
+      break;
+    case 'strikethrough':
+      document.execCommand('strikeThrough', false, null);
+      break;
+    case 'h1':
+      document.execCommand('formatBlock', false, '<h1>');
+      break;
+    case 'h2':
+      document.execCommand('formatBlock', false, '<h2>');
+      break;
+    case 'h3':
+      document.execCommand('formatBlock', false, '<h3>');
+      break;
+    case 'ul':
+      document.execCommand('insertUnorderedList', false, null);
+      break;
+    case 'ol':
+      document.execCommand('insertOrderedList', false, null);
+      break;
+    case 'quote':
+      document.execCommand('formatBlock', false, '<blockquote>');
+      break;
+    case 'code':
+      document.execCommand('formatBlock', false, '<pre>');
+      break;
+  }
+}
+
+function insertFullscreenTable() {
+  const editor = document.getElementById('fullscreen-note-editor');
+  insertTableAtCursor(editor);
+}
+
+function insertFullscreenLink() {
+  const url = prompt('Enter URL:');
+  if (url) {
+    document.execCommand('createLink', false, url);
+  }
+}
+
+// Table Support Functions
+function insertNoteTable() {
+  const editor = document.getElementById('notes-editor');
+  insertTableAtCursor(editor);
+}
+
+function insertTableAtCursor(editor) {
+  const rows = prompt('Number of rows:', '3');
+  const cols = prompt('Number of columns:', '3');
+  
+  if (!rows || !cols) return;
+  
+  const numRows = parseInt(rows);
+  const numCols = parseInt(cols);
+  
+  if (isNaN(numRows) || isNaN(numCols) || numRows < 1 || numCols < 1) {
+    alert('Invalid table size');
+    return;
+  }
+  
+  let tableHtml = '<table><thead><tr>';
+  for (let c = 0; c < numCols; c++) {
+    tableHtml += '<th>Header ' + (c + 1) + '</th>';
+  }
+  tableHtml += '</tr></thead><tbody>';
+  
+  for (let r = 0; r < numRows - 1; r++) {
+    tableHtml += '<tr>';
+    for (let c = 0; c < numCols; c++) {
+      tableHtml += '<td>&nbsp;</td>';
+    }
+    tableHtml += '</tr>';
+  }
+  tableHtml += '</tbody></table><p><br></p>';
+  
+  editor.focus();
+  document.execCommand('insertHTML', false, tableHtml);
+  onNoteContentChange();
+}
+
+// Drag and Drop for Notes Tree
+function initNotesDragDrop() {
+  const tree = document.getElementById('notes-tree');
+  if (!tree) return;
+  
+  tree.addEventListener('dragstart', handleNotesDragStart);
+  tree.addEventListener('dragover', handleNotesDragOver);
+  tree.addEventListener('dragleave', handleNotesDragLeave);
+  tree.addEventListener('drop', handleNotesDrop);
+  tree.addEventListener('dragend', handleNotesDragEnd);
+}
+
+let draggedNoteElement = null;
+let draggedNoteType = null;
+let draggedNoteId = null;
+
+function handleNotesDragStart(e) {
+  const target = e.target.closest('.notes-file, .notes-folder');
+  if (!target) return;
+  
+  draggedNoteElement = target;
+  draggedNoteType = target.classList.contains('notes-file') ? 'file' : 'folder';
+  draggedNoteId = target.dataset.id;
+  
+  target.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', draggedNoteId);
+}
+
+function handleNotesDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  
+  const target = e.target.closest('.notes-folder-header, .notes-file');
+  if (!target || target === draggedNoteElement) return;
+  
+  // Clear previous drag-over classes
+  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  
+  if (target.classList.contains('notes-folder-header')) {
+    target.classList.add('drag-over');
+  }
+}
+
+function handleNotesDragLeave(e) {
+  const target = e.target.closest('.notes-folder-header, .notes-file');
+  if (target) {
+    target.classList.remove('drag-over');
+  }
+}
+
+async function handleNotesDrop(e) {
+  e.preventDefault();
+  
+  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  
+  if (!draggedNoteElement || !draggedNoteId) return;
+  
+  const dropTarget = e.target.closest('.notes-folder-header');
+  if (!dropTarget) {
+    // Dropped on root - move to root folder
+    await moveNoteToFolder(draggedNoteId, draggedNoteType, null);
+  } else {
+    const targetFolder = dropTarget.closest('.notes-folder');
+    const targetFolderId = targetFolder?.dataset.id;
+    
+    if (targetFolderId && targetFolderId !== draggedNoteId) {
+      await moveNoteToFolder(draggedNoteId, draggedNoteType, targetFolderId);
+    }
+  }
+}
+
+function handleNotesDragEnd(e) {
+  if (draggedNoteElement) {
+    draggedNoteElement.classList.remove('dragging');
+  }
+  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  
+  draggedNoteElement = null;
+  draggedNoteType = null;
+  draggedNoteId = null;
+}
+
+async function moveNoteToFolder(noteId, noteType, targetFolderId) {
+  try {
+    const response = await fetch('/api/notes/' + noteId + '/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_folder_id: targetFolderId })
+    });
+    
+    if (!response.ok) throw new Error('Failed to move note');
+    
+    // Reload notes tree
+    await loadNotesTree();
+  } catch (error) {
+    console.error('Error moving note:', error);
+    alert('Failed to move: ' + error.message);
   }
 }
 
