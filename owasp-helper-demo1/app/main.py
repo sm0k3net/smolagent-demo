@@ -3552,14 +3552,13 @@ async def export_note(note_id: str, format: str = "html"):
             )
         
         elif format == "pdf":
-            # Generate PDF using Playwright
-            try:
-                from playwright.sync_api import sync_playwright
-                import tempfile
-                import os
-                
-                # Create HTML content for PDF
-                html_for_pdf = f"""<!DOCTYPE html>
+            # Generate PDF using subprocess to avoid sync_playwright in async context
+            import tempfile
+            import subprocess
+            import sys
+            
+            # Create HTML content for PDF
+            html_for_pdf = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -3585,24 +3584,65 @@ async def export_note(note_id: str, format: str = "html"):
     {content}
 </body>
 </html>"""
+            
+            try:
+                # Create temp files for HTML input and PDF output
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as html_file:
+                    html_file.write(html_for_pdf)
+                    html_path = html_file.name
                 
-                # Generate PDF using Playwright
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=True)
-                    page = browser.new_page()
-                    page.set_content(html_for_pdf)
-                    
-                    # Generate PDF
-                    pdf_bytes = page.pdf(format="A4", print_background=True)
-                    browser.close()
+                pdf_path = html_path.replace('.html', '.pdf')
                 
-                return Response(
-                    content=pdf_bytes,
-                    media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'}
+                # Use subprocess to run playwright PDF generation script
+                script = f'''
+import sys
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        with open("{html_path}", "r", encoding="utf-8") as f:
+            page.set_content(f.read())
+        page.pdf(path="{pdf_path}", format="A4", print_background=True)
+        browser.close()
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    sys.exit(1)
+'''
+                
+                result = subprocess.run(
+                    [sys.executable, '-c', script],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
                 )
                 
-            except ImportError:
+                if result.returncode == 0 and os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as f:
+                        pdf_bytes = f.read()
+                    
+                    # Cleanup temp files
+                    try:
+                        os.unlink(html_path)
+                        os.unlink(pdf_path)
+                    except:
+                        pass
+                    
+                    return Response(
+                        content=pdf_bytes,
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'}
+                    )
+                else:
+                    # Cleanup and fallback
+                    try:
+                        os.unlink(html_path)
+                    except:
+                        pass
+                    raise Exception(result.stderr or "PDF generation failed")
+                    
+            except Exception as e:
                 # Fallback to HTML with print instructions
                 html_for_pdf = f"""<!DOCTYPE html>
 <html>
@@ -3628,7 +3668,8 @@ async def export_note(note_id: str, format: str = "html"):
 </head>
 <body>
     <div class="print-notice">
-        <strong>Note:</strong> Playwright is not installed. Use Ctrl+P (Cmd+P on Mac) to print this page as PDF.
+        <strong>Note:</strong> PDF generation requires Playwright. Use Ctrl+P (Cmd+P on Mac) to print this page as PDF.<br>
+        <small>Error: {str(e)}</small>
     </div>
     <h1>{name}</h1>
     {content}
@@ -3639,8 +3680,6 @@ async def export_note(note_id: str, format: str = "html"):
                     media_type="text/html",
                     headers={"Content-Disposition": f'attachment; filename="{name}_print_as_pdf.html"'}
                 )
-            except Exception as e:
-                return JSONResponse({"error": f"PDF generation failed: {str(e)}"}, status_code=500)
         
         else:
             return JSONResponse({"error": f"Unsupported format: {format}"}, status_code=400)
@@ -6117,7 +6156,7 @@ h1 {
   border-color: rgba(34, 197, 94, 0.3);
   color: var(--success);
 }
-.notes-ai-btn, .notes-export-btn {
+.notes-ai-btn, .notes-export-btn, .notes-task-btn {
   width: auto;
   padding: 0 0.75rem;
   gap: 0.35rem;
@@ -6131,6 +6170,15 @@ h1 {
 .notes-ai-btn:hover {
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(139, 92, 246, 0.15) 100%);
   border-color: rgba(139, 92, 246, 0.5);
+}
+.notes-task-btn {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(34, 197, 94, 0.08) 100%);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+.notes-task-btn:hover {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.25) 0%, rgba(34, 197, 94, 0.15) 100%);
+  border-color: rgba(34, 197, 94, 0.5);
 }
 
 /* Notes Fullscreen Modal */
@@ -9542,7 +9590,7 @@ main {
                   </svg>
                   <span>AI</span>
                 </button>
-                <button class="notes-toolbar-btn" onclick="createTaskFromNote()" title="Create Task from Note">
+                <button class="notes-toolbar-btn notes-task-btn" onclick="showNoteTaskModal()" title="Create Task from Note">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                     <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
                     <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
@@ -10020,11 +10068,76 @@ main {
           </div>
           
           <div class="settings-section">
+            <div class="settings-section-title">💬 Slack Integration</div>
+            <div class="api-key-item">
+              <span class="api-key-label">Webhook URL</span>
+              <input type="password" class="api-key-input" id="api-key-slack_webhook" placeholder="https://hooks.slack.com/services/...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('slack_webhook')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('slack_webhook')">🗑️</button>
+            </div>
+            <div class="api-key-item">
+              <span class="api-key-label">Bot Token</span>
+              <input type="password" class="api-key-input" id="api-key-slack_bot" placeholder="xoxb-...">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('slack_bot')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('slack_bot')">🗑️</button>
+            </div>
+            <div class="api-key-item">
+              <span class="api-key-label">App Token</span>
+              <input type="password" class="api-key-input" id="api-key-slack_app" placeholder="xapp-... (for Socket Mode)">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('slack_app')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('slack_app')">🗑️</button>
+            </div>
+            <div class="api-key-item">
+              <span class="api-key-label">Channel</span>
+              <input type="text" class="api-key-input" id="api-key-slack_channel" placeholder="#security-alerts or C0123456789">
+              <button class="api-key-btn api-key-btn-save" onclick="saveApiKey('slack_channel')">💾</button>
+              <button class="api-key-btn api-key-btn-delete" onclick="deleteApiKey('slack_channel')">🗑️</button>
+            </div>
+            <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 8px; line-height: 1.5;">
+              <strong>Webhook URL:</strong> Easiest setup - for sending messages only.<br>
+              <strong>Bot Token:</strong> Required for file uploads and advanced features.<br>
+              <strong>App Token:</strong> Required for receiving messages (Socket Mode).<br>
+              Create at <a href="https://api.slack.com/apps" target="_blank" style="color: var(--primary);">api.slack.com/apps</a>
+            </p>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 0.85rem; font-weight: 500;">🎧 Channel Monitoring</span>
+                <label class="checkbox-wrapper" style="margin: 0;">
+                  <input type="checkbox" id="slack-monitoring-toggle">
+                  <span class="checkmark"></span>
+                  <span class="checkbox-label">Enable</span>
+                </label>
+              </div>
+              <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.4;">
+                When enabled with Socket Mode, the agent can receive commands from Slack.<br>
+                Requires App Token with <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">connections:write</code> scope.
+              </p>
+              <div id="slack-monitoring-status" style="margin-top: 8px; font-size: 0.8rem; color: var(--gray-400);">Status: Not connected</div>
+            </div>
+          </div>
+          
+          <div class="settings-section">
             <div class="settings-section-title">🔔 Notifications</div>
             <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
-              Configure notification channels for scan results and alerts.
-              (Coming soon: Discord, Slack, Email integrations)
+              Configure which events trigger notifications via connected channels.
             </p>
+            <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+              <label class="checkbox-wrapper" style="margin: 0;">
+                <input type="checkbox" id="notify-scan-complete" checked>
+                <span class="checkmark"></span>
+                <span class="checkbox-label">Scan completed</span>
+              </label>
+              <label class="checkbox-wrapper" style="margin: 0;">
+                <input type="checkbox" id="notify-critical-finding" checked>
+                <span class="checkmark"></span>
+                <span class="checkbox-label">Critical/High findings</span>
+              </label>
+              <label class="checkbox-wrapper" style="margin: 0;">
+                <input type="checkbox" id="notify-scheduled-task">
+                <span class="checkmark"></span>
+                <span class="checkbox-label">Scheduled task results</span>
+              </label>
+            </div>
           </div>
         </div>
         
@@ -10359,28 +10472,28 @@ main {
               Quick Templates
             </label>
             <div class="schedule-templates">
-              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('daily_scan')">
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('daily_scan', event)">
                 <span class="template-icon">🔍</span>
                 <span class="template-text">
                   <span class="template-name">Daily Recon</span>
                   <span class="template-desc">Subdomain & port scan</span>
                 </span>
               </button>
-              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('weekly_vuln')">
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('weekly_vuln', event)">
                 <span class="template-icon">🛡️</span>
                 <span class="template-text">
                   <span class="template-name">Weekly Vuln Scan</span>
                   <span class="template-desc">Full vulnerability assessment</span>
                 </span>
               </button>
-              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('osint_check')">
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('osint_check', event)">
                 <span class="template-icon">🕵️</span>
                 <span class="template-text">
                   <span class="template-name">OSINT Monitor</span>
                   <span class="template-desc">Breach & exposure check</span>
                 </span>
               </button>
-              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('ssl_monitor')">
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('ssl_monitor', event)">
                 <span class="template-icon">🔒</span>
                 <span class="template-text">
                   <span class="template-name">SSL Monitor</span>
@@ -10704,6 +10817,52 @@ main {
       <div class="ai-process-footer">
         <button class="ai-process-btn ai-process-btn-cancel" onclick="closeAIProcessModal()">Cancel</button>
         <button class="ai-process-btn ai-process-btn-submit" onclick="executeAIAction('custom')">Process</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Note Task Modal -->
+  <div class="ai-process-modal" id="note-task-modal">
+    <div class="ai-process-container" style="max-width: 400px;">
+      <div class="ai-process-header" style="background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.05) 100%);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+          <polyline points="9 14 12 17 22 7"></polyline>
+        </svg>
+        <span style="color: #4ade80;">Create Task from Note</span>
+        <button class="ai-process-close" onclick="closeNoteTaskModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="ai-process-body" style="padding: 1.5rem;">
+        <p style="color: var(--gray-400); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.5;">
+          The note content will be used as task instructions for the agent.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <button class="ai-quick-btn" onclick="runNoteTaskInstantly()" style="padding: 1rem; justify-content: flex-start; background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(34, 197, 94, 0.08) 100%); border-color: rgba(34, 197, 94, 0.3);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" width="20" height="20">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <div style="text-align: left;">
+              <span style="display: block; font-weight: 600; color: #4ade80;">Run Instantly</span>
+              <span style="display: block; font-size: 0.75rem; color: var(--gray-400); margin-top: 2px;">Execute the task immediately</span>
+            </div>
+          </button>
+          <button class="ai-quick-btn" onclick="scheduleNoteTask()" style="padding: 1rem; justify-content: flex-start;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <div style="text-align: left;">
+              <span style="display: block; font-weight: 600;">Schedule Task</span>
+              <span style="display: block; font-size: 0.75rem; color: var(--gray-400); margin-top: 2px;">Run at a specific time or recurring</span>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -11640,7 +11799,11 @@ const API_KEY_MAP = {
   'censys': 'CENSYS_API_KEY',
   'alienvault': 'ALIENVAULT_API_KEY',
   'telegram_bot': 'TELEGRAM_BOT_TOKEN',
-  'telegram_chat': 'TELEGRAM_CHAT_ID'
+  'telegram_chat': 'TELEGRAM_CHAT_ID',
+  'slack_webhook': 'SLACK_WEBHOOK_URL',
+  'slack_bot': 'SLACK_BOT_TOKEN',
+  'slack_app': 'SLACK_APP_TOKEN',
+  'slack_channel': 'SLACK_CHANNEL'
 };
 
 // Reverse mapping for display
@@ -12943,6 +13106,53 @@ function createTaskFromNote() {
   const title = document.getElementById('note-title-input').value;
   
   console.log('Creating task from note:', title, 'content length:', content.length);
+  
+  // Pre-fill the schedule modal with note content
+  document.getElementById('schedule-name').value = title;
+  document.getElementById('schedule-prompt').value = content.substring(0, 2000);
+  
+  showScheduleModal();
+}
+
+function showNoteTaskModal() {
+  console.log('showNoteTaskModal called, currentNoteId:', currentNoteId);
+  if (!currentNoteId) {
+    alert('Please select or create a note first');
+    return;
+  }
+  document.getElementById('note-task-modal').classList.add('active');
+}
+
+function closeNoteTaskModal() {
+  document.getElementById('note-task-modal').classList.remove('active');
+}
+
+function runNoteTaskInstantly() {
+  closeNoteTaskModal();
+  
+  const content = document.getElementById('notes-editor').innerText;
+  const title = document.getElementById('note-title-input').value || 'Note Task';
+  
+  // Put content in the chat input and send
+  const messageInput = document.getElementById('message-input');
+  messageInput.value = content.substring(0, 4000);
+  autoResizeTextarea(messageInput);
+  
+  // Switch to chat tab
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-tab="chat"]')?.classList.add('active');
+  document.querySelectorAll('.sidebar-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('sidebar-chat')?.classList.add('active');
+  
+  // Send the message
+  sendMessage();
+}
+
+function scheduleNoteTask() {
+  closeNoteTaskModal();
+  
+  const content = document.getElementById('notes-editor').innerText;
+  const title = document.getElementById('note-title-input').value || 'Note Task';
   
   // Pre-fill the schedule modal with note content
   document.getElementById('schedule-name').value = title;
@@ -15713,9 +15923,14 @@ const scheduleTemplates = {
   }
 };
 
-function applyScheduleTemplate(templateId) {
+function applyScheduleTemplate(templateId, event) {
   const template = scheduleTemplates[templateId];
-  if (!template) return;
+  if (!template) {
+    console.error('Template not found:', templateId);
+    return;
+  }
+  
+  console.log('Applying template:', templateId, template);
   
   // Update form fields
   document.getElementById('schedule-name').value = template.name;
@@ -15725,7 +15940,15 @@ function applyScheduleTemplate(templateId) {
   document.querySelectorAll('.schedule-template-btn').forEach(btn => {
     btn.classList.remove('active');
   });
-  event.target.closest('.schedule-template-btn').classList.add('active');
+  
+  // Find the clicked button
+  if (event && event.currentTarget) {
+    event.currentTarget.classList.add('active');
+  } else if (event && event.target) {
+    const btn = event.target.closest('.schedule-template-btn');
+    if (btn) btn.classList.add('active');
+  }
+  
   selectedScheduleTemplate = templateId;
   
   // Focus on time field so user can set schedule
