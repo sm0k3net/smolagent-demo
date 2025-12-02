@@ -5428,6 +5428,47 @@ h1 {
   background: rgba(245, 158, 11, 0.1);
   border-left: 3px solid #f59e0b;
 }
+/* Chain task in Activity Monitor */
+.task-item.chain-task {
+  border-color: #8b5cf6;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.05));
+  border-left: 3px solid #8b5cf6;
+}
+.task-item.chain-task:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(99, 102, 241, 0.08));
+}
+.mini-chain-step {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.mini-chain-step.pending {
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-400);
+}
+.mini-chain-step.running {
+  background: rgba(59, 130, 246, 0.4);
+  color: #60a5fa;
+  animation: pulseStep 1.5s infinite;
+}
+.mini-chain-step.completed {
+  background: rgba(34, 197, 94, 0.4);
+  color: var(--success);
+}
+.mini-chain-step.failed {
+  background: rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+}
+@keyframes pulseStep {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  50% { transform: scale(1.1); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
+}
 .resumable-item {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(251, 191, 36, 0.05));
   border: 1px solid rgba(245, 158, 11, 0.3);
@@ -5492,6 +5533,22 @@ h1 {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.5rem;
+}
+.resumable-item .btn-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resumable-item .btn-view:hover {
+  background: rgba(99, 102, 241, 0.4);
 }
 .resumable-item .btn-resume {
   flex: 1;
@@ -5843,6 +5900,20 @@ h1 {
 }
 .schedule-template-btn .template-icon {
   font-size: 1rem;
+  pointer-events: none;
+}
+.schedule-template-btn .template-text {
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+.schedule-template-btn .template-name {
+  pointer-events: none;
+}
+.schedule-template-btn .template-desc {
+  pointer-events: none;
+  font-size: 0.68rem;
+  color: var(--gray-400);
 }
 
 /* Schedule Visual Separator */
@@ -7095,7 +7166,7 @@ h1 {
   flex: 1;
   overflow: hidden;
   padding: 0.5rem;
-  gap: 0.5rem;
+  gap: 4px;
   min-height: 0;
 }
 .collapsible-section {
@@ -7105,14 +7176,31 @@ h1 {
   border: 1px solid rgba(255,255,255,0.06);
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 120px;
-  max-height: 50%;
+  min-height: 44px;
+  position: relative;
 }
 .collapsible-section.collapsed {
-  flex: 0 0 auto;
-  min-height: auto;
-  max-height: none;
+  flex: 0 0 auto !important;
+  min-height: 44px !important;
+  height: 44px !important;
+}
+.collapsible-section .section-resize-handle {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  background: transparent;
+  z-index: 10;
+  transition: background 0.2s;
+}
+.collapsible-section .section-resize-handle:hover,
+.collapsible-section .section-resize-handle.dragging {
+  background: rgba(99, 102, 241, 0.4);
+}
+.collapsible-section.collapsed .section-resize-handle {
+  display: none;
 }
 .section-toggle {
   width: 100%;
@@ -7314,6 +7402,15 @@ h1 {
 }
 .chain-btn-start:hover {
   background: var(--success);
+  color: white;
+}
+.chain-btn-view {
+  background: rgba(99, 102, 241, 0.3);
+  color: var(--primary-light);
+  padding: 6px 8px;
+}
+.chain-btn-view:hover {
+  background: var(--primary);
   color: white;
 }
 .chain-btn-stop {
@@ -7557,6 +7654,391 @@ h1 {
 .chain-builder-btn-create:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+}
+
+/* Task Detail Modal */
+.task-detail-modal,
+.chain-task-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.7);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 10001;
+  backdrop-filter: blur(4px);
+}
+.task-detail-modal.active,
+.chain-task-modal.active {
+  display: flex;
+}
+.task-detail-container,
+.chain-task-container {
+  background: var(--dark-200);
+  border-radius: 16px;
+  width: 600px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+}
+.chain-task-container {
+  width: 800px;
+}
+.task-detail-header,
+.chain-task-header {
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.task-detail-title-section,
+.chain-task-title-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.task-detail-title-section svg,
+.chain-task-title-section svg {
+  stroke: var(--primary);
+}
+#task-detail-title,
+#chain-task-title {
+  font-weight: 600;
+  color: var(--gray-100);
+}
+.task-detail-status {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.task-detail-status.pending { background: rgba(100, 116, 139, 0.3); color: var(--gray-300); }
+.task-detail-status.running { background: rgba(59, 130, 246, 0.3); color: #60a5fa; }
+.task-detail-status.completed { background: rgba(34, 197, 94, 0.3); color: var(--success); }
+.task-detail-status.failed { background: rgba(239, 68, 68, 0.3); color: var(--danger); }
+.task-detail-status.paused { background: rgba(234, 179, 8, 0.3); color: #fbbf24; }
+.task-detail-status.interrupted { background: rgba(251, 146, 60, 0.3); color: #fb923c; }
+.task-detail-close,
+.chain-task-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-400);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.task-detail-close:hover,
+.chain-task-close:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+.task-detail-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+.task-detail-section {
+  margin-bottom: 1.25rem;
+}
+.task-detail-section:last-child {
+  margin-bottom: 0;
+}
+.task-detail-section h4 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gray-300);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.task-detail-prompt {
+  background: rgba(0,0,0,0.3);
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: var(--gray-200);
+  line-height: 1.6;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.task-progress-stats {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+}
+.task-progress-stats span {
+  font-size: 0.85rem;
+  color: var(--gray-400);
+}
+.task-progress-stats strong {
+  color: var(--primary-light);
+}
+.task-detail-result {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--gray-200);
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.task-detail-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #fca5a5;
+}
+.task-detail-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  background: rgba(0,0,0,0.2);
+}
+.task-detail-btn {
+  padding: 0.6rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s;
+}
+.task-detail-btn-close {
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-300);
+}
+.task-detail-btn-close:hover {
+  background: var(--gray-500);
+}
+.task-detail-btn-resume {
+  background: var(--gradient-primary);
+  color: white;
+}
+.task-detail-btn-resume:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+}
+/* Chain Task Modal Styles */
+.chain-task-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.chain-task-steps {
+  width: 220px;
+  border-right: 1px solid rgba(255,255,255,0.1);
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgba(0,0,0,0.2);
+}
+.chain-task-step-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+.chain-task-step-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+.chain-task-step-item.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+.chain-task-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.chain-task-step-num.pending { background: rgba(100, 116, 139, 0.3); color: var(--gray-300); }
+.chain-task-step-num.running { background: rgba(59, 130, 246, 0.3); color: #60a5fa; }
+.chain-task-step-num.completed { background: rgba(34, 197, 94, 0.3); color: var(--success); }
+.chain-task-step-num.failed { background: rgba(239, 68, 68, 0.3); color: var(--danger); }
+.chain-task-step-info {
+  flex: 1;
+  min-width: 0;
+}
+.chain-task-step-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--gray-200);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chain-task-step-status {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  text-transform: capitalize;
+}
+.chain-task-detail {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+/* Chain Task Step Clickable Item */
+.chain-task-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+  background: rgba(0,0,0,0.2);
+}
+.chain-task-step:hover {
+  background: rgba(255,255,255,0.08);
+}
+.chain-task-step.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.chain-task-step-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: rgba(100, 116, 139, 0.3);
+  color: var(--gray-300);
+}
+.chain-task-step.pending .chain-task-step-number { background: rgba(100, 116, 139, 0.3); color: var(--gray-300); }
+.chain-task-step.running .chain-task-step-number { background: rgba(59, 130, 246, 0.3); color: #60a5fa; }
+.chain-task-step.completed .chain-task-step-number { background: rgba(34, 197, 94, 0.3); color: var(--success); }
+.chain-task-step.failed .chain-task-step-number { background: rgba(239, 68, 68, 0.3); color: var(--danger); }
+.chain-task-step-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.chain-task-step-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--gray-200);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chain-task-step-status {
+  font-size: 0.68rem;
+  text-transform: capitalize;
+  font-weight: 500;
+}
+.chain-task-step-status.pending { color: var(--gray-400); }
+.chain-task-step-status.running { color: #60a5fa; }
+.chain-task-step-status.completed { color: var(--success); }
+.chain-task-step-status.failed { color: var(--danger); }
+.chain-task-step-arrow {
+  opacity: 0.5;
+  transition: all 0.2s;
+}
+.chain-task-step.active .chain-task-step-arrow,
+.chain-task-step:hover .chain-task-step-arrow {
+  opacity: 1;
+  color: var(--primary);
+}
+/* Chain Task Detail Content */
+.chain-task-detail-content {
+  background: rgba(0,0,0,0.2);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+.chain-task-detail-content h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--gray-100);
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.chain-task-detail-section {
+  margin-bottom: 1rem;
+}
+.chain-task-detail-section:last-child {
+  margin-bottom: 0;
+}
+.chain-task-detail-section label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.4rem;
+}
+.chain-task-detail-prompt {
+  background: rgba(0,0,0,0.3);
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--gray-200);
+  line-height: 1.5;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.chain-task-detail-result {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: var(--gray-200);
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.chain-task-detail-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: #fca5a5;
 }
 
 /* Schedule Form Styles */
@@ -9575,7 +10057,7 @@ main {
     <div class="tab-content" id="tab-tasks">
       <div class="sidebar-header"><span class="header-title"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg> Tasks & Chains</span></div>
       <div class="tasks-chains-wrapper">
-        <div class="collapsible-section" id="section-tasks">
+        <div class="collapsible-section" id="section-tasks" style="flex: 1; height: 33%;">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
             <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v10M1 12h6m6 0h10"></path></svg></span>
             <span>Background Tasks</span>
@@ -9585,9 +10067,10 @@ main {
           <div class="section-content" id="tasks-list">
             <div class="no-tasks">No active tasks</div>
           </div>
+          <div class="section-resize-handle" onmousedown="startSectionResize(event, 'section-tasks')"></div>
         </div>
         
-        <div class="collapsible-section" id="section-resumable">
+        <div class="collapsible-section" id="section-resumable" style="flex: 1; height: 33%;">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
             <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></span>
             <span>Resumable Tasks</span>
@@ -9597,9 +10080,10 @@ main {
           <div class="section-content" id="resumable-list">
             <div class="no-tasks">No interrupted tasks</div>
           </div>
+          <div class="section-resize-handle" onmousedown="startSectionResize(event, 'section-resumable')"></div>
         </div>
         
-        <div class="collapsible-section" id="section-chains">
+        <div class="collapsible-section" id="section-chains" style="flex: 1; height: 33%;">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
             <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span>
             <span>Task Chains</span>
@@ -9645,6 +10129,79 @@ main {
         <div class="chain-builder-footer">
           <button class="chain-builder-btn chain-builder-btn-cancel" onclick="closeChainBuilder()">Cancel</button>
           <button class="chain-builder-btn chain-builder-btn-create" onclick="createChain()">Create Chain</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Task Detail Modal (for viewing resumable tasks and chain tasks) -->
+    <div class="task-detail-modal" id="task-detail-modal">
+      <div class="task-detail-container">
+        <div class="task-detail-header">
+          <div class="task-detail-title-section">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            <span id="task-detail-title">Task Details</span>
+            <span class="task-detail-status" id="task-detail-status">pending</span>
+          </div>
+          <button class="task-detail-close" onclick="closeTaskDetailModal()">&times;</button>
+        </div>
+        <div class="task-detail-body">
+          <div class="task-detail-section">
+            <h4>Prompt</h4>
+            <div class="task-detail-prompt" id="task-detail-prompt"></div>
+          </div>
+          <div class="task-detail-section">
+            <h4>Progress</h4>
+            <div class="task-detail-progress" id="task-detail-progress">
+              <div class="task-progress-stats">
+                <span>Steps: <strong id="task-detail-steps">0</strong></span>
+                <span>Tools: <strong id="task-detail-tools">0</strong></span>
+              </div>
+            </div>
+          </div>
+          <div class="task-detail-section" id="task-detail-result-section" style="display: none;">
+            <h4>Result</h4>
+            <div class="task-detail-result" id="task-detail-result"></div>
+          </div>
+          <div class="task-detail-section" id="task-detail-error-section" style="display: none;">
+            <h4>Error</h4>
+            <div class="task-detail-error" id="task-detail-error"></div>
+          </div>
+        </div>
+        <div class="task-detail-footer">
+          <button class="task-detail-btn task-detail-btn-close" onclick="closeTaskDetailModal()">Close</button>
+          <button class="task-detail-btn task-detail-btn-resume" id="task-detail-resume-btn" style="display: none;" onclick="resumeTaskFromModal()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Resume Task
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Chain Task Detail Modal (for viewing individual chain tasks) -->
+    <div class="chain-task-modal" id="chain-task-modal">
+      <div class="chain-task-container">
+        <div class="chain-task-header">
+          <div class="chain-task-title-section">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span id="chain-task-title">Chain Task Progress</span>
+          </div>
+          <button class="chain-task-close" onclick="closeChainTaskModal()">&times;</button>
+        </div>
+        <div class="chain-task-body">
+          <div class="chain-task-steps" id="chain-task-steps">
+            <!-- Chain steps with clickable items will be rendered here -->
+          </div>
+          <div class="chain-task-detail" id="chain-task-detail">
+            <p style="color: var(--gray-400); text-align: center; padding: 2rem;">Select a task from the chain to view details</p>
+          </div>
         </div>
       </div>
     </div>
@@ -11007,6 +11564,24 @@ main {
           </svg>
         </button>
         <div class="notes-toolbar-separator"></div>
+        <button class="notes-toolbar-btn" onclick="insertFullscreenLink()" title="Insert Link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="attachFullscreenFile()" title="Attach File">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
+        <button class="notes-toolbar-btn" onclick="insertFullscreenImage()" title="Insert Image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+        </button>
         <button class="notes-toolbar-btn" onclick="insertFullscreenTable()" title="Insert Table">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
             <rect x="3" y="3" width="18" height="18" rx="2"></rect>
@@ -11016,11 +11591,22 @@ main {
             <line x1="15" y1="3" x2="15" y2="21"></line>
           </svg>
         </button>
-        <button class="notes-toolbar-btn" onclick="insertFullscreenLink()" title="Insert Link">
+        <button class="notes-toolbar-btn" onclick="showInsertReportModalFullscreen()" title="Insert Report">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="12" y1="18" x2="12" y2="12"></line>
+            <line x1="9" y1="15" x2="15" y2="15"></line>
           </svg>
+        </button>
+        <div class="notes-toolbar-spacer"></div>
+        <button class="notes-toolbar-btn notes-ai-btn" onclick="openAIProcessModalFromFullscreen()" title="Process with AI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+            <circle cx="7.5" cy="14.5" r="1.5"></circle>
+            <circle cx="16.5" cy="14.5" r="1.5"></circle>
+          </svg>
+          <span>AI</span>
         </button>
       </div>
       <div class="notes-fullscreen-content">
@@ -11295,15 +11881,70 @@ document.addEventListener('mouseup', () => {
 // Section toggle for collapsible sections
 function toggleSection(btn) {
   const isExpanded = btn.getAttribute('data-expanded') === 'true';
+  const section = btn.closest('.collapsible-section');
   const content = btn.nextElementSibling;
   
   if (isExpanded) {
     content.classList.add('collapsed');
     btn.setAttribute('data-expanded', 'false');
+    section.classList.add('collapsed');
+    section.style.flex = '0 0 auto';
   } else {
     content.classList.remove('collapsed');
     btn.setAttribute('data-expanded', 'true');
+    section.classList.remove('collapsed');
+    section.style.flex = '1';
+    // Restore stored height if available
+    const storedHeight = section.dataset.storedHeight;
+    if (storedHeight) {
+      section.style.height = storedHeight;
+    }
   }
+}
+
+// Section resize functionality
+let resizingSection = null;
+let resizeStartY = 0;
+let resizeStartHeight = 0;
+
+function startSectionResize(e, sectionId) {
+  e.preventDefault();
+  const section = document.getElementById(sectionId);
+  if (!section || section.classList.contains('collapsed')) return;
+  
+  resizingSection = section;
+  resizeStartY = e.clientY;
+  resizeStartHeight = section.offsetHeight;
+  
+  document.addEventListener('mousemove', doSectionResize);
+  document.addEventListener('mouseup', stopSectionResize);
+  document.body.style.cursor = 'ns-resize';
+  document.body.style.userSelect = 'none';
+  
+  const handle = section.querySelector('.section-resize-handle');
+  if (handle) handle.classList.add('dragging');
+}
+
+function doSectionResize(e) {
+  if (!resizingSection) return;
+  
+  const delta = e.clientY - resizeStartY;
+  const newHeight = Math.max(80, resizeStartHeight + delta);
+  resizingSection.style.height = newHeight + 'px';
+  resizingSection.style.flex = '0 0 auto';
+  resizingSection.dataset.storedHeight = newHeight + 'px';
+}
+
+function stopSectionResize() {
+  if (resizingSection) {
+    const handle = resizingSection.querySelector('.section-resize-handle');
+    if (handle) handle.classList.remove('dragging');
+  }
+  resizingSection = null;
+  document.removeEventListener('mousemove', doSectionResize);
+  document.removeEventListener('mouseup', stopSectionResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
 }
 
 // Sidebar tabs
@@ -11364,10 +12005,13 @@ function renderTasks() {
   const tasksCount = document.getElementById('tasks-count');
   const tasks = Object.values(taskStore).filter(t => !t.chain_id); // Only show non-chain tasks
   
-  // Update count
-  if (tasksCount) tasksCount.textContent = tasks.length;
+  // Get running chains to show in activity monitor
+  const runningChains = Object.values(chainStore).filter(c => c.status === 'running');
   
-  if (tasks.length === 0) {
+  // Update count (tasks + running chains)
+  if (tasksCount) tasksCount.textContent = tasks.length + runningChains.length;
+  
+  if (tasks.length === 0 && runningChains.length === 0) {
     tasksList.innerHTML = '<div class="no-tasks">No active tasks</div>';
     return;
   }
@@ -11384,7 +12028,49 @@ function renderTasks() {
     'general': { icon: '📝', color: '#6c757d', bg: 'rgba(108, 117, 125, 0.1)' }
   };
   
-  tasksList.innerHTML = tasks.map(task => {
+  // Build running chains HTML
+  const chainsHtml = runningChains.map(chain => {
+    const taskCount = chain.task_details?.length || 0;
+    const currentIndex = chain.current_task_index || 0;
+    const currentTask = chain.task_details?.[currentIndex];
+    const currentTaskName = currentTask?.name || `Step ${currentIndex + 1}`;
+    
+    // Mini progress steps
+    const stepsHtml = (chain.task_details || []).map((task, i) => {
+      const stepStatus = task.status || 'pending';
+      return `<div class="mini-chain-step ${stepStatus}" title="${task.name}: ${stepStatus}">${i + 1}</div>`;
+    }).join('');
+    
+    return `
+      <div class="task-item chain-task running" style="position: relative; cursor: pointer;" onclick="viewChainDetails('${chain.id}')">
+        <div class="task-header">
+          <span class="task-label-badge" style="background: rgba(139, 92, 246, 0.15); color: #a78bfa; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; margin-right: 8px;">
+            🔗 CHAIN
+          </span>
+          <span class="task-status running">running</span>
+        </div>
+        <div class="task-title-row" style="margin-top: 6px;">
+          <span class="task-title">${escapeHtml(chain.name)}</span>
+        </div>
+        <div class="task-meta">
+          Step ${currentIndex + 1}/${taskCount}: ${escapeHtml(currentTaskName)}
+        </div>
+        <div class="mini-chain-progress" style="display: flex; gap: 4px; margin-top: 8px;">
+          ${stepsHtml}
+        </div>
+        <div class="task-actions" style="margin-top: 8px;">
+          <button class="task-btn task-btn-view" onclick="event.stopPropagation(); viewChainDetails('${chain.id}')">
+            👁️ View Progress
+          </button>
+          <button class="task-btn task-btn-cancel" onclick="event.stopPropagation(); stopChain('${chain.id}')">
+            ⏹️ Stop Chain
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  const tasksHtml = tasks.map(task => {
     const isActive = ['pending', 'running', 'paused'].includes(task.status);
     const isFinished = ['completed', 'cancelled', 'failed'].includes(task.status);
     const createdAt = new Date(task.created_at).toLocaleTimeString();
@@ -11435,6 +12121,9 @@ function renderTasks() {
       </div>
     `;
   }).join('');
+  
+  // Combine chains (first) and tasks
+  tasksList.innerHTML = chainsHtml + tasksHtml;
 }
 
 async function pauseTask(taskId) {
@@ -11662,17 +12351,20 @@ function renderChains() {
     return `
       <div class="chain-item ${statusClass}">
         <div class="chain-header">
-          <span class="chain-name">🔗 ${escapeHtml(chain.name)}</span>
+          <span class="chain-name" onclick="viewChainDetails('${chain.id}')" style="cursor: pointer;" title="Click to view details">🔗 ${escapeHtml(chain.name)}</span>
           <span class="chain-status ${statusClass}">${statusClass}</span>
         </div>
         ${chain.description ? `<div style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 0.5rem;">${escapeHtml(chain.description)}</div>` : ''}
         <div style="font-size: 0.75rem; color: var(--gray-400);">
           ${taskCount} tasks | Progress: ${currentIndex}/${taskCount}
         </div>
-        <div class="chain-progress">
+        <div class="chain-progress" onclick="viewChainDetails('${chain.id}')" style="cursor: pointer;" title="Click to view details">
           ${stepsHtml || '<div style="color: var(--gray-500); font-size: 0.75rem;">No steps</div>'}
         </div>
         <div class="chain-actions">
+          <button class="chain-btn chain-btn-view" onclick="viewChainDetails('${chain.id}')" title="View details">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          </button>
           ${statusClass === 'pending' || statusClass === 'cancelled' || statusClass === 'failed' ? `
             <button class="chain-btn chain-btn-start" onclick="startChain('${chain.id}')">▶️ Start</button>
           ` : ''}
@@ -11958,6 +12650,9 @@ function renderResumableTasks() {
           </span>
         </div>
         <div class="task-actions">
+          <button class="btn-view" onclick="viewResumableTask('${task.task_id}')" title="View task details">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          </button>
           <button class="btn-resume" onclick="resumeTask('${task.task_id}')" title="Resume this task">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
             Resume Task
@@ -12041,6 +12736,175 @@ async function discardResumableTask(taskId) {
   }
 }
 
+// View Resumable Task in Modal
+let currentViewingTaskId = null;
+
+async function viewResumableTask(taskId) {
+  const task = resumableTasksStore.find(t => t.task_id === taskId);
+  if (!task) {
+    console.error('Task not found:', taskId);
+    return;
+  }
+  
+  currentViewingTaskId = taskId;
+  
+  // Populate modal with task details
+  const modal = document.getElementById('task-detail-modal');
+  document.getElementById('task-detail-title').textContent = task.task_label ? task.task_label.replace('_', ' ').toUpperCase() : 'Task Details';
+  
+  const statusEl = document.getElementById('task-detail-status');
+  statusEl.textContent = task.status || 'interrupted';
+  statusEl.className = 'task-detail-status ' + (task.status || 'interrupted');
+  
+  document.getElementById('task-detail-prompt').textContent = task.prompt || 'No prompt available';
+  document.getElementById('task-detail-steps').textContent = task.current_step || 0;
+  document.getElementById('task-detail-tools').textContent = task.tool_count || 0;
+  
+  // Show/hide result section
+  const resultSection = document.getElementById('task-detail-result-section');
+  const resultEl = document.getElementById('task-detail-result');
+  if (task.last_result || task.partial_result) {
+    resultSection.style.display = 'block';
+    resultEl.textContent = task.last_result || task.partial_result || '';
+  } else {
+    resultSection.style.display = 'none';
+  }
+  
+  // Show/hide error section
+  const errorSection = document.getElementById('task-detail-error-section');
+  const errorEl = document.getElementById('task-detail-error');
+  if (task.error_message) {
+    errorSection.style.display = 'block';
+    errorEl.textContent = task.error_message;
+  } else {
+    errorSection.style.display = 'none';
+  }
+  
+  // Show resume button
+  const resumeBtn = document.getElementById('task-detail-resume-btn');
+  if (task.status === 'interrupted' || task.status === 'paused') {
+    resumeBtn.style.display = 'flex';
+  } else {
+    resumeBtn.style.display = 'none';
+  }
+  
+  modal.classList.add('active');
+}
+
+function closeTaskDetailModal() {
+  document.getElementById('task-detail-modal').classList.remove('active');
+  currentViewingTaskId = null;
+}
+
+function resumeTaskFromModal() {
+  if (currentViewingTaskId) {
+    closeTaskDetailModal();
+    resumeTask(currentViewingTaskId);
+  }
+}
+
+// Chain Task Detail Modal Functions
+let currentViewingChainId = null;
+let currentChainTaskIndex = null;
+
+function viewChainDetails(chainId) {
+  const chain = chainStore[chainId];
+  if (!chain) {
+    console.error('Chain not found:', chainId);
+    return;
+  }
+  
+  currentViewingChainId = chainId;
+  
+  const modal = document.getElementById('chain-task-modal');
+  document.getElementById('chain-task-title').textContent = chain.name || 'Chain Progress';
+  
+  // Render chain steps with clickable items
+  const stepsContainer = document.getElementById('chain-task-steps');
+  const tasks = chain.task_details || [];
+  
+  stepsContainer.innerHTML = tasks.map((task, index) => {
+    const statusClass = task.status || 'pending';
+    const isActive = index === currentChainTaskIndex;
+    return `
+      <div class="chain-task-step ${statusClass} ${isActive ? 'active' : ''}" onclick="viewChainTaskDetail('${chainId}', ${index})">
+        <div class="chain-task-step-number">${index + 1}</div>
+        <div class="chain-task-step-info">
+          <span class="chain-task-step-name">${escapeHtml(task.name || 'Step ' + (index + 1))}</span>
+          <span class="chain-task-step-status ${statusClass}">${statusClass}</span>
+        </div>
+        <svg class="chain-task-step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </div>
+    `;
+  }).join('');
+  
+  // Show empty detail initially
+  document.getElementById('chain-task-detail').innerHTML = `
+    <p style="color: var(--gray-400); text-align: center; padding: 2rem;">
+      Select a task from the chain to view details
+    </p>
+  `;
+  
+  modal.classList.add('active');
+}
+
+function viewChainTaskDetail(chainId, taskIndex) {
+  const chain = chainStore[chainId];
+  if (!chain || !chain.task_details || !chain.task_details[taskIndex]) {
+    return;
+  }
+  
+  currentChainTaskIndex = taskIndex;
+  const task = chain.task_details[taskIndex];
+  
+  // Update step highlight
+  document.querySelectorAll('.chain-task-step').forEach((el, i) => {
+    el.classList.toggle('active', i === taskIndex);
+  });
+  
+  // Render task detail
+  const detailContainer = document.getElementById('chain-task-detail');
+  detailContainer.innerHTML = `
+    <div class="chain-task-detail-content">
+      <h4>${escapeHtml(task.name || 'Step ' + (taskIndex + 1))}</h4>
+      <div class="chain-task-detail-section">
+        <label>Status</label>
+        <span class="task-detail-status ${task.status || 'pending'}">${task.status || 'pending'}</span>
+      </div>
+      <div class="chain-task-detail-section">
+        <label>Prompt</label>
+        <div class="chain-task-detail-prompt">${escapeHtml(task.prompt || 'No prompt')}</div>
+      </div>
+      ${task.steps_completed ? `
+        <div class="chain-task-detail-section">
+          <label>Progress</label>
+          <span>${task.steps_completed} steps, ${task.tools_used || 0} tools</span>
+        </div>
+      ` : ''}
+      ${task.result ? `
+        <div class="chain-task-detail-section">
+          <label>Result</label>
+          <div class="chain-task-detail-result">${escapeHtml(task.result)}</div>
+        </div>
+      ` : ''}
+      ${task.error ? `
+        <div class="chain-task-detail-section">
+          <label>Error</label>
+          <div class="chain-task-detail-error">${escapeHtml(task.error)}</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function closeChainTaskModal() {
+  document.getElementById('chain-task-modal').classList.remove('active');
+  currentViewingChainId = null;
+  currentChainTaskIndex = null;
+}
+
 function formatTimeAgo(timestamp) {
   const now = Date.now();
   const diff = now - timestamp;
@@ -12064,6 +12928,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeTaskModal();
     closeChainBuilder();
+    closeTaskDetailModal();
+    closeChainTaskModal();
     document.getElementById('image-modal').classList.remove('active');
     // Close notes modals
     if (document.getElementById('notes-fullscreen-modal')?.classList.contains('active')) {
@@ -12082,6 +12948,14 @@ document.getElementById('task-modal').addEventListener('click', (e) => {
 
 document.getElementById('chain-builder-modal').addEventListener('click', (e) => {
   if (e.target.id === 'chain-builder-modal') closeChainBuilder();
+});
+
+document.getElementById('task-detail-modal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'task-detail-modal') closeTaskDetailModal();
+});
+
+document.getElementById('chain-task-modal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'chain-task-modal') closeChainTaskModal();
 });
 
 // API Key management functions
@@ -13437,6 +14311,102 @@ function insertFullscreenLink() {
   const url = prompt('Enter URL:');
   if (url) {
     document.execCommand('createLink', false, url);
+  }
+}
+
+function attachFullscreenFile() {
+  // Create a temporary file input
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const response = await fetch('/notes/upload-attachment', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        const editor = document.getElementById('fullscreen-note-editor');
+        editor.focus();
+        
+        // Insert link to attachment
+        const link = '<a href="' + result.url + '" target="_blank">📎 ' + file.name + '</a>&nbsp;';
+        document.execCommand('insertHTML', false, link);
+        onFullscreenNoteChange();
+      } else {
+        alert('Failed to upload attachment');
+      }
+    } catch (error) {
+      console.error('Error uploading attachment:', error);
+      alert('Error uploading attachment');
+    }
+  };
+  input.click();
+}
+
+function insertFullscreenImage() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const response = await fetch('/notes/upload-attachment', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        const editor = document.getElementById('fullscreen-note-editor');
+        editor.focus();
+        
+        // Insert image
+        const img = '<img src="' + result.url + '" alt="' + file.name + '" style="max-width: 100%;">&nbsp;';
+        document.execCommand('insertHTML', false, img);
+        onFullscreenNoteChange();
+      } else {
+        alert('Failed to upload image');
+      }
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Error uploading image');
+    }
+  };
+  input.click();
+}
+
+function showInsertReportModalFullscreen() {
+  // Store that we're in fullscreen mode for the report insert
+  window.insertReportTargetFullscreen = true;
+  showInsertReportModal();
+}
+
+function openAIProcessModalFromFullscreen() {
+  // Store that we're opening from fullscreen
+  window.aiModalFromFullscreen = true;
+  openAIProcessModal();
+}
+
+function onFullscreenNoteChange() {
+  // Sync changes back to the main editor if needed
+  const fullscreenEditor = document.getElementById('fullscreen-note-editor');
+  const mainEditor = document.getElementById('notes-editor');
+  if (fullscreenEditor && mainEditor) {
+    mainEditor.innerHTML = fullscreenEditor.innerHTML;
+    onNoteContentChange();
   }
 }
 
@@ -16391,6 +17361,22 @@ let selectedScheduleTemplate = null;
 
 // Schedule Task Templates
 const scheduleTemplates = {
+  daily_scan: {
+    name: 'Daily Recon',
+    prompt: 'Perform daily reconnaissance scan: Enumerate subdomains using subfinder, scan for open ports with nmap, identify new services or changes from previous scans. Report any new findings or changes.'
+  },
+  weekly_vuln: {
+    name: 'Weekly Vuln Scan',
+    prompt: 'Conduct a complete security audit including: 1) Port scanning and service enumeration, 2) Web vulnerability scanning (XSS, SQLi, CSRF), 3) SSL/TLS configuration analysis, 4) Security headers check, 5) Directory enumeration, 6) Technology stack identification. Provide remediation recommendations.'
+  },
+  osint_check: {
+    name: 'OSINT Monitor',
+    prompt: 'Perform comprehensive OSINT reconnaissance on the target. Search for leaked credentials and sensitive information in breach databases, check social media profiles, monitor public records and exposure points. Alert on any new findings.'
+  },
+  ssl_monitor: {
+    name: 'SSL Monitor',
+    prompt: 'Check SSL/TLS certificate configuration: Verify certificate expiry dates, check for weak cipher suites, test for protocol vulnerabilities (SSL3, TLS1.0, TLS1.1), verify certificate chain. Alert if certificate expires within 30 days.'
+  },
   osint: {
     name: 'OSINT Reconnaissance',
     prompt: 'Perform comprehensive OSINT reconnaissance on the target. Gather subdomains using subfinder and other tools, identify exposed services, search for leaked credentials and sensitive information, check social media profiles and public records. Generate a detailed report.'
@@ -16857,10 +17843,18 @@ window.startChain = startChain;
 window.stopChain = stopChain;
 window.deleteChain = deleteChain;
 window.toggleSection = toggleSection;
+window.startSectionResize = startSectionResize;
 // Resumable task functions
 window.resumeTask = resumeTask;
 window.discardResumableTask = discardResumableTask;
 window.loadResumableTasks = loadResumableTasks;
+window.viewResumableTask = viewResumableTask;
+window.closeTaskDetailModal = closeTaskDetailModal;
+window.resumeTaskFromModal = resumeTaskFromModal;
+// Chain detail modal functions
+window.viewChainDetails = viewChainDetails;
+window.viewChainTaskDetail = viewChainTaskDetail;
+window.closeChainTaskModal = closeChainTaskModal;
 // Settings sub-tab functions
 window.switchSettingsSubtab = switchSettingsSubtab;
 // Database functions
@@ -16891,6 +17885,17 @@ window.exportNote = exportNote;
 window.onNoteContentChange = onNoteContentChange;
 window.updateNoteTitle = updateNoteTitle;
 window.handleNoteKeydown = handleNoteKeydown;
+// Notes fullscreen functions
+window.openNotesFullscreen = openNotesFullscreen;
+window.closeNotesFullscreen = closeNotesFullscreen;
+window.formatFullscreenText = formatFullscreenText;
+window.insertFullscreenTable = insertFullscreenTable;
+window.insertFullscreenLink = insertFullscreenLink;
+window.attachFullscreenFile = attachFullscreenFile;
+window.insertFullscreenImage = insertFullscreenImage;
+window.showInsertReportModalFullscreen = showInsertReportModalFullscreen;
+window.openAIProcessModalFromFullscreen = openAIProcessModalFromFullscreen;
+window.onFullscreenNoteChange = onFullscreenNoteChange;
 </script>
 </body>
 </html>
