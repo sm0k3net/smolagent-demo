@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -30,7 +31,7 @@ import subprocess
 import re
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any, Literal, List
 import socket
 
 # Database storage support (optional)
