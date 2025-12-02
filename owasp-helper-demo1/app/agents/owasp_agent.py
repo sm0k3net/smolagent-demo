@@ -1,7 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
 from smolagents import CodeAgent, OpenAIServerModel
-from app.tools.searxng_tool import searxng_search
 from app.tools.owasp_lookup import list_owasp_top10, get_owasp_item
 from app.tools.classify import classify_vulnerability
 from app.tools.scenarios import generate_test_scenarios
@@ -229,7 +228,6 @@ def build_owasp_agent() -> CodeAgent:
     
     # Core OWASP tools
     tools = [
-        searxng_search,
         list_owasp_top10,
         get_owasp_item,
         classify_vulnerability,
