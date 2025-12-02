@@ -10,6 +10,10 @@ from app.tools.report_tools import (
     is_report_mode_enabled, get_report_data, add_recon_data,
     track_tool_usage, get_session_tools
 )
+from app.task_persistence import (
+    get_task_persistence, TaskState, TaskStep, TaskStatus,
+    build_resume_prompt
+)
 from app.config import (
     get_settings, update_runtime_settings, get_runtime_settings,
     PROVIDER_CONFIGS
@@ -1751,8 +1755,30 @@ async def startup():
             start_chain_monitor()
             # Start activity state cleanup thread
             start_activity_cleanup_thread()
+            # Initialize task persistence (loads interrupted tasks)
+            task_persistence = get_task_persistence()
+            task_persistence.start_auto_save()
+            print(f"[TaskPersistence] Initialized. Resumable tasks: {len(task_persistence.get_resumable_tasks())}")
             # Build agent
             agent = build_owasp_agent()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Clean shutdown - mark running tasks as interrupted and save state."""
+    print("[Shutdown] Marking running tasks as interrupted...")
+    try:
+        task_persistence = get_task_persistence()
+        # Mark all running tasks as interrupted so they can be resumed
+        running_tasks = task_persistence.get_all_tasks(status_filter=["running"])
+        for task in running_tasks:
+            task_persistence.mark_interrupted(task.task_id)
+            print(f"[Shutdown] Marked task {task.task_id} as interrupted")
+        # Stop auto-save and flush any pending changes
+        task_persistence.stop_auto_save()
+        print(f"[Shutdown] Saved {len(running_tasks)} interrupted tasks for recovery")
+    except Exception as e:
+        print(f"[Shutdown] Error saving task state: {e}")
 
 
 # ============================================
@@ -1817,6 +1843,170 @@ async def delete_activity_state_endpoint(task_id: str):
     """Clear activity state for a task (called when user closes a task tab)."""
     clear_activity_state(task_id)
     return JSONResponse({"status": "ok"})
+
+
+# ============================================
+# Task Persistence API Endpoints
+# ============================================
+
+@app.get("/api/tasks/resumable")
+async def get_resumable_tasks():
+    """Get all tasks that can be resumed (interrupted, paused, or running before crash)."""
+    persistence = get_task_persistence()
+    tasks = persistence.get_resumable_tasks()
+    return JSONResponse({
+        "tasks": [
+            {
+                "task_id": t.task_id,
+                "chat_id": t.chat_id,
+                "prompt": t.prompt[:200] + "..." if len(t.prompt) > 200 else t.prompt,
+                "full_prompt": t.prompt,
+                "status": t.status.value if isinstance(t.status, TaskStatus) else t.status,
+                "task_label": t.task_label,
+                "target_type": t.target_type,
+                "created_at": t.created_at,
+                "started_at": t.started_at,
+                "last_activity_at": t.last_activity_at,
+                "current_step": t.current_step,
+                "tool_count": t.tool_count,
+                "step_count": len(t.steps),
+                "report_mode": t.report_mode
+            }
+            for t in tasks
+        ],
+        "count": len(tasks)
+    })
+
+
+@app.get("/api/tasks/all")
+async def get_all_tasks(status: Optional[str] = None, limit: int = 50):
+    """Get all tasks, optionally filtered by status."""
+    persistence = get_task_persistence()
+    status_filter = status.split(",") if status else None
+    tasks = persistence.get_all_tasks(status_filter)[:limit]
+    return JSONResponse({
+        "tasks": [
+            {
+                "task_id": t.task_id,
+                "chat_id": t.chat_id,
+                "prompt": t.prompt[:200] + "..." if len(t.prompt) > 200 else t.prompt,
+                "status": t.status.value if isinstance(t.status, TaskStatus) else t.status,
+                "task_label": t.task_label,
+                "target_type": t.target_type,
+                "created_at": t.created_at,
+                "completed_at": t.completed_at,
+                "current_step": t.current_step,
+                "tool_count": t.tool_count,
+                "error": t.error[:100] if t.error else None
+            }
+            for t in tasks
+        ],
+        "count": len(tasks)
+    })
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task_details(task_id: str, include_steps: bool = False):
+    """Get detailed information about a specific task."""
+    persistence = get_task_persistence()
+    task = persistence.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    result = {
+        "task_id": task.task_id,
+        "chat_id": task.chat_id,
+        "prompt": task.prompt,
+        "status": task.status.value if isinstance(task.status, TaskStatus) else task.status,
+        "task_label": task.task_label,
+        "target_type": task.target_type,
+        "created_at": task.created_at,
+        "started_at": task.started_at,
+        "completed_at": task.completed_at,
+        "last_activity_at": task.last_activity_at,
+        "current_step": task.current_step,
+        "total_steps": task.total_steps,
+        "tool_count": task.tool_count,
+        "final_result": task.final_result,
+        "error": task.error,
+        "report_mode": task.report_mode,
+        "can_resume": task.can_resume(),
+        "context": task.context
+    }
+    
+    if include_steps:
+        result["steps"] = [s.to_dict() for s in task.steps[-100:]]  # Last 100 steps
+    
+    return JSONResponse(result)
+
+
+@app.get("/api/tasks/{task_id}/resume-context")
+async def get_task_resume_context(task_id: str):
+    """Get the context needed to resume a task, including the resume prompt."""
+    persistence = get_task_persistence()
+    task = persistence.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    if not task.can_resume():
+        return JSONResponse({"error": "Task cannot be resumed", "status": task.status.value}, status_code=400)
+    
+    resume_prompt = build_resume_prompt(task)
+    context = task.get_resume_context()
+    
+    return JSONResponse({
+        "task_id": task_id,
+        "resume_prompt": resume_prompt,
+        "context": context,
+        "original_prompt": task.prompt,
+        "task_label": task.task_label,
+        "target_type": task.target_type,
+        "completed_steps": task.current_step,
+        "tools_used": task.tool_count
+    })
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cancel a running or interrupted task."""
+    persistence = get_task_persistence()
+    task = persistence.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    persistence.mark_cancelled(task_id)
+    clear_activity_state(task_id)
+    
+    return JSONResponse({"status": "cancelled", "task_id": task_id})
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """Delete a task and its history."""
+    persistence = get_task_persistence()
+    task = persistence.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    persistence.delete_task(task_id)
+    clear_activity_state(task_id)
+    
+    return JSONResponse({"status": "deleted", "task_id": task_id})
+
+
+@app.post("/api/tasks/cleanup")
+async def cleanup_old_tasks(max_age_hours: int = 168):
+    """Clean up completed/failed tasks older than specified hours (default 7 days)."""
+    persistence = get_task_persistence()
+    before_count = len(persistence.get_all_tasks())
+    persistence.cleanup_old_tasks(max_age_hours)
+    after_count = len(persistence.get_all_tasks())
+    
+    return JSONResponse({
+        "status": "ok",
+        "removed": before_count - after_count,
+        "remaining": after_count
+    })
 
 
 # API Keys management endpoints
@@ -4457,6 +4647,112 @@ h1 {
 .task-item.cancelled, .task-item.failed {
   border-color: var(--danger);
   background: rgba(239, 68, 68, 0.1);
+}
+.task-item.interrupted {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+}
+.resumable-item {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(251, 191, 36, 0.05));
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resumable-item:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(251, 191, 36, 0.1));
+  border-color: rgba(245, 158, 11, 0.5);
+  transform: translateX(2px);
+}
+.resumable-item .task-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.resumable-item .task-status-badge {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.resumable-item .task-label-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary-light);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+}
+.resumable-item .task-prompt {
+  font-size: 0.8rem;
+  color: var(--gray-300);
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.resumable-item .task-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.7rem;
+  color: var(--gray-400);
+}
+.resumable-item .task-meta svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+.resumable-item .task-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.resumable-item .btn-resume {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resumable-item .btn-resume:hover {
+  background: linear-gradient(135deg, #059669, #047857);
+  transform: scale(1.02);
+}
+.resumable-item .btn-discard {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.resumable-item .btn-discard:hover {
+  background: rgba(239, 68, 68, 0.4);
 }
 .task-result-preview {
   margin-top: 0.5rem;
@@ -7207,6 +7503,18 @@ main {
           </div>
         </div>
         
+        <div class="collapsible-section" id="section-resumable">
+          <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
+            <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></span>
+            <span>Resumable Tasks</span>
+            <svg class="chevron-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <span class="section-count" id="resumable-count">0</span>
+          </button>
+          <div class="section-content" id="resumable-list">
+            <div class="no-tasks">No interrupted tasks</div>
+          </div>
+        </div>
+        
         <div class="collapsible-section" id="section-chains">
           <button class="section-toggle" onclick="toggleSection(this)" data-expanded="true">
             <span class="section-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span>
@@ -8806,11 +9114,189 @@ async function deleteChain(chainId) {
   }
 }
 
-// Refresh chains along with tasks
+// ======================================
+// Resumable Tasks Management Functions
+// ======================================
+
+let resumableTasksStore = [];
+
+async function loadResumableTasks() {
+  try {
+    const response = await fetch('/api/tasks/resumable');
+    const data = await response.json();
+    resumableTasksStore = data.tasks || [];
+    renderResumableTasks();
+    return resumableTasksStore;
+  } catch (err) {
+    console.error('Failed to load resumable tasks:', err);
+    return [];
+  }
+}
+
+function renderResumableTasks() {
+  const container = document.getElementById('resumable-list');
+  const countEl = document.getElementById('resumable-count');
+  
+  if (countEl) countEl.textContent = resumableTasksStore.length;
+  
+  if (resumableTasksStore.length === 0) {
+    container.innerHTML = '<div class="no-tasks">No interrupted tasks</div>';
+    return;
+  }
+  
+  const labelIcons = {
+    'pentest_web': '🌐',
+    'pentest_api': '🔌',
+    'pentest_network': '🖧',
+    'pentest_osint': '🕵️',
+    'pentest': '🎯',
+    'scanning': '🛡️',
+    'recon': '🔍',
+    'discovery': '📂',
+    'general': '📝'
+  };
+  
+  const labelNames = {
+    'pentest_web': 'Web Pentest',
+    'pentest_api': 'API Pentest',
+    'pentest_network': 'Network Pentest',
+    'pentest_osint': 'OSINT',
+    'pentest': 'Pentest',
+    'scanning': 'Scan',
+    'recon': 'Recon',
+    'discovery': 'Discovery',
+    'general': 'General'
+  };
+  
+  container.innerHTML = resumableTasksStore.map(task => {
+    const icon = labelIcons[task.task_label] || '📝';
+    const labelName = labelNames[task.task_label] || 'Task';
+    const prompt = task.prompt || 'No description';
+    const truncatedPrompt = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt;
+    const timeAgo = formatTimeAgo(task.last_activity_at * 1000);
+    
+    return `
+      <div class="resumable-item" data-task-id="${task.task_id}">
+        <div class="task-header">
+          <span style="font-size: 1.1rem;">${icon}</span>
+          <span class="task-status-badge">${task.status}</span>
+          <span class="task-label-badge">${labelName}</span>
+        </div>
+        <div class="task-prompt">${escapeHtml(truncatedPrompt)}</div>
+        <div class="task-meta">
+          <span title="Steps completed">
+            <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            ${task.current_step || 0} steps
+          </span>
+          <span title="Tools used">
+            <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+            ${task.tool_count || 0} tools
+          </span>
+          <span title="Last activity">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            ${timeAgo}
+          </span>
+        </div>
+        <div class="task-actions">
+          <button class="btn-resume" onclick="resumeTask('${task.task_id}')" title="Resume this task">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Resume Task
+          </button>
+          <button class="btn-discard" onclick="discardResumableTask('${task.task_id}')" title="Discard this task">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function resumeTask(taskId) {
+  try {
+    // Get the resume context from server
+    const response = await fetch(`/api/tasks/${taskId}/resume-context`);
+    const data = await response.json();
+    
+    if (data.error) {
+      addMessage('system', `⚠️ Cannot resume task: ${data.error}`);
+      return;
+    }
+    
+    // Show confirmation with task details
+    const confirmMsg = `Resume interrupted task?\\n\\n` +
+      `Original request: ${data.original_prompt.substring(0, 100)}...\\n` +
+      `Progress: ${data.completed_steps} steps, ${data.tools_used} tools used\\n\\n` +
+      `The agent will continue from where it left off.`;
+    
+    if (!confirm(confirmMsg)) return;
+    
+    // Create a new chat or use current one
+    const resumeChatId = currentChat || await createNewChat();
+    
+    // Send the resume prompt through WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      addMessage('system', `🔄 Resuming interrupted task...\\n\\nOriginal request: ${data.original_prompt.substring(0, 150)}...`);
+      
+      // Send as a special resume message
+      ws.send(JSON.stringify({
+        type: 'resume_task',
+        original_task_id: taskId,
+        resume_prompt: data.resume_prompt,
+        chat_id: resumeChatId,
+        task_label: data.task_label,
+        target_type: data.target_type
+      }));
+      
+      // Remove from resumable list after sending
+      resumableTasksStore = resumableTasksStore.filter(t => t.task_id !== taskId);
+      renderResumableTasks();
+    } else {
+      addMessage('system', '⚠️ WebSocket not connected. Please refresh the page.');
+    }
+  } catch (err) {
+    console.error('Failed to resume task:', err);
+    addMessage('system', `⚠️ Failed to resume task: ${err.message}`);
+  }
+}
+
+async function discardResumableTask(taskId) {
+  if (!confirm('Are you sure you want to discard this interrupted task? This cannot be undone.')) return;
+  
+  try {
+    const response = await fetch(`/api/tasks/${taskId}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await response.json();
+    
+    if (result.status === 'deleted') {
+      addMessage('system', `🗑️ Interrupted task discarded.`);
+      resumableTasksStore = resumableTasksStore.filter(t => t.task_id !== taskId);
+      renderResumableTasks();
+    } else {
+      addMessage('system', `⚠️ Failed to discard task: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    addMessage('system', `⚠️ Failed to discard task: ${err.message}`);
+  }
+}
+
+function formatTimeAgo(timestamp) {
+  const now = Date.now();
+  const diff = now - timestamp;
+  
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+// Refresh chains and resumable tasks along with tasks
 const originalRefreshTasks = refreshTasks;
 refreshTasks = async function() {
   await originalRefreshTasks();
   await loadChains();
+  await loadResumableTasks();
 };
 
 // Close modal on escape key
@@ -11131,8 +11617,30 @@ async function restoreActivityState() {
     if (taskIds.length > 0) {
       addMessage('system', `📋 Restored ${taskIds.length} active task(s) from previous session`);
     }
+    
+    // Check for resumable tasks from previous server sessions
+    await checkResumableTasks();
   } catch (error) {
     console.error('Failed to restore activity state:', error);
+  }
+}
+
+// Check for interrupted tasks that can be resumed
+async function checkResumableTasks() {
+  try {
+    const tasks = await loadResumableTasks();
+    if (tasks && tasks.length > 0) {
+      addMessage('system', `⚠️ Found ${tasks.length} interrupted task(s) that can be resumed. Check the Tasks tab → Resumable Tasks section.`);
+      
+      // Highlight the tasks tab briefly
+      const tasksTab = document.querySelector('.sidebar-tab[data-tab="tasks"]');
+      if (tasksTab) {
+        tasksTab.classList.add('has-activity');
+        setTimeout(() => tasksTab.classList.remove('has-activity'), 5000);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to check resumable tasks:', error);
   }
 }
 
@@ -12143,6 +12651,8 @@ async function initializeChats() {
 initializeChats();
 // Load chains on startup
 loadChains();
+// Load resumable tasks on startup
+loadResumableTasks();
 // Load provider settings on startup  
 loadProviders();
 
@@ -12180,6 +12690,10 @@ window.startChain = startChain;
 window.stopChain = stopChain;
 window.deleteChain = deleteChain;
 window.toggleSection = toggleSection;
+// Resumable task functions
+window.resumeTask = resumeTask;
+window.discardResumableTask = discardResumableTask;
+window.loadResumableTasks = loadResumableTasks;
 // Settings sub-tab functions
 window.switchSettingsSubtab = switchSettingsSubtab;
 // Database functions
@@ -12221,6 +12735,44 @@ async def ws_endpoint(ws: WebSocket):
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
             background_task = msg_data.get("background_task", False)
+            
+            # Handle resume task message
+            if msg_data.get("type") == "resume_task":
+                original_task_id = msg_data.get("original_task_id")
+                resume_prompt = msg_data.get("resume_prompt")
+                resume_chat_id = msg_data.get("chat_id", chat_id)
+                resume_task_label = msg_data.get("task_label", "general")
+                resume_target_type = msg_data.get("target_type")
+                
+                if original_task_id and resume_prompt:
+                    # Mark original task as being resumed (changed to completed)
+                    task_persistence = get_task_persistence()
+                    original_task = task_persistence.get_task(original_task_id)
+                    if original_task:
+                        task_persistence.update_task(original_task_id, 
+                            status=TaskStatus.COMPLETED,
+                            context={"resumed_as": task_id, "resumed_at": time.time()}
+                        )
+                    
+                    # Set up the message as the resume prompt
+                    msg_content = resume_prompt
+                    full_message = resume_prompt
+                    chat_id = resume_chat_id
+                    
+                    # Send acknowledgment
+                    await ws.send_text(json.dumps({
+                        "type": "system",
+                        "content": f"🔄 Resuming task from step {original_task.current_step if original_task else 0}...",
+                        "chat_id": chat_id,
+                        "task_id": task_id
+                    }))
+                    # Continue to normal processing - don't use continue here
+                else:
+                    await ws.send_text(json.dumps({
+                        "type": "error",
+                        "content": "Invalid resume task request"
+                    }))
+                    continue
             
             # Handle report mode toggle commands
             if msg_content == "__REPORT_MODE_ON__" or msg_data.get("action") == "report_mode_on":
@@ -12446,6 +12998,18 @@ The report should be comprehensive and professional, suitable for executive stak
                 request_chat_id = captured_chat_id
                 request_task_id = captured_task_id
                 
+                # Initialize task persistence for crash recovery
+                task_persistence = get_task_persistence()
+                persistent_task = task_persistence.create_task(
+                    task_id=request_task_id,
+                    chat_id=request_chat_id,
+                    prompt=captured_full_message,
+                    task_label=captured_task_label.value,
+                    target_type=captured_target_type,
+                    report_mode=captured_report_mode
+                )
+                task_persistence.mark_running(request_task_id)
+                
                 # Send task classification info first
                 label_icons = {
                     "pentest_web": "🌐",
@@ -12540,10 +13104,12 @@ The report should be comprehensive and professional, suitable for executive stak
                         tool_count = 0
                         start_time = time.time()
                         last_tool_name = ""  # Track last tool for result categorization
+                        last_tool_args = {}  # Track last tool args for persistence
                         
                         for event in task_agent.run(captured_full_message, stream=True):
                             step_count += 1
                             event_type = type(event).__name__
+                            step_start_time = time.time()
                             
                             # Extract meaningful info from different event types
                             if hasattr(event, 'tool_calls') and event.tool_calls:
@@ -12552,6 +13118,17 @@ The report should be comprehensive and professional, suitable for executive stak
                                     tool_name = getattr(tool_call, 'name', str(tool_call))
                                     last_tool_name = tool_name  # Remember for result categorization
                                     tool_args = getattr(tool_call, 'arguments', {})
+                                    last_tool_args = tool_args
+                                    
+                                    # Save tool call step to persistence
+                                    task_persistence.add_step(request_task_id, TaskStep(
+                                        step_number=step_count,
+                                        step_type="tool_call",
+                                        content=f"Executing {tool_name}",
+                                        tool_name=tool_name,
+                                        tool_args=tool_args,
+                                        timestamp=step_start_time
+                                    ))
                                     
                                     # Map tool names to activity types
                                     activity_type = "tool"
@@ -12604,6 +13181,19 @@ The report should be comprehensive and professional, suitable for executive stak
                             # Check for observations/results
                             if hasattr(event, 'observations') and event.observations:
                                 obs = str(event.observations)[:200]
+                                
+                                # Save tool result step to persistence
+                                task_persistence.add_step(request_task_id, TaskStep(
+                                    step_number=step_count,
+                                    step_type="tool_result",
+                                    content=obs,
+                                    tool_name=last_tool_name,
+                                    tool_args=last_tool_args,
+                                    tool_result=str(event.observations)[:10000],
+                                    timestamp=time.time(),
+                                    duration_ms=(time.time() - step_start_time) * 1000
+                                ))
+                                
                                 event_queue.put({
                                     "type": "activity",
                                     "activity_type": "tool-result",
@@ -12617,6 +13207,15 @@ The report should be comprehensive and professional, suitable for executive stak
                             # Check for planning steps
                             if hasattr(event, 'plan') and event.plan:
                                 plan = str(event.plan)[:300]
+                                
+                                # Save thought/planning step to persistence
+                                task_persistence.add_step(request_task_id, TaskStep(
+                                    step_number=step_count,
+                                    step_type="thought",
+                                    content=plan,
+                                    timestamp=time.time()
+                                ))
+                                
                                 event_queue.put({
                                     "type": "activity",
                                     "activity_type": "thinking",
@@ -12642,6 +13241,12 @@ The report should be comprehensive and professional, suitable for executive stak
                                 execution_time_ms=execution_time
                             )
                         
+                        # Mark task as completed in persistence
+                        task_persistence.mark_completed(
+                            request_task_id,
+                            result=str(final_result)[:20000] if final_result else "Task completed"
+                        )
+                        
                         # Signal completion
                         event_queue.put({
                             "type": "complete",
@@ -12651,6 +13256,8 @@ The report should be comprehensive and professional, suitable for executive stak
                         })
                         
                     except Exception as e:
+                        # Mark task as failed in persistence
+                        task_persistence.mark_failed(request_task_id, str(e))
                         event_queue.put({
                             "type": "error",
                             "error": str(e)
