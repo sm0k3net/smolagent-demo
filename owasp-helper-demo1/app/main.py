@@ -736,11 +736,15 @@ class TaskStatus(str, Enum):
 
 class TaskLabel(str, Enum):
     """Task type labels for categorizing security activities."""
-    general = "general"      # General questions and tasks
-    pentest = "pentest"      # Full penetration test
-    scanning = "scanning"    # Vulnerability scanning
-    recon = "recon"          # Reconnaissance / OSINT
-    discovery = "discovery"  # Asset discovery / Scoping
+    general = "general"           # General questions and tasks
+    pentest_web = "pentest_web"   # Web application penetration test
+    pentest_api = "pentest_api"   # API penetration test
+    pentest_network = "pentest_network"  # Network/infrastructure pentest
+    pentest_osint = "pentest_osint"  # OSINT-focused assessment
+    pentest = "pentest"           # Generic pentest (when type unclear)
+    scanning = "scanning"         # Vulnerability scanning
+    recon = "recon"               # Reconnaissance / OSINT
+    discovery = "discovery"       # Asset discovery / Scoping
 
 
 class Task(BaseModel):
@@ -813,6 +817,7 @@ def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
         - "web" for web applications
         - "network" for network/infrastructure
         - "api" for API testing
+        - "osint" for OSINT-focused tasks
         - None for general tasks
     """
     prompt_lower = prompt.lower()
@@ -843,7 +848,7 @@ def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
         "shodan", "censys", "virustotal", "hunter.io",
         "certificate transparency", "crt.sh", "passive recon",
         "find subdomains", "enumerate", "enumeration",
-        "discover assets", "asset discovery",
+        "discover assets", "asset discovery", "duckduckgo",
     ]
     
     # Discovery / Scoping keywords
@@ -855,68 +860,56 @@ def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
         "map", "mapping", "identify services", "fingerprint",
     ]
     
-    # Determine label based on keyword matching
-    label = TaskLabel.general
-    
-    # Check in order of specificity (most specific first)
-    for keyword in pentest_keywords:
-        if keyword in prompt_lower:
-            label = TaskLabel.pentest
-            break
-    
-    if label == TaskLabel.general:
-        for keyword in scanning_keywords:
-            if keyword in prompt_lower:
-                label = TaskLabel.scanning
-                break
-    
-    if label == TaskLabel.general:
-        for keyword in recon_keywords:
-            if keyword in prompt_lower:
-                label = TaskLabel.recon
-                break
-    
-    if label == TaskLabel.general:
-        for keyword in discovery_keywords:
-            if keyword in prompt_lower:
-                label = TaskLabel.discovery
-                break
-    
-    # Detect target type
+    # Detect target type FIRST (needed for pentest sub-classification)
     target_type = None
     
-    # Web application indicators
-    web_indicators = [
-        "http://", "https://", "website", "web app", "web application",
-        "webapp", "url", "domain", ".com", ".org", ".net", ".io",
-        "login page", "form", "api endpoint", "rest api", "graphql",
-        "wordpress", "drupal", "joomla", "cms",
+    # API indicators (check first - most specific)
+    api_indicators = [
+        "api pentest", "api penetration", "api security", "api test",
+        "rest api", "graphql", "swagger", "openapi", "postman",
+        "api key", "oauth", "jwt", "api endpoint", "json api",
+        "/api/", "/v1/", "/v2/", "/v3/",
+    ]
+    
+    # OSINT indicators
+    osint_indicators = [
+        "osint", "open source intelligence", "osint assessment",
+        "osint pentest", "passive reconnaissance", "passive recon",
+        "threat intelligence", "digital footprint", "social engineering recon",
+        "employee enumeration", "email harvesting", "breach data",
+        "dark web", "leaked credentials", "data breach",
     ]
     
     # Network/Infrastructure indicators
     network_indicators = [
-        "ip address", "port", "ports", "network", "infrastructure",
+        "network pentest", "infrastructure pentest", "internal pentest",
+        "external pentest", "network security", "infrastructure security",
+        "ip address", "ip range", "cidr", "subnet",
         "server", "host", "ssh", "ftp", "rdp", "smb", "telnet",
         "tcp", "udp", "firewall", "router", "switch",
-        "internal network", "subnet", "cidr",
+        "internal network", "dmz", "active directory",
     ]
     
-    # API indicators
-    api_indicators = [
-        "api", "rest api", "graphql", "endpoint", "json", "swagger",
-        "openapi", "postman", "api key", "oauth", "jwt", "token",
+    # Web application indicators
+    web_indicators = [
+        "web pentest", "web penetration", "web application", "web app",
+        "website security", "webapp", "web security",
+        "http://", "https://", "login page", "web form",
+        "wordpress", "drupal", "joomla", "cms", "xss", "csrf",
+        "sql injection", "sqli", "authentication bypass",
+        ".com", ".org", ".net", ".io", ".co",
     ]
     
-    # Check for target type
+    # Check for target type in order of specificity
     for indicator in api_indicators:
         if indicator in prompt_lower:
             target_type = "api"
             break
     
     if not target_type:
-        for indicator in web_indicators:
+        for indicator in osint_indicators:
             if indicator in prompt_lower:
-                target_type = "web"
+                target_type = "osint"
                 break
     
     if not target_type:
@@ -924,6 +917,62 @@ def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
             if indicator in prompt_lower:
                 target_type = "network"
                 break
+    
+    if not target_type:
+        for indicator in web_indicators:
+            if indicator in prompt_lower:
+                target_type = "web"
+                break
+    
+    # Determine label based on keyword matching
+    label = TaskLabel.general
+    is_pentest = False
+    
+    # Check for pentest keywords first
+    for keyword in pentest_keywords:
+        if keyword in prompt_lower:
+            is_pentest = True
+            break
+    
+    # If it's a pentest, classify by target type
+    if is_pentest:
+        if target_type == "api":
+            label = TaskLabel.pentest_api
+        elif target_type == "osint":
+            label = TaskLabel.pentest_osint
+        elif target_type == "network":
+            label = TaskLabel.pentest_network
+        elif target_type == "web":
+            label = TaskLabel.pentest_web
+        else:
+            # Try to infer from URL patterns
+            import re
+            if re.search(r'https?://[^\s]+', prompt_lower):
+                label = TaskLabel.pentest_web
+                target_type = "web"
+            elif re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', prompt_lower):
+                label = TaskLabel.pentest_network
+                target_type = "network"
+            else:
+                label = TaskLabel.pentest  # Generic pentest
+    else:
+        # Check other task types
+        for keyword in scanning_keywords:
+            if keyword in prompt_lower:
+                label = TaskLabel.scanning
+                break
+        
+        if label == TaskLabel.general:
+            for keyword in recon_keywords:
+                if keyword in prompt_lower:
+                    label = TaskLabel.recon
+                    break
+        
+        if label == TaskLabel.general:
+            for keyword in discovery_keywords:
+                if keyword in prompt_lower:
+                    label = TaskLabel.discovery
+                    break
     
     return label, target_type
 
@@ -12084,20 +12133,36 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 # Notify client that task was created with label info
                 label_icons = {
+                    "pentest_web": "🌐",
+                    "pentest_api": "🔌",
+                    "pentest_network": "🖧",
+                    "pentest_osint": "🕵️",
                     "pentest": "🎯",
                     "scanning": "🛡️",
                     "recon": "🔍",
                     "discovery": "📂",
                     "general": "📝"
                 }
+                label_names = {
+                    "pentest_web": "Web Application Pentest",
+                    "pentest_api": "API Pentest",
+                    "pentest_network": "Network Pentest",
+                    "pentest_osint": "OSINT Assessment",
+                    "pentest": "Penetration Test",
+                    "scanning": "Vulnerability Scan",
+                    "recon": "Reconnaissance",
+                    "discovery": "Discovery",
+                    "general": "General Task"
+                }
                 label_icon = label_icons.get(task_label.value, "📝")
+                label_name = label_names.get(task_label.value, "General Task")
                 
                 await ws.send_text(json.dumps({
                     "type": "task_created",
                     "task_id": task_id,
                     "task_label": task_label.value,
                     "target_type": target_type,
-                    "content": f"🔄 Background task created {label_icon} [{task_label.value.upper()}]. Check the Tasks tab to monitor progress."
+                    "content": f"🔄 Background task created {label_icon} [{label_name}]. Check the Tasks tab to monitor progress."
                 }))
                 
                 # Run task in background thread with captured task_id and separate agent
@@ -12185,6 +12250,10 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 # Send task classification info first
                 label_icons = {
+                    "pentest_web": "🌐",
+                    "pentest_api": "🔌",
+                    "pentest_network": "🖧",
+                    "pentest_osint": "🕵️",
                     "pentest": "🎯",
                     "scanning": "🛡️",
                     "recon": "🔍",
@@ -12192,6 +12261,10 @@ The report should be comprehensive and professional, suitable for executive stak
                     "general": "📝"
                 }
                 label_names = {
+                    "pentest_web": "Web Application Pentest",
+                    "pentest_api": "API Pentest",
+                    "pentest_network": "Network Pentest",
+                    "pentest_osint": "OSINT Assessment",
                     "pentest": "Penetration Test",
                     "scanning": "Vulnerability Scan",
                     "recon": "Reconnaissance",
