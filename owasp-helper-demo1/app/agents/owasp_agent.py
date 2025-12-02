@@ -115,6 +115,18 @@ from app.tools.telegram_tool import (
     telegram_status,
     telegram_disconnect,
 )
+from app.tools.zap_tools import (
+    zap_start_daemon,
+    zap_stop_daemon,
+    zap_spider_scan,
+    zap_ajax_spider_scan,
+    zap_active_scan,
+    zap_get_passive_scan_status,
+    zap_get_alerts,
+    zap_get_urls_with_params,
+    zap_generate_report,
+    zap_full_scan,
+)
 from app.config import get_settings, PROVIDER_CONFIGS
 
 # DefectDojo tools are optional; import only if base URL is configured
@@ -334,6 +346,20 @@ def build_owasp_agent() -> CodeAgent:
         telegram_get_updates,
         telegram_status,
         telegram_disconnect,
+    ])
+    
+    # OWASP ZAP - Web Application Vulnerability Scanner
+    tools.extend([
+        zap_start_daemon,
+        zap_stop_daemon,
+        zap_spider_scan,
+        zap_ajax_spider_scan,
+        zap_active_scan,
+        zap_get_passive_scan_status,
+        zap_get_alerts,
+        zap_get_urls_with_params,
+        zap_full_scan,
+        zap_generate_report,
     ])
     
     # Add DefectDojo tools only if configured

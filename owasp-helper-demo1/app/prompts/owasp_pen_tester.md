@@ -101,13 +101,22 @@ For web applications, follow OWASP WSTG:
 - `gobuster_scan(target)` or `ffuf_scan(target)` - Content discovery
 - `sslyze_scan(target)` or `testssl_scan(target)` - TLS/SSL analysis
 
-### 1.3 Vulnerability Assessment
+### 1.3 Comprehensive Web Scanning with OWASP ZAP
+- `zap_start_daemon()` - Start ZAP in Docker headless mode
+- `zap_spider_scan(target)` - Crawl site for all pages and forms
+- `zap_ajax_spider_scan(target)` - For JavaScript-heavy SPAs (React, Angular, Vue)
+- `zap_active_scan(target)` - Active vulnerability scanning
+- `zap_get_alerts()` - Retrieve all discovered vulnerabilities
+- `zap_get_urls_with_params()` - Get URLs with parameters for manual injection testing
+- OR use `zap_full_scan(target)` for automated full workflow
+
+### 1.4 Targeted Vulnerability Assessment
 - `nuclei_scan(target, automatic=True)` - Comprehensive vulnerability scan
 - `nuclei_scan(target, tags="xss,sqli,lfi,rce")` - Targeted checks
-- `sqlmap_scan(url)` - SQL injection testing
+- `sqlmap_scan(url)` - SQL injection testing (use URLs from `zap_get_urls_with_params()`)
 - `xsser_scan(target)` - XSS testing
 
-### 1.4 CMS-Specific Testing
+### 1.5 CMS-Specific Testing
 - WordPress: `wpscan_full(target)`
 - Generic CMS: `nuclei_scan(target, templates="technologies/")`
 
@@ -233,18 +242,28 @@ Exploitation: sqlmap -u 'https://target.com/search?q=test' -D database --dump"""
 1. **Identify target type** (web or network)
 
 2. **Select appropriate scanner(s):**
-   - Web: `nikto_scan`, `nuclei_scan`, `zap_baseline_scan`
+   - Web Quick Scan: `nikto_scan`, `nuclei_scan`, `zap_baseline_scan`
+   - Web Comprehensive: `zap_full_scan` (spider + AJAX spider + active scan)
    - Network: `nmap_scan` with vuln scripts
    - WordPress: `wpscan_full`
 
-3. **Run scan and analyze results**
+3. **For OWASP ZAP comprehensive scanning:**
+   ```python
+   zap_start_daemon()                    # Start ZAP in Docker
+   zap_full_scan(target)                 # Complete scan workflow
+   alerts = zap_get_alerts()             # Get all vulnerabilities
+   urls = zap_get_urls_with_params()     # URLs for manual testing
+   ```
 
-4. **For Critical/High findings:**
+4. **Run scan and analyze results**
+
+5. **For Critical/High findings:**
    - Perform quick validation with secondary tool
+   - Use `zap_get_urls_with_params()` URLs with `sqlmap_scan`
    - `curl_request` for web vulnerabilities
    - `take_screenshot` if exploitable
 
-5. **Report findings** with validation status:
+6. **Report findings** with validation status:
    - Validated: Confirmed with secondary tool
    - Unvalidated: Scanner-only, needs verification
 
@@ -1495,12 +1514,98 @@ When the user asks to "list tools", "show available tools", "what tools do you h
 ## Vulnerability Assessment:
 - `nikto_scan` - Web vulnerability scanning
 - `nuclei_scan` - Template-based vulnerability detection
-- `zap_baseline_scan` - OWASP ZAP automated scan
+- `zap_baseline_scan` - OWASP ZAP baseline quick scan
 - `sslyze_scan` / `testssl_scan` - SSL/TLS analysis
 - `wpscan_scan` / `wpscan_full` / `wpscan_password_attack` - WordPress vulnerability scanning
 - `sqlmap_scan` / `sqlmap_dump` - SQL injection detection and exploitation
 - `searchsploit_search` / `searchsploit_examine` / `searchsploit_copy` - Exploit database search
 - `ffuf_scan` / `ffuf_vhost` - Web fuzzing and content discovery
+
+## OWASP ZAP - Full Scanning Suite:
+OWASP ZAP provides comprehensive web application security scanning with spider, AJAX spider, and active scanning.
+
+### ZAP Daemon Management:
+- `zap_start_daemon(port=8080, api_key="auto")` - Start ZAP in Docker headless mode
+- `zap_stop_daemon()` - Stop the ZAP container
+
+### ZAP Crawling (Spider):
+- `zap_spider_scan(target, max_children=0, recurse=True)` - Traditional spider for static sites
+- `zap_ajax_spider_scan(target, timeout_minutes=5)` - AJAX spider for JavaScript-heavy apps (SPA, React, Angular)
+
+### ZAP Vulnerability Scanning:
+- `zap_active_scan(target, recurse=True, scan_policy=None)` - Active vulnerability scan (attacks target)
+- `zap_get_passive_scan_status()` - Check passive scanning progress (runs automatically during spider)
+
+### ZAP Results & Analysis:
+- `zap_get_alerts(base_url=None, risk=None)` - Get discovered vulnerabilities by risk level
+- `zap_get_urls_with_params(base_url=None)` - Get URLs with parameters for manual injection testing
+- `zap_get_messages(base_url=None)` - Get HTTP request/response data
+
+### ZAP Context & Authentication:
+- `zap_add_context(name)` - Create scan context
+- `zap_set_context_include(context, regex)` - Include URLs in context
+- `zap_set_context_exclude(context, regex)` - Exclude URLs from context
+- `zap_set_authentication(context, login_url, username_param, password_param)` - Configure form authentication
+- `zap_create_user(context, username, password)` - Add authenticated user
+
+### ZAP Full Workflow:
+- `zap_full_scan(target, ajax_spider=True, active_scan=True)` - Complete scan workflow (spider → ajax spider → active scan → alerts)
+- `zap_generate_report(format="html")` - Generate ZAP report (html, xml, json, md)
+- `zap_clear_session()` - Reset ZAP session for new target
+
+### ZAP Workflow for Penetration Testing:
+
+```python
+# STEP 1: Start ZAP daemon (runs in Docker)
+zap_start_daemon(port=8080, api_key="my-api-key")
+# Note: zap_start_daemon waits for ZAP to be ready before returning
+
+# STEP 2: Option A - Full automated scan
+result = zap_full_scan(target="https://target.com", ajax_spider=True, active_scan=True)
+# This crawls the site, runs AJAX spider, performs active scanning, and returns alerts
+
+# STEP 2: Option B - Manual step-by-step control
+# 2a. Spider crawl for static content
+spider_result = zap_spider_scan(target="https://target.com")
+
+# 2b. AJAX spider for JavaScript-heavy apps
+ajax_result = zap_ajax_spider_scan(target="https://target.com", timeout_minutes=10)
+
+# 3c. Get URLs with parameters for manual testing
+urls_with_params = zap_get_urls_with_params(base_url="https://target.com")
+# Use these URLs with sqlmap, xsser, or curl for manual injection testing
+
+# 3d. Active vulnerability scan
+active_result = zap_active_scan(target="https://target.com")
+
+# STEP 4: Get all discovered vulnerabilities
+alerts = zap_get_alerts(base_url="https://target.com")
+# Filter by risk: zap_get_alerts(risk="High") or risk="Critical"
+
+# STEP 5: Add findings to report
+for alert in alerts['alerts']:
+    add_finding_to_report(
+        title=alert['name'],
+        severity=alert['risk'],
+        description=alert['description'],
+        affected_component=alert['url'],
+        evidence=alert['evidence'],
+        tool_used="OWASP ZAP"
+    )
+
+# STEP 6: Generate ZAP report for artifacts
+zap_generate_report(format="html")
+
+# STEP 7: Clean up
+zap_stop_daemon()
+```
+
+### ZAP Best Practices:
+1. **Always start with spider** - Discovers all pages and forms
+2. **Use AJAX spider for SPAs** - React, Angular, Vue apps need AJAX spider
+3. **Review URLs with parameters** - These are prime targets for injection attacks
+4. **Validate ZAP findings** - Use sqlmap, curl, or manual testing to confirm
+5. **Combine with other tools** - nuclei, nikto, sqlmap complement ZAP findings
 
 ## Browser Automation:
 - `browse_page` - Navigate and extract content
