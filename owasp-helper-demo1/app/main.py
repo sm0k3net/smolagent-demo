@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from enum import Enum
-from app.agents.owasp_agent import build_owasp_agent
+from app.agents.owasp_agent import build_owasp_agent, build_model
 from app.tools.report_tools import (
     enable_report_mode, disable_report_mode, get_report_status,
     generate_html_report, generate_markdown_report,
@@ -3099,11 +3099,190 @@ async def save_chat_bulk(chat_id: str, request: ChatSaveRequest):
 
 REPORTS_DIR = Path("data/reports")
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_INDEX_FILE = REPORTS_DIR / "reports_index.json"
+
+def load_reports_index():
+    """Load the reports index file."""
+    if REPORTS_INDEX_FILE.exists():
+        try:
+            return json.loads(REPORTS_INDEX_FILE.read_text(encoding='utf-8'))
+        except Exception:
+            return {"reports": [], "tasks": {}, "projects": {}}
+    return {"reports": [], "tasks": {}, "projects": {}}
+
+def save_reports_index(index_data):
+    """Save the reports index file."""
+    REPORTS_INDEX_FILE.write_text(json.dumps(index_data, indent=2), encoding='utf-8')
+
+# ============== PROJECTS ENDPOINTS ==============
+
+@app.get("/api/projects")
+async def get_projects():
+    """Get all projects."""
+    index = load_reports_index()
+    return JSONResponse(index.get("projects", {}))
+
+@app.post("/api/projects")
+async def create_project(data: dict):
+    """Create a new project."""
+    name = data.get("name", "").strip()
+    description = data.get("description", "")
+    color = data.get("color", "#22c55e")  # Default green
+    
+    if not name:
+        return JSONResponse({"error": "Project name required"}, status_code=400)
+    
+    index = load_reports_index()
+    
+    # Generate project ID
+    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+    
+    index["projects"][project_id] = {
+        "id": project_id,
+        "name": name,
+        "description": description,
+        "color": color,
+        "created_at": datetime.now().isoformat(),
+        "tasks": []  # List of task_ids in this project
+    }
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True, "project": index["projects"][project_id]})
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: str, data: dict):
+    """Update a project."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    if "name" in data:
+        project["name"] = data["name"]
+    if "description" in data:
+        project["description"] = data["description"]
+    if "color" in data:
+        project["color"] = data["color"]
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True, "project": project})
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project (tasks remain but are unassigned)."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    # Remove project from tasks that reference it
+    for task_id, task in index.get("tasks", {}).items():
+        if task.get("project_id") == project_id:
+            task["project_id"] = None
+    
+    # Remove project from reports that reference it
+    for report in index.get("reports", []):
+        if report.get("project_id") == project_id:
+            report["project_id"] = None
+    
+    del index["projects"][project_id]
+    save_reports_index(index)
+    return JSONResponse({"success": True})
+
+@app.post("/api/projects/{project_id}/tasks")
+async def add_task_to_project(project_id: str, data: dict):
+    """Add a task to a project."""
+    task_id = data.get("task_id")
+    if not task_id:
+        return JSONResponse({"error": "task_id required"}, status_code=400)
+    
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    # Remove task from any other project first
+    for pid, proj in index["projects"].items():
+        if task_id in proj.get("tasks", []):
+            proj["tasks"].remove(task_id)
+    
+    # Add to new project
+    if task_id not in index["projects"][project_id].get("tasks", []):
+        index["projects"][project_id].setdefault("tasks", []).append(task_id)
+    
+    # Update task's project_id
+    if task_id in index.get("tasks", {}):
+        index["tasks"][task_id]["project_id"] = project_id
+    
+    # Update reports associated with this task
+    for report in index.get("reports", []):
+        if report.get("task_id") == task_id:
+            report["project_id"] = project_id
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True})
+
+@app.delete("/api/projects/{project_id}/tasks/{task_id}")
+async def remove_task_from_project(project_id: str, task_id: str):
+    """Remove a task from a project."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    if task_id in project.get("tasks", []):
+        project["tasks"].remove(task_id)
+    
+    # Update task's project_id
+    if task_id in index.get("tasks", {}):
+        index["tasks"][task_id]["project_id"] = None
+    
+    # Update reports
+    for report in index.get("reports", []):
+        if report.get("task_id") == task_id:
+            report["project_id"] = None
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True})
+
+def add_report_to_index(report_path: str, task_id: str = None, task_prompt: str = None, 
+                       task_label: str = None, project_id: str = None):
+    """Add a report to the index with task/project association."""
+    index = load_reports_index()
+    
+    # Create report entry
+    report_entry = {
+        "path": report_path,
+        "task_id": task_id,
+        "project_id": project_id,
+        "added_at": datetime.now().isoformat()
+    }
+    
+    # Add to reports list
+    index["reports"].append(report_entry)
+    
+    # Update task info if provided
+    if task_id:
+        if task_id not in index["tasks"]:
+            index["tasks"][task_id] = {
+                "prompt": task_prompt or "Unknown task",
+                "label": task_label or "general",
+                "created_at": datetime.now().isoformat(),
+                "reports": []
+            }
+        index["tasks"][task_id]["reports"].append(report_path)
+    
+    save_reports_index(index)
+    return report_entry
 
 @app.get("/api/reports")
-async def get_reports():
-    """Get list of all generated reports."""
+async def get_reports(grouped: bool = True):
+    """Get list of all generated reports, optionally grouped by task."""
     reports = []
+    index = load_reports_index()
+    indexed_paths = {r["path"] for r in index.get("reports", [])}
     
     # Also check common output directories
     report_dirs = [REPORTS_DIR, Path("output"), Path("reports")]
@@ -3113,24 +3292,64 @@ async def get_reports():
             continue
             
         for file_path in report_dir.rglob("*"):
-            if file_path.is_file():
+            if file_path.is_file() and file_path.name != "reports_index.json":
                 ext = file_path.suffix.lower().lstrip('.')
                 if ext in ['html', 'pdf', 'md', 'json', 'txt', 'xml', 'csv']:
                     try:
                         stat = file_path.stat()
+                        path_str = str(file_path)
+                        
+                        # Find task_id from index
+                        task_id = None
+                        project_id = None
+                        for r in index.get("reports", []):
+                            if r["path"] == path_str:
+                                task_id = r.get("task_id")
+                                project_id = r.get("project_id")
+                                break
+                        
                         reports.append({
                             "name": file_path.name,
-                            "path": str(file_path),
+                            "path": path_str,
                             "type": ext,
                             "size": stat.st_size,
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            "task_id": task_id,
+                            "project_id": project_id
                         })
                     except Exception:
                         pass
     
     # Sort by modified date descending
     reports.sort(key=lambda x: x.get("modified", ""), reverse=True)
-    return JSONResponse(reports)
+    
+    if not grouped:
+        return JSONResponse(reports)
+    
+    # Group by task
+    tasks_data = index.get("tasks", {})
+    projects_data = index.get("projects", {})
+    
+    # Group reports by task
+    grouped_reports = {
+        "ungrouped": [],
+        "tasks": {},
+        "projects": projects_data
+    }
+    
+    for report in reports:
+        task_id = report.get("task_id")
+        if task_id and task_id in tasks_data:
+            if task_id not in grouped_reports["tasks"]:
+                grouped_reports["tasks"][task_id] = {
+                    **tasks_data[task_id],
+                    "reports": []
+                }
+            grouped_reports["tasks"][task_id]["reports"].append(report)
+        else:
+            grouped_reports["ungrouped"].append(report)
+    
+    return JSONResponse(grouped_reports)
 
 @app.get("/api/reports/view")
 async def view_report(path: str):
@@ -3191,10 +3410,14 @@ async def delete_report(data: dict):
 
 @app.post("/api/reports/save")
 async def save_report(data: dict):
-    """Save a report to disk."""
+    """Save a report to disk with optional task association."""
     content = data.get("content", "")
     name = data.get("name", "report")
     format_type = data.get("format", "html")
+    task_id = data.get("task_id")
+    task_prompt = data.get("task_prompt")
+    task_label = data.get("task_label")
+    project_id = data.get("project_id")
     
     if not content:
         return JSONResponse({"error": "Content required"}, status_code=400)
@@ -3208,13 +3431,70 @@ async def save_report(data: dict):
     
     try:
         file_path.write_text(content, encoding='utf-8')
+        
+        # Add to reports index with task association
+        add_report_to_index(
+            str(file_path), 
+            task_id=task_id,
+            task_prompt=task_prompt,
+            task_label=task_label,
+            project_id=project_id
+        )
+        
         return JSONResponse({
             "success": True,
             "path": str(file_path),
-            "filename": filename
+            "filename": filename,
+            "task_id": task_id
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+# Endpoint to assign existing reports to tasks
+@app.post("/api/reports/assign-task")
+async def assign_report_to_task(data: dict):
+    """Assign an existing report to a task."""
+    report_path = data.get("path")
+    task_id = data.get("task_id")
+    task_prompt = data.get("task_prompt")
+    task_label = data.get("task_label")
+    
+    if not report_path:
+        return JSONResponse({"error": "Report path required"}, status_code=400)
+    
+    index = load_reports_index()
+    
+    # Check if report is already in index
+    found = False
+    for r in index.get("reports", []):
+        if r["path"] == report_path:
+            r["task_id"] = task_id
+            found = True
+            break
+    
+    if not found:
+        # Add new entry
+        index["reports"].append({
+            "path": report_path,
+            "task_id": task_id,
+            "project_id": None,
+            "added_at": datetime.now().isoformat()
+        })
+    
+    # Update task info
+    if task_id:
+        if task_id not in index["tasks"]:
+            index["tasks"][task_id] = {
+                "prompt": task_prompt or "Unknown task",
+                "label": task_label or "general",
+                "created_at": datetime.now().isoformat(),
+                "reports": []
+            }
+        if report_path not in index["tasks"][task_id]["reports"]:
+            index["tasks"][task_id]["reports"].append(report_path)
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True})
 
 # ============== NOTES ENDPOINTS ==============
 
@@ -3494,6 +3774,80 @@ async def create_note_folder(data: dict):
     save_notes_index(notes_index)
     
     return JSONResponse(folder_entry)
+
+
+@app.delete("/api/notes/folder/{folder_id}")
+async def delete_note_folder(folder_id: str):
+    """Delete a folder and all its contents."""
+    global notes_index
+    
+    def delete_folder_recursive(folders, target_id):
+        for i, folder in enumerate(folders):
+            if folder.get("id") == target_id or folder.get("path") == target_id:
+                # Delete all notes in this folder and subfolders
+                deleted_folder = folders.pop(i)
+                delete_folder_contents(deleted_folder)
+                return True
+            # Check children
+            if "children" in folder:
+                child_folders = [c for c in folder["children"] if c.get("type") == "folder"]
+                if delete_folder_recursive(child_folders, target_id):
+                    folder["children"] = [c for c in folder["children"] if c.get("type") != "folder" or c.get("id") != target_id]
+                    return True
+        return False
+    
+    def delete_folder_contents(folder):
+        # Delete notes in folder
+        for child in folder.get("children", []):
+            if child.get("type") == "folder":
+                delete_folder_contents(child)
+            else:
+                # Delete note file
+                note_id = child.get("id")
+                if note_id:
+                    note_file = NOTES_DIR / f"{note_id}.json"
+                    if note_file.exists():
+                        note_file.unlink()
+                    # Remove from files index
+                    notes_index["files"] = [f for f in notes_index.get("files", []) if f.get("id") != note_id]
+    
+    try:
+        if delete_folder_recursive(notes_index.get("folders", []), folder_id):
+            save_notes_index(notes_index)
+            return JSONResponse({"success": True})
+        return JSONResponse({"error": "Folder not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.put("/api/notes/folder/{folder_id}")
+async def rename_note_folder(folder_id: str, data: dict):
+    """Rename a folder."""
+    global notes_index
+    
+    new_name = data.get("name")
+    if not new_name:
+        return JSONResponse({"error": "Name required"}, status_code=400)
+    
+    def rename_folder_recursive(folders, target_id, new_name):
+        for folder in folders:
+            if folder.get("id") == target_id or folder.get("path") == target_id:
+                folder["name"] = new_name
+                return True
+            if "children" in folder:
+                child_folders = [c for c in folder["children"] if c.get("type") == "folder"]
+                if rename_folder_recursive(child_folders, target_id, new_name):
+                    return True
+        return False
+    
+    try:
+        if rename_folder_recursive(notes_index.get("folders", []), folder_id, new_name):
+            save_notes_index(notes_index)
+            return JSONResponse({"success": True, "name": new_name})
+        return JSONResponse({"error": "Folder not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.post("/api/notes/{note_id}/attachments")
 async def upload_note_attachments(note_id: str, files: List[UploadFile] = File(...)):
@@ -6167,6 +6521,229 @@ h1 {
   color: var(--gray-500);
 }
 
+/* Report Task Group Styles */
+.report-task-group {
+  margin-bottom: 0.75rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.report-task-group.expanded {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+.report-task-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.report-task-header:hover {
+  background: rgba(255,255,255,0.03);
+}
+.report-task-toggle {
+  font-size: 0.7rem;
+  color: var(--gray-500);
+  transition: transform 0.2s ease;
+  width: 12px;
+}
+.report-task-group.expanded .report-task-toggle {
+  color: var(--success);
+}
+.report-task-icon {
+  font-size: 1.1rem;
+}
+.report-task-prompt {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.report-task-count {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  background: rgba(255,255,255,0.05);
+  padding: 0.2rem 0.5rem;
+  border-radius: 10px;
+}
+.report-task-reports {
+  padding: 0.5rem;
+  padding-top: 0;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.1);
+}
+.report-task-reports .report-item {
+  margin-left: 1rem;
+  background: rgba(255,255,255,0.02);
+}
+.ungrouped-reports .report-task-header {
+  opacity: 0.8;
+}
+
+/* Reports Section Header */
+.reports-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.add-project-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 6px;
+  color: var(--success);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.add-project-btn:hover {
+  background: rgba(34, 197, 94, 0.25);
+}
+.add-project-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Project Group Styles */
+.report-project-group {
+  margin-bottom: 0.75rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+.report-project-group.drag-over {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.05);
+}
+.report-project-group.expanded {
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.report-project-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.report-project-header:hover {
+  background: rgba(255,255,255,0.03);
+}
+.report-project-color {
+  width: 4px;
+  height: 24px;
+  border-radius: 2px;
+}
+.report-project-name {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--gray-200);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.report-project-actions {
+  display: flex;
+  gap: 0.4rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.report-project-header:hover .report-project-actions {
+  opacity: 1;
+}
+.report-project-tasks {
+  padding: 0.5rem;
+  padding-top: 0;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.1);
+}
+
+/* Draggable task styles */
+.report-task-group[draggable="true"] {
+  cursor: grab;
+}
+.report-task-group[draggable="true"]:active {
+  cursor: grabbing;
+}
+.drag-handle {
+  font-size: 0.9rem;
+  color: var(--gray-600);
+  cursor: grab;
+  margin-right: -0.25rem;
+}
+.report-task-group.in-project {
+  margin-left: 0.5rem;
+  background: rgba(255,255,255,0.02);
+  border-width: 1px;
+}
+
+/* Create Project Form */
+.create-project-form .form-group {
+  margin-bottom: 1rem;
+}
+.create-project-form label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  margin-bottom: 0.4rem;
+}
+.form-input, .form-textarea {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.form-input:focus, .form-textarea:focus {
+  outline: none;
+  border-color: rgba(34, 197, 94, 0.5);
+}
+.color-picker {
+  display: flex;
+  gap: 0.5rem;
+}
+.color-option {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.color-option:hover {
+  transform: scale(1.1);
+}
+.color-option.selected {
+  border-color: white;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.3);
+}
+.form-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1.5rem;
+}
+
 /* Notes Sub-Tab Styles */
 .notes-container {
   display: flex;
@@ -6306,6 +6883,43 @@ h1 {
 .notes-file .note-delete-btn:hover {
   background: rgba(239, 68, 68, 0.4);
   color: #fca5a5;
+}
+
+/* Folder action buttons */
+.folder-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.notes-folder-header:hover .folder-actions {
+  display: flex;
+}
+.folder-action-btn {
+  padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--gray-400);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.folder-action-btn:hover {
+  background: rgba(99, 102, 241, 0.3);
+  color: var(--primary-light);
+}
+.folder-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+}
+.notes-folder-header .folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Notes Editor Area */
@@ -9682,6 +10296,47 @@ main {
   background: rgba(255,255,255,0.1);
   margin: 0 0.25rem;
 }
+
+/* Mode Switcher - Chat/Agent toggle */
+.mode-switcher {
+  display: flex;
+  align-items: center;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  padding: 2px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--gray-500);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.mode-btn:hover {
+  color: var(--gray-300);
+}
+.mode-btn.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(139, 92, 246, 0.2) 100%);
+  color: var(--primary-light);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+.mode-btn svg {
+  width: 14px;
+  height: 14px;
+}
+#mode-chat-btn.active {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.25) 0%, rgba(16, 185, 129, 0.2) 100%);
+  color: #4ade80;
+}
+
 #attached-files {
   display: flex;
   gap: 0.35rem;
@@ -11774,6 +12429,22 @@ main {
                     </svg>
                     <span>Background</span>
                   </button>
+                  <span class="toolbar-divider"></span>
+                  <div class="mode-switcher" id="mode-switcher">
+                    <button type="button" class="mode-btn" id="mode-chat-btn" onclick="setAgentMode('chat')" title="Simple chat mode - faster responses, limited capabilities">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      <span>Chat</span>
+                    </button>
+                    <button type="button" class="mode-btn active" id="mode-agent-btn" onclick="setAgentMode('agent')" title="Full agent mode - can use tools and run complex tasks">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M12 1v6m0 6v10M1 12h6m6 0h10"></path>
+                      </svg>
+                      <span>Agent</span>
+                    </button>
+                  </div>
                 </div>
                 <div class="input-toolbar-right">
                   <span id="char-counter" style="font-size:0.7rem;color:var(--gray-500);"></span>
@@ -11812,6 +12483,9 @@ const reportCheckbox = document.getElementById('report-mode-checkbox');
 const fileInput = document.getElementById('file-input');
 const attachedFilesDiv = document.getElementById('attached-files');
 const backgroundTaskCheckbox = document.getElementById('background-task-checkbox');
+
+// Agent Mode - chat (simple) or agent (full capabilities)
+let currentAgentMode = 'agent';  // 'chat' or 'agent'
 
 // Activity Monitor - Multi-task management
 const activityTasks = {};  // taskId -> { logs: [], status: 'running'|'completed'|'failed', startTime, stepCount, toolCount, prompt }
@@ -13288,18 +13962,482 @@ function switchToolsSubtab(subtab) {
 }
 
 // ============== REPORTS DIRECTORY ==============
+let reportsGroupedData = null;  // Store grouped reports data
+
 async function loadReportsDirectory() {
   const listEl = document.getElementById('reports-list');
   listEl.innerHTML = '<div class="reports-loading"><div class="spinner"></div><span>Loading reports...</span></div>';
   
   try {
-    const response = await fetch('/api/reports');
+    const response = await fetch('/api/reports?grouped=true');
     if (!response.ok) throw new Error('Failed to load reports');
-    reportsStore = await response.json();
-    renderReportsList(reportsStore);
+    reportsGroupedData = await response.json();
+    
+    // Convert to flat list for backward compatibility
+    reportsStore = [];
+    if (reportsGroupedData.ungrouped) {
+      reportsStore.push(...reportsGroupedData.ungrouped);
+    }
+    if (reportsGroupedData.tasks) {
+      Object.values(reportsGroupedData.tasks).forEach(task => {
+        if (task.reports) reportsStore.push(...task.reports);
+      });
+    }
+    
+    renderGroupedReportsList(reportsGroupedData);
   } catch (error) {
     console.error('Error loading reports:', error);
     listEl.innerHTML = '<div class="no-reports">Failed to load reports</div>';
+  }
+}
+
+function renderGroupedReportsList(data) {
+  const listEl = document.getElementById('reports-list');
+  
+  const taskCount = Object.keys(data.tasks || {}).length;
+  const ungroupedCount = (data.ungrouped || []).length;
+  const projectCount = Object.keys(data.projects || {}).length;
+  
+  if (taskCount === 0 && ungroupedCount === 0) {
+    listEl.innerHTML = '<div class="no-reports">No reports found. Generate reports using the agent.</div>';
+    return;
+  }
+  
+  let html = '';
+  
+  // Render projects section header
+  html += `
+    <div class="reports-section-header">
+      <span>📁 Projects</span>
+      <button class="add-project-btn" onclick="showCreateProjectModal()" title="Create Project">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        New Project
+      </button>
+    </div>
+  `;
+  
+  // Render projects
+  if (projectCount > 0) {
+    Object.entries(data.projects).forEach(([projectId, project]) => {
+      // Find tasks in this project
+      const projectTasks = Object.entries(data.tasks || {}).filter(([tid, t]) => 
+        project.tasks && project.tasks.includes(tid)
+      );
+      const taskNames = projectTasks.map(([tid, t]) => t.prompt?.substring(0, 30) + '...');
+      
+      html += `
+        <div class="report-project-group" data-project-id="${projectId}" 
+             ondragover="event.preventDefault(); this.classList.add('drag-over');"
+             ondragleave="this.classList.remove('drag-over');"
+             ondrop="dropTaskOnProject(event, '${projectId}');">
+          <div class="report-project-header" onclick="toggleReportProjectGroup('${projectId}')">
+            <span class="report-project-color" style="background: ${project.color || '#22c55e'}"></span>
+            <span class="report-task-toggle">▶</span>
+            <span class="report-project-name">${escapeHtml(project.name)}</span>
+            <span class="report-task-count">${projectTasks.length} task${projectTasks.length !== 1 ? 's' : ''}</span>
+            <div class="report-project-actions">
+              <button class="report-action-btn" onclick="event.stopPropagation(); editProject('${projectId}')" title="Edit">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
+              <button class="report-action-btn" onclick="event.stopPropagation(); deleteProject('${projectId}')" title="Delete">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="report-project-tasks" id="project-tasks-${projectId}" style="display: none;">
+            ${projectTasks.map(([tid, taskData]) => renderDraggableTask(tid, taskData, data.tasks)).join('')}
+          </div>
+        </div>
+      `;
+    });
+  }
+  
+  // Render unassigned tasks section
+  html += `<div class="reports-section-header" style="margin-top: 1rem;"><span>📋 Tasks</span></div>`;
+  
+  const taskIcons = {
+    'pentest_web': '🌐',
+    'pentest_api': '🔌',
+    'pentest_network': '🖧',
+    'pentest_osint': '🕵️',
+    'pentest': '🎯',
+    'scanning': '🛡️',
+    'recon': '🔍',
+    'discovery': '📂',
+    'general': '📝'
+  };
+  
+  // Render task groups (unassigned to projects)
+  const unassignedTasks = Object.entries(data.tasks || {}).filter(([tid, t]) => {
+    // Check if task is not in any project
+    for (const proj of Object.values(data.projects || {})) {
+      if (proj.tasks && proj.tasks.includes(tid)) return false;
+    }
+    return true;
+  });
+  
+  if (unassignedTasks.length > 0) {
+    unassignedTasks.forEach(([taskId, taskData]) => {
+      const icon = taskIcons[taskData.label] || '📝';
+      const reportCount = taskData.reports ? taskData.reports.length : 0;
+      const promptPreview = taskData.prompt ? taskData.prompt.substring(0, 80) + (taskData.prompt.length > 80 ? '...' : '') : 'Unknown task';
+      
+      html += `
+        <div class="report-task-group" data-task-id="${taskId}" draggable="true"
+             ondragstart="dragTask(event, '${taskId}')">
+          <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
+            <span class="drag-handle">⋮⋮</span>
+            <span class="report-task-toggle">▶</span>
+            <span class="report-task-icon">${icon}</span>
+            <span class="report-task-prompt">${escapeHtml(promptPreview)}</span>
+            <span class="report-task-count">${reportCount} report${reportCount !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="report-task-reports" id="task-reports-${taskId}" style="display: none;">
+            ${(taskData.reports || []).map(report => renderReportItem(report)).join('')}
+          </div>
+        </div>
+      `;
+    });
+  }
+  
+  // Render ungrouped reports
+  if (ungroupedCount > 0) {
+    html += `
+      <div class="report-task-group ungrouped-reports">
+        <div class="report-task-header" onclick="toggleReportTaskGroup('ungrouped')">
+          <span class="report-task-toggle">▶</span>
+          <span class="report-task-icon">📁</span>
+          <span class="report-task-prompt">Ungrouped Reports</span>
+          <span class="report-task-count">${ungroupedCount} report${ungroupedCount !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="report-task-reports" id="task-reports-ungrouped" style="display: none;">
+          ${data.ungrouped.map(report => renderReportItem(report)).join('')}
+        </div>
+      </div>
+    `;
+  }
+  
+  listEl.innerHTML = html;
+}
+
+function renderDraggableTask(taskId, taskData, allTasks) {
+  const taskIcons = {
+    'pentest_web': '🌐',
+    'pentest_api': '🔌',
+    'pentest_network': '🖧',
+    'pentest_osint': '🕵️',
+    'pentest': '🎯',
+    'scanning': '🛡️',
+    'recon': '🔍',
+    'discovery': '📂',
+    'general': '📝'
+  };
+  
+  const icon = taskIcons[taskData.label] || '📝';
+  const reportCount = taskData.reports ? taskData.reports.length : 0;
+  const promptPreview = taskData.prompt ? taskData.prompt.substring(0, 60) + (taskData.prompt.length > 60 ? '...' : '') : 'Unknown task';
+  
+  return `
+    <div class="report-task-group in-project" data-task-id="${taskId}" draggable="true"
+         ondragstart="dragTask(event, '${taskId}')">
+      <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
+        <span class="drag-handle">⋮⋮</span>
+        <span class="report-task-toggle">▶</span>
+        <span class="report-task-icon">${icon}</span>
+        <span class="report-task-prompt">${escapeHtml(promptPreview)}</span>
+        <span class="report-task-count">${reportCount}</span>
+      </div>
+      <div class="report-task-reports" id="task-reports-${taskId}" style="display: none;">
+        ${(taskData.reports || []).map(report => renderReportItem(report)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// Drag and drop functions
+function dragTask(event, taskId) {
+  event.dataTransfer.setData('text/plain', taskId);
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+async function dropTaskOnProject(event, projectId) {
+  event.preventDefault();
+  event.target.closest('.report-project-group')?.classList.remove('drag-over');
+  
+  const taskId = event.dataTransfer.getData('text/plain');
+  if (!taskId) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + projectId + '/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId })
+    });
+    
+    if (response.ok) {
+      loadReportsDirectory();
+    } else {
+      alert('Failed to add task to project');
+    }
+  } catch (err) {
+    console.error('Error adding task to project:', err);
+    alert('Failed to add task to project');
+  }
+}
+
+function toggleReportProjectGroup(projectId) {
+  const tasksContainer = document.getElementById('project-tasks-' + projectId);
+  const groupEl = tasksContainer.closest('.report-project-group');
+  const toggle = groupEl.querySelector('.report-task-toggle');
+  
+  if (tasksContainer.style.display === 'none') {
+    tasksContainer.style.display = 'block';
+    toggle.textContent = '▼';
+    groupEl.classList.add('expanded');
+  } else {
+    tasksContainer.style.display = 'none';
+    toggle.textContent = '▶';
+    groupEl.classList.remove('expanded');
+  }
+}
+
+// Project management functions
+function showCreateProjectModal() {
+  const modal = document.getElementById('task-modal');
+  const title = document.getElementById('task-modal-title');
+  const body = document.getElementById('task-modal-body');
+  
+  title.textContent = 'Create New Project';
+  body.innerHTML = `
+    <div class="create-project-form">
+      <div class="form-group">
+        <label for="project-name">Project Name</label>
+        <input type="text" id="new-project-name" class="form-input" placeholder="e.g., Client A Security Assessment">
+      </div>
+      <div class="form-group">
+        <label for="project-desc">Description</label>
+        <textarea id="new-project-desc" class="form-textarea" rows="3" placeholder="Project description (optional)"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Project Color</label>
+        <div class="color-picker">
+          <button class="color-option" data-color="#22c55e" style="background: #22c55e" onclick="selectProjectColor('#22c55e')"></button>
+          <button class="color-option" data-color="#3b82f6" style="background: #3b82f6" onclick="selectProjectColor('#3b82f6')"></button>
+          <button class="color-option" data-color="#f59e0b" style="background: #f59e0b" onclick="selectProjectColor('#f59e0b')"></button>
+          <button class="color-option" data-color="#ef4444" style="background: #ef4444" onclick="selectProjectColor('#ef4444')"></button>
+          <button class="color-option" data-color="#8b5cf6" style="background: #8b5cf6" onclick="selectProjectColor('#8b5cf6')"></button>
+          <button class="color-option" data-color="#ec4899" style="background: #ec4899" onclick="selectProjectColor('#ec4899')"></button>
+        </div>
+        <input type="hidden" id="new-project-color" value="#22c55e">
+      </div>
+      <div class="form-actions">
+        <button class="btn-secondary" onclick="closeTaskModal()">Cancel</button>
+        <button class="btn-primary" onclick="createProject()">Create Project</button>
+      </div>
+    </div>
+  `;
+  
+  modal.classList.add('active');
+  document.getElementById('new-project-name').focus();
+}
+
+function selectProjectColor(color) {
+  document.getElementById('new-project-color').value = color;
+  document.querySelectorAll('.color-option').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.color === color);
+  });
+}
+
+async function createProject() {
+  const name = document.getElementById('new-project-name').value.trim();
+  const description = document.getElementById('new-project-desc').value.trim();
+  const color = document.getElementById('new-project-color').value;
+  
+  if (!name) {
+    alert('Please enter a project name');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, color })
+    });
+    
+    if (response.ok) {
+      closeTaskModal();
+      loadReportsDirectory();
+    } else {
+      const data = await response.json();
+      alert('Failed to create project: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    console.error('Error creating project:', err);
+    alert('Failed to create project');
+  }
+}
+
+async function editProject(projectId) {
+  // Load current project data
+  const project = reportsGroupedData?.projects?.[projectId];
+  if (!project) return;
+  
+  const modal = document.getElementById('task-modal');
+  const title = document.getElementById('task-modal-title');
+  const body = document.getElementById('task-modal-body');
+  
+  title.textContent = 'Edit Project';
+  body.innerHTML = `
+    <div class="create-project-form">
+      <div class="form-group">
+        <label for="edit-project-name">Project Name</label>
+        <input type="text" id="edit-project-name" class="form-input" value="${escapeHtml(project.name)}">
+      </div>
+      <div class="form-group">
+        <label for="edit-project-desc">Description</label>
+        <textarea id="edit-project-desc" class="form-textarea" rows="3">${escapeHtml(project.description || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Project Color</label>
+        <div class="color-picker">
+          <button class="color-option ${project.color === '#22c55e' ? 'selected' : ''}" data-color="#22c55e" style="background: #22c55e" onclick="selectEditProjectColor('#22c55e')"></button>
+          <button class="color-option ${project.color === '#3b82f6' ? 'selected' : ''}" data-color="#3b82f6" style="background: #3b82f6" onclick="selectEditProjectColor('#3b82f6')"></button>
+          <button class="color-option ${project.color === '#f59e0b' ? 'selected' : ''}" data-color="#f59e0b" style="background: #f59e0b" onclick="selectEditProjectColor('#f59e0b')"></button>
+          <button class="color-option ${project.color === '#ef4444' ? 'selected' : ''}" data-color="#ef4444" style="background: #ef4444" onclick="selectEditProjectColor('#ef4444')"></button>
+          <button class="color-option ${project.color === '#8b5cf6' ? 'selected' : ''}" data-color="#8b5cf6" style="background: #8b5cf6" onclick="selectEditProjectColor('#8b5cf6')"></button>
+          <button class="color-option ${project.color === '#ec4899' ? 'selected' : ''}" data-color="#ec4899" style="background: #ec4899" onclick="selectEditProjectColor('#ec4899')"></button>
+        </div>
+        <input type="hidden" id="edit-project-color" value="${project.color || '#22c55e'}">
+      </div>
+      <div class="form-actions">
+        <button class="btn-secondary" onclick="closeTaskModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveProject('${projectId}')">Save Changes</button>
+      </div>
+    </div>
+  `;
+  
+  modal.classList.add('active');
+}
+
+function selectEditProjectColor(color) {
+  document.getElementById('edit-project-color').value = color;
+  document.querySelectorAll('.color-option').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.color === color);
+  });
+}
+
+async function saveProject(projectId) {
+  const name = document.getElementById('edit-project-name').value.trim();
+  const description = document.getElementById('edit-project-desc').value.trim();
+  const color = document.getElementById('edit-project-color').value;
+  
+  if (!name) {
+    alert('Please enter a project name');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/projects/' + projectId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, color })
+    });
+    
+    if (response.ok) {
+      closeTaskModal();
+      loadReportsDirectory();
+    } else {
+      const data = await response.json();
+      alert('Failed to update project: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    console.error('Error updating project:', err);
+    alert('Failed to update project');
+  }
+}
+
+async function deleteProject(projectId) {
+  if (!confirm('Are you sure you want to delete this project? Tasks will be moved to ungrouped.')) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + projectId, {
+      method: 'DELETE'
+    });
+    
+    if (response.ok) {
+      loadReportsDirectory();
+    } else {
+      alert('Failed to delete project');
+    }
+  } catch (err) {
+    console.error('Error deleting project:', err);
+    alert('Failed to delete project');
+  }
+}
+
+function renderReportItem(report) {
+  const icon = getReportIcon(report.type);
+  const size = formatFileSize(report.size);
+  const date = new Date(report.modified).toLocaleDateString();
+  
+  return `
+    <div class="report-item" data-type="${report.type}" data-name="${report.name.toLowerCase()}" data-task-id="${report.task_id || ''}">
+      <div class="report-icon">${icon}</div>
+      <div class="report-info">
+        <div class="report-name">${escapeHtml(report.name)}</div>
+        <div class="report-meta">
+          <span>${size}</span>
+          <span>${date}</span>
+        </div>
+      </div>
+      <div class="report-actions">
+        <button class="report-action-btn" onclick="viewReport('${escapeHtml(report.path)}')" title="View">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
+        <button class="report-action-btn" onclick="downloadReport('${escapeHtml(report.path)}')" title="Download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </button>
+        <button class="report-action-btn" onclick="deleteReport('${escapeHtml(report.path)}')" title="Delete">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function toggleReportTaskGroup(taskId) {
+  const reportsContainer = document.getElementById('task-reports-' + taskId);
+  const groupEl = reportsContainer.closest('.report-task-group');
+  const toggle = groupEl.querySelector('.report-task-toggle');
+  
+  if (reportsContainer.style.display === 'none') {
+    reportsContainer.style.display = 'block';
+    toggle.textContent = '▼';
+    groupEl.classList.add('expanded');
+  } else {
+    reportsContainer.style.display = 'none';
+    toggle.textContent = '▶';
+    groupEl.classList.remove('expanded');
   }
 }
 
@@ -13311,45 +14449,7 @@ function renderReportsList(reports) {
     return;
   }
   
-  listEl.innerHTML = reports.map(report => {
-    const icon = getReportIcon(report.type);
-    const size = formatFileSize(report.size);
-    const date = new Date(report.modified).toLocaleDateString();
-    
-    return `
-      <div class="report-item" data-type="${report.type}" data-name="${report.name.toLowerCase()}">
-        <div class="report-icon">${icon}</div>
-        <div class="report-info">
-          <div class="report-name">${escapeHtml(report.name)}</div>
-          <div class="report-meta">
-            <span>${size}</span>
-            <span>${date}</span>
-          </div>
-        </div>
-        <div class="report-actions">
-          <button class="report-action-btn" onclick="viewReport('${escapeHtml(report.path)}')" title="View">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-              <circle cx="12" cy="12" r="3"></circle>
-            </svg>
-          </button>
-          <button class="report-action-btn" onclick="downloadReport('${escapeHtml(report.path)}')" title="Download">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-          </button>
-          <button class="report-action-btn" onclick="deleteReport('${escapeHtml(report.path)}')" title="Delete">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
+  listEl.innerHTML = reports.map(report => renderReportItem(report)).join('');
 }
 
 function getReportIcon(type) {
@@ -13375,6 +14475,13 @@ function filterReports() {
   const searchTerm = document.getElementById('reports-search').value.toLowerCase();
   const typeFilter = document.getElementById('reports-type-filter').value;
   
+  if (!searchTerm && typeFilter === 'all') {
+    // No filter - show grouped view
+    renderGroupedReportsList(reportsGroupedData);
+    return;
+  }
+  
+  // Filter and show flat list
   const filtered = reportsStore.filter(report => {
     const matchesSearch = report.name.toLowerCase().includes(searchTerm);
     const matchesType = typeFilter === 'all' || report.type === typeFilter;
@@ -13496,8 +14603,10 @@ function renderNoteFolder(folder) {
     return renderNoteFile(child);
   }).join('');
   
+  const folderId = folder.id || folder.path;
+  
   return `
-    <div class="notes-folder" data-id="${folder.id || folder.path}" data-path="${escapeHtml(folder.path)}" draggable="true">
+    <div class="notes-folder" data-id="${folderId}" data-path="${escapeHtml(folder.path)}" draggable="true">
       <div class="notes-folder-header" onclick="toggleNoteFolder(this)">
         <svg class="folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 18 15 12 9 6"></polyline>
@@ -13505,7 +14614,21 @@ function renderNoteFolder(folder) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span>${escapeHtml(folder.name)}</span>
+        <span class="folder-name">${escapeHtml(folder.name)}</span>
+        <div class="folder-actions" onclick="event.stopPropagation();">
+          <button class="folder-action-btn" onclick="event.stopPropagation(); renameNoteFolder('${folderId}', '${escapeHtml(folder.name)}')" title="Rename folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
+          <button class="folder-action-btn folder-delete-btn" onclick="event.stopPropagation(); deleteNoteFolder('${folderId}', '${escapeHtml(folder.name)}')" title="Delete folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="notes-folder-children">${childrenHtml}</div>
     </div>
@@ -13535,6 +14658,45 @@ function toggleNoteFolder(headerEl) {
   const folderEl = headerEl.closest('.notes-folder');
   folderEl.classList.toggle('expanded');
   headerEl.classList.toggle('expanded');
+}
+
+async function renameNoteFolder(folderId, currentName) {
+  const newName = prompt('Enter new folder name:', currentName);
+  if (!newName || newName === currentName) return;
+  
+  try {
+    const response = await fetch(`/api/notes/folder/${folderId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    
+    if (!response.ok) throw new Error('Failed to rename folder');
+    await loadNotesTree();
+    showNotification('Folder renamed successfully', 'success');
+  } catch (error) {
+    console.error('Error renaming folder:', error);
+    alert('Failed to rename folder: ' + error.message);
+  }
+}
+
+async function deleteNoteFolder(folderId, folderName) {
+  if (!confirm(`Are you sure you want to delete folder "${folderName}" and all its contents? This action cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/notes/folder/${folderId}`, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete folder');
+    await loadNotesTree();
+    showNotification('Folder deleted successfully', 'success');
+  } catch (error) {
+    console.error('Error deleting folder:', error);
+    alert('Failed to delete folder: ' + error.message);
+  }
 }
 
 async function createNewNote(folderId = null) {
@@ -15866,6 +17028,24 @@ function toggleBackgroundTask() {
   }
 }
 
+// Set agent mode (chat or agent)
+function setAgentMode(mode) {
+  currentAgentMode = mode;
+  const chatBtn = document.getElementById('mode-chat-btn');
+  const agentBtn = document.getElementById('mode-agent-btn');
+  const input = document.getElementById('message-input');
+  
+  if (mode === 'chat') {
+    chatBtn.classList.add('active');
+    agentBtn.classList.remove('active');
+    input.placeholder = 'Ask questions, discuss findings, get help with standards...';
+  } else {
+    chatBtn.classList.remove('active');
+    agentBtn.classList.add('active');
+    input.placeholder = 'Ask about OWASP, run security scans, use specific tools...';
+  }
+}
+
 // Update char counter
 document.getElementById('message-input').addEventListener('input', function() {
   const counter = document.getElementById('char-counter');
@@ -16897,6 +18077,7 @@ async function sendMessage() {
     task_id: taskId,
     report_mode: reportCheckbox.checked,
     background_task: isBackgroundTask,
+    agent_mode: currentAgentMode,  // 'chat' or 'agent'
     files: attachedFiles.map(f => f.filename)
   };
   
@@ -17874,6 +19055,9 @@ window.createNewNote = createNewNote;
 window.createNewNoteFolder = createNewNoteFolder;
 window.selectNote = selectNote;
 window.toggleNoteFolder = toggleNoteFolder;
+window.renameNoteFolder = renameNoteFolder;
+window.deleteNoteFolder = deleteNoteFolder;
+window.deleteNote = deleteNote;
 window.formatNoteText = formatNoteText;
 window.insertNoteLink = insertNoteLink;
 window.attachNoteFile = attachNoteFile;
@@ -17930,6 +19114,7 @@ async def ws_endpoint(ws: WebSocket):
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
             background_task = msg_data.get("background_task", False)
+            agent_mode = msg_data.get("agent_mode", "agent")  # 'chat' or 'agent'
             
             # Handle resume task message
             if msg_data.get("type") == "resume_task":
@@ -17989,6 +19174,99 @@ async def ws_endpoint(ws: WebSocket):
                     "content": "📋 Report Mode DISABLED"
                 }))
                 continue
+            
+            # Handle Chat Mode - simpler responses without full agent orchestration
+            if agent_mode == "chat":
+                try:
+                    # Build message context for chat mode
+                    chat_context = msg_content
+                    
+                    # Add conversation history for context
+                    if chat_id in chats_store and chats_store[chat_id].get("messages"):
+                        messages = chats_store[chat_id]["messages"]
+                        conversation = [m for m in messages if m.get("type") in ("user", "assistant")]
+                        recent = conversation[-10:] if len(conversation) > 10 else conversation
+                        if recent:
+                            history_msgs = []
+                            for m in recent:
+                                role = "user" if m.get("type") == "user" else "assistant"
+                                content = m.get("content", "")[:1500]
+                                history_msgs.append({"role": role, "content": content})
+                    else:
+                        history_msgs = []
+                    
+                    # Add custom context if defined
+                    system_prompt = """You are an OWASP security assistant in Chat mode. You provide:
+- Quick security advice and explanations
+- OWASP guidance and best practices
+- General cybersecurity knowledge
+- Code review suggestions
+
+In Chat mode, you respond conversationally without running security tools.
+For active scanning, testing, or penetration testing, suggest the user switch to Agent mode.
+Be concise, helpful, and security-focused."""
+                    
+                    if custom_context and custom_context.strip():
+                        system_prompt += f"\n\nAdditional user context:\n{custom_context}"
+                    
+                    # Build messages for chat completion
+                    messages_for_llm = [{"role": "system", "content": system_prompt}]
+                    messages_for_llm.extend(history_msgs)
+                    messages_for_llm.append({"role": "user", "content": chat_context})
+                    
+                    # Use the model's chat method for simple response
+                    chat_model = build_model()
+                    
+                    await ws.send_text(json.dumps({
+                        "type": "progress",
+                        "content": "💬 Processing in chat mode...",
+                        "chat_id": chat_id,
+                        "task_id": task_id
+                    }))
+                    
+                    # Make simple LLM call using smolagents model
+                    response = chat_model(messages_for_llm)
+                    
+                    # Extract response content
+                    if hasattr(response, 'content'):
+                        response_text = response.content
+                    elif isinstance(response, str):
+                        response_text = response
+                    else:
+                        response_text = str(response)
+                    
+                    # Send the response
+                    await ws.send_text(json.dumps({
+                        "type": "assistant",
+                        "content": response_text,
+                        "chat_id": chat_id,
+                        "task_id": task_id
+                    }))
+                    
+                    # Store in chat history
+                    if chat_id not in chats_store:
+                        chats_store[chat_id] = {"messages": [], "created_at": time.time()}
+                    chats_store[chat_id]["messages"].append({
+                        "type": "user",
+                        "content": msg_content,
+                        "timestamp": time.time()
+                    })
+                    chats_store[chat_id]["messages"].append({
+                        "type": "assistant",
+                        "content": response_text,
+                        "timestamp": time.time()
+                    })
+                    
+                    continue  # Skip agent mode processing
+                    
+                except Exception as e:
+                    await ws.send_text(json.dumps({
+                        "type": "error",
+                        "content": f"Chat mode error: {str(e)}",
+                        "chat_id": chat_id,
+                        "task_id": task_id
+                    }))
+                    continue
             
             # Build message with file context
             full_message = msg_content
@@ -18302,6 +19580,16 @@ The report should be comprehensive and professional, suitable for executive stak
                         last_tool_args = {}  # Track last tool args for persistence
                         
                         for event in task_agent.run(captured_full_message, stream=True):
+                            # Check for cancellation via active_sessions
+                            if active_sessions.get(request_task_id):
+                                # Clean up and exit
+                                active_sessions.pop(request_task_id, None)
+                                event_queue.put({
+                                    "type": "cancelled",
+                                    "message": "Task was cancelled by user"
+                                })
+                                return
+                            
                             step_count += 1
                             event_type = type(event).__name__
                             step_start_time = time.time()
@@ -18568,6 +19856,32 @@ The report should be comprehensive and professional, suitable for executive stak
                                 await ws.send_text(json.dumps({
                                     "type": "error",
                                     "content": f"Error: {event['error']}",
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
+                                return
+                            
+                            elif event["type"] == "cancelled":
+                                # Task was cancelled by user
+                                update_activity_state(request_task_id, status="cancelled")
+                                add_activity_log(request_task_id, {
+                                    "type": "cancelled",
+                                    "title": "Task Cancelled",
+                                    "content": event.get("message", "Task was cancelled"),
+                                    "timestamp": time.time() * 1000
+                                })
+                                
+                                await ws.send_text(json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "cancelled",
+                                    "title": "Task Cancelled",
+                                    "content": "Task was stopped by user",
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
+                                await ws.send_text(json.dumps({
+                                    "type": "assistant",
+                                    "content": "⛔ Task was cancelled by user.",
                                     "chat_id": request_chat_id,
                                     "task_id": request_task_id
                                 }))
