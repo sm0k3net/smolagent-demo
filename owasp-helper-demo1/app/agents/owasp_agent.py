@@ -33,6 +33,25 @@ from app.tools.osint_tools import (
     duckduckgo_news,
     google_dork_suggestions,
 )
+# Enhanced SearXNG tools with auto-discovery
+from app.tools.searxng_tools import (
+    searxng_discover_instances,
+    searxng_search as searxng_metasearch,
+    searxng_search_security,
+    searxng_search_osint,
+)
+# Enhanced VirusTotal tools
+from app.tools.virustotal_tools import (
+    virustotal_get_subdomains,
+    virustotal_get_dns_records,
+    virustotal_get_historical_whois,
+    virustotal_get_communicating_files,
+    virustotal_domain_full_report,
+    virustotal_scan_url,
+    virustotal_get_url_report,
+    virustotal_scan_file,
+    virustotal_search,
+)
 from app.tools.pentest_tools import (
     dnsrecon_scan,
     dirb_scan,
@@ -252,6 +271,27 @@ def build_owasp_agent() -> CodeAgent:
         duckduckgo_search,
         duckduckgo_news,
         google_dork_suggestions,
+    ])
+    
+    # Enhanced SearXNG tools with auto-discovery
+    tools.extend([
+        searxng_discover_instances,
+        searxng_metasearch,
+        searxng_search_security,
+        searxng_search_osint,
+    ])
+    
+    # Enhanced VirusTotal tools
+    tools.extend([
+        virustotal_get_subdomains,
+        virustotal_get_dns_records,
+        virustotal_get_historical_whois,
+        virustotal_get_communicating_files,
+        virustotal_domain_full_report,
+        virustotal_scan_url,
+        virustotal_get_url_report,
+        virustotal_scan_file,
+        virustotal_search,
     ])
     
     # Pentest / Active Recon tools

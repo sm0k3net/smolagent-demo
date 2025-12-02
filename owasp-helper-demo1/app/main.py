@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from enum import Enum
@@ -3090,6 +3090,392 @@ async def save_chat_bulk(chat_id: str, request: ChatSaveRequest):
     save_chats_to_file()
     return JSONResponse({"success": True})
 
+# ============== REPORTS DIRECTORY ENDPOINTS ==============
+
+REPORTS_DIR = Path("data/reports")
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.get("/api/reports")
+async def get_reports():
+    """Get list of all generated reports."""
+    reports = []
+    
+    # Also check common output directories
+    report_dirs = [REPORTS_DIR, Path("output"), Path("reports")]
+    
+    for report_dir in report_dirs:
+        if not report_dir.exists():
+            continue
+            
+        for file_path in report_dir.rglob("*"):
+            if file_path.is_file():
+                ext = file_path.suffix.lower().lstrip('.')
+                if ext in ['html', 'pdf', 'md', 'json', 'txt', 'xml', 'csv']:
+                    try:
+                        stat = file_path.stat()
+                        reports.append({
+                            "name": file_path.name,
+                            "path": str(file_path),
+                            "type": ext,
+                            "size": stat.st_size,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                    except Exception:
+                        pass
+    
+    # Sort by modified date descending
+    reports.sort(key=lambda x: x.get("modified", ""), reverse=True)
+    return JSONResponse(reports)
+
+@app.get("/api/reports/view")
+async def view_report(path: str):
+    """View report content."""
+    file_path = Path(path)
+    
+    if not file_path.exists():
+        return JSONResponse({"error": "Report not found"}, status_code=404)
+    
+    # Security check - only allow files in known directories
+    allowed_parents = [REPORTS_DIR.resolve(), Path("output").resolve(), Path("reports").resolve()]
+    if not any(str(file_path.resolve()).startswith(str(p)) for p in allowed_parents if p.exists()):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='replace')
+        return JSONResponse({
+            "name": file_path.name,
+            "type": file_path.suffix.lower().lstrip('.'),
+            "content": content[:500000]  # Limit to 500KB
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/reports/download")
+async def download_report(path: str):
+    """Download a report file."""
+    from fastapi.responses import FileResponse
+    
+    file_path = Path(path)
+    
+    if not file_path.exists():
+        return JSONResponse({"error": "Report not found"}, status_code=404)
+    
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type='application/octet-stream'
+    )
+
+@app.delete("/api/reports/delete")
+async def delete_report(data: dict):
+    """Delete a report file."""
+    path = data.get("path")
+    if not path:
+        return JSONResponse({"error": "Path required"}, status_code=400)
+    
+    file_path = Path(path)
+    
+    if not file_path.exists():
+        return JSONResponse({"error": "Report not found"}, status_code=404)
+    
+    try:
+        file_path.unlink()
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# ============== NOTES ENDPOINTS ==============
+
+NOTES_DIR = Path("data/notes")
+NOTES_DIR.mkdir(parents=True, exist_ok=True)
+NOTES_ATTACHMENTS_DIR = NOTES_DIR / "attachments"
+NOTES_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Notes store file
+NOTES_INDEX_FILE = NOTES_DIR / "index.json"
+
+def load_notes_index():
+    """Load notes index from file."""
+    if NOTES_INDEX_FILE.exists():
+        try:
+            return json.loads(NOTES_INDEX_FILE.read_text())
+        except:
+            pass
+    return {"folders": [], "files": [], "next_id": 1}
+
+def save_notes_index(index):
+    """Save notes index to file."""
+    NOTES_INDEX_FILE.write_text(json.dumps(index, indent=2))
+
+notes_index = load_notes_index()
+
+@app.get("/api/notes")
+async def get_notes():
+    """Get notes tree structure."""
+    return JSONResponse(notes_index)
+
+@app.post("/api/notes")
+async def create_note(data: dict):
+    """Create a new note."""
+    global notes_index
+    
+    name = data.get("name", "Untitled")
+    folder_id = data.get("folder_id")
+    content = data.get("content", "")
+    
+    note_id = str(notes_index.get("next_id", 1))
+    notes_index["next_id"] = int(note_id) + 1
+    
+    # Create note file
+    note_file = NOTES_DIR / f"{note_id}.json"
+    note_data = {
+        "id": note_id,
+        "name": name,
+        "content": content,
+        "attachments": [],
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    note_file.write_text(json.dumps(note_data, indent=2))
+    
+    # Add to index
+    note_entry = {"id": note_id, "name": name, "type": "file"}
+    
+    if folder_id:
+        # Add to folder (would need recursive find)
+        pass
+    else:
+        notes_index["files"].append(note_entry)
+    
+    save_notes_index(notes_index)
+    return JSONResponse(note_data)
+
+@app.get("/api/notes/{note_id}")
+async def get_note(note_id: str):
+    """Get a specific note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        return JSONResponse(note_data)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.put("/api/notes/{note_id}")
+async def update_note(note_id: str, data: dict):
+    """Update a note."""
+    global notes_index
+    
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        
+        if "name" in data:
+            note_data["name"] = data["name"]
+            # Update index
+            for f in notes_index.get("files", []):
+                if f.get("id") == note_id:
+                    f["name"] = data["name"]
+                    break
+            save_notes_index(notes_index)
+        
+        if "content" in data:
+            note_data["content"] = data["content"]
+        
+        note_data["updated_at"] = datetime.now().isoformat()
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.delete("/api/notes/{note_id}")
+async def delete_note(note_id: str):
+    """Delete a note."""
+    global notes_index
+    
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if note_file.exists():
+        note_file.unlink()
+    
+    # Remove from index
+    notes_index["files"] = [f for f in notes_index.get("files", []) if f.get("id") != note_id]
+    save_notes_index(notes_index)
+    
+    return JSONResponse({"success": True})
+
+@app.post("/api/notes/folder")
+async def create_note_folder(data: dict):
+    """Create a new folder."""
+    global notes_index
+    
+    name = data.get("name", "New Folder")
+    
+    folder_id = str(notes_index.get("next_id", 1))
+    notes_index["next_id"] = int(folder_id) + 1
+    
+    folder_entry = {
+        "id": folder_id,
+        "name": name,
+        "type": "folder",
+        "path": folder_id,
+        "children": []
+    }
+    
+    notes_index["folders"].append(folder_entry)
+    save_notes_index(notes_index)
+    
+    return JSONResponse(folder_entry)
+
+@app.post("/api/notes/{note_id}/attachments")
+async def upload_note_attachments(note_id: str, files: List[UploadFile] = File(...)):
+    """Upload attachments to a note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        attachments = note_data.get("attachments", [])
+        
+        for file in files:
+            att_id = str(uuid.uuid4())[:8]
+            att_path = NOTES_ATTACHMENTS_DIR / f"{note_id}_{att_id}_{file.filename}"
+            
+            content = await file.read()
+            att_path.write_bytes(content)
+            
+            attachments.append({
+                "id": att_id,
+                "name": file.filename,
+                "path": str(att_path),
+                "size": len(content)
+            })
+        
+        note_data["attachments"] = attachments
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse(attachments)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/notes/{note_id}/process")
+async def process_note_with_ai(note_id: str, data: dict):
+    """Process note content with AI."""
+    action = data.get("action", "")
+    content = data.get("content", "")
+    
+    if not action or not content:
+        return JSONResponse({"error": "Action and content required"}, status_code=400)
+    
+    # Use the agent to process
+    try:
+        prompt = f"Please {action} the following text. Return only the processed result, no explanations:\n\n{content}"
+        
+        # Create a simple processing agent or use existing
+        if agent:
+            result = agent.run(prompt)
+            return JSONResponse({"content": str(result)})
+        else:
+            return JSONResponse({"error": "Agent not available"}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/notes/{note_id}/export")
+async def export_note(note_id: str, format: str = "html"):
+    """Export note in various formats."""
+    from fastapi.responses import Response
+    
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        name = note_data.get("name", "note")
+        content = note_data.get("content", "")
+        
+        if format == "html":
+            # Wrap in basic HTML
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{name}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }}
+        h1, h2, h3 {{ color: #333; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 4px; }}
+        pre {{ background: #f4f4f4; padding: 16px; border-radius: 8px; overflow-x: auto; }}
+        blockquote {{ border-left: 4px solid #22c55e; margin: 16px 0; padding-left: 16px; color: #666; }}
+    </style>
+</head>
+<body>
+    <h1>{name}</h1>
+    {content}
+</body>
+</html>"""
+            return Response(
+                content=html_content,
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="{name}.html"'}
+            )
+        
+        elif format == "md":
+            # Convert HTML to Markdown (basic)
+            import re
+            md_content = content
+            md_content = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1\n', md_content)
+            md_content = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1\n', md_content)
+            md_content = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1\n', md_content)
+            md_content = re.sub(r'<strong>(.*?)</strong>', r'**\1**', md_content)
+            md_content = re.sub(r'<b>(.*?)</b>', r'**\1**', md_content)
+            md_content = re.sub(r'<em>(.*?)</em>', r'*\1*', md_content)
+            md_content = re.sub(r'<i>(.*?)</i>', r'*\1*', md_content)
+            md_content = re.sub(r'<code>(.*?)</code>', r'`\1`', md_content)
+            md_content = re.sub(r'<br\s*/?>', '\n', md_content)
+            md_content = re.sub(r'<[^>]+>', '', md_content)  # Remove remaining HTML
+            md_content = f"# {name}\n\n{md_content}"
+            
+            return Response(
+                content=md_content,
+                media_type="text/markdown",
+                headers={"Content-Disposition": f'attachment; filename="{name}.md"'}
+            )
+        
+        elif format == "txt":
+            # Plain text - strip all HTML
+            import re
+            txt_content = re.sub(r'<[^>]+>', '', content)
+            txt_content = f"{name}\n{'=' * len(name)}\n\n{txt_content}"
+            
+            return Response(
+                content=txt_content,
+                media_type="text/plain",
+                headers={"Content-Disposition": f'attachment; filename="{name}.txt"'}
+            )
+        
+        elif format == "pdf":
+            # For PDF, we'd need a library like weasyprint or pdfkit
+            # For now, return HTML with PDF suggestion
+            return JSONResponse({"error": "PDF export requires additional setup. Use HTML export and print to PDF."}, status_code=501)
+        
+        else:
+            return JSONResponse({"error": f"Unsupported format: {format}"}, status_code=400)
+            
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 # ============== SCHEDULED TASKS ENDPOINTS ==============
 
 @app.get("/api/scheduled")
@@ -4835,13 +5221,13 @@ h1 {
 
 /* Schedule Modal - Premium Design */
 .schedule-modal-content {
-  max-width: 480px;
+  max-width: 520px;
   padding: 0;
 }
 .schedule-modal-header {
   padding: 1.25rem 1.5rem;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(217, 119, 6, 0.05) 100%);
-  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.08) 100%);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.2);
 }
 .schedule-modal-title-wrapper {
   display: flex;
@@ -4849,18 +5235,19 @@ h1 {
   gap: 0.75rem;
 }
 .schedule-modal-icon {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(217, 119, 6, 0.15) 100%);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.3) 0%, rgba(217, 119, 6, 0.2) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
 }
 .schedule-modal-icon svg {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   stroke: var(--warning);
 }
 .schedule-modal-subtitle {
@@ -5006,6 +5393,724 @@ h1 {
   padding: 0.65rem;
   font-size: 0.85rem;
   justify-content: center;
+}
+
+/* Schedule Templates Section */
+.schedule-templates-section {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.schedule-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gray-400);
+  margin-bottom: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.schedule-section-title::before {
+  content: '';
+  width: 3px;
+  height: 12px;
+  background: linear-gradient(180deg, var(--warning), rgba(245, 158, 11, 0.4));
+  border-radius: 2px;
+}
+.schedule-templates-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+.schedule-template-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.02) 100%);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: var(--gray-300);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+.schedule-template-btn:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(245, 158, 11, 0.08) 100%);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--light);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.schedule-template-btn.active {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(245, 158, 11, 0.15) 100%);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+}
+.schedule-template-btn .template-icon {
+  font-size: 1rem;
+}
+
+/* Schedule Visual Separator */
+.schedule-visual-separator {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  color: var(--gray-500);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.schedule-visual-separator::before,
+.schedule-visual-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+}
+
+/* Enhanced Recurring Presets */
+.recurring-presets {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.preset-btn {
+  padding: 0.45rem 0.85rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.03) 100%);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--gray-300);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.preset-btn:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0.1) 100%);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--warning);
+  transform: translateY(-1px);
+}
+.preset-btn.active {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(245, 158, 11, 0.15) 100%);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+/* ========== Tools Tab Styles ========== */
+/* Tools Sub-Tabs */
+.tools-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.tools-subtab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: var(--gray-400);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tools-subtab:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--gray-200);
+}
+.tools-subtab.active {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.1) 100%);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: var(--success);
+}
+.tools-subtab svg {
+  width: 16px;
+  height: 16px;
+}
+.tools-subtab-content {
+  display: none;
+  flex: 1;
+  overflow: hidden;
+  flex-direction: column;
+}
+.tools-subtab-content.active {
+  display: flex;
+}
+
+/* Reports Directory Styles */
+.tools-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, transparent 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tools-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--gray-200);
+}
+.tools-refresh-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tools-refresh-btn:hover {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+.tools-refresh-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.reports-filter-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.15);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.reports-search-input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.85rem;
+}
+.reports-search-input:focus {
+  outline: none;
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+.reports-type-filter {
+  padding: 0.5rem 0.75rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--light);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.reports-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+.reports-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  color: var(--gray-400);
+  gap: 0.75rem;
+}
+.report-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  transition: all 0.2s ease;
+}
+.report-item:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.1);
+}
+.report-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 197, 94, 0.15);
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+.report-info {
+  flex: 1;
+  min-width: 0;
+}
+.report-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--gray-200);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.report-meta {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  margin-top: 0.25rem;
+}
+.report-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.report-action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.report-action-btn:hover {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+.report-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.no-reports {
+  text-align: center;
+  padding: 2rem;
+  color: var(--gray-500);
+}
+
+/* Notes Sub-Tab Styles */
+.notes-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+.notes-sidebar {
+  width: 200px;
+  min-width: 180px;
+  background: rgba(0,0,0,0.2);
+  border-right: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  flex-direction: column;
+}
+.notes-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--gray-300);
+}
+.notes-sidebar-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+.notes-action-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.notes-action-btn:hover {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+.notes-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.notes-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+.notes-tree-loading {
+  text-align: center;
+  padding: 1rem;
+  color: var(--gray-500);
+  font-size: 0.8rem;
+}
+.notes-folder {
+  margin-bottom: 0.25rem;
+}
+.notes-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.8rem;
+  color: var(--gray-300);
+}
+.notes-folder-header:hover {
+  background: rgba(255,255,255,0.05);
+}
+.notes-folder-header.expanded .folder-chevron {
+  transform: rotate(90deg);
+}
+.folder-chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.2s ease;
+}
+.notes-folder-children {
+  display: none;
+  margin-left: 1rem;
+}
+.notes-folder.expanded > .notes-folder-children {
+  display: block;
+}
+.notes-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.8rem;
+  color: var(--gray-400);
+}
+.notes-file:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--gray-200);
+}
+.notes-file.active {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+.notes-file svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Notes Editor Area */
+.notes-editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.notes-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-wrap: wrap;
+}
+.notes-toolbar-group {
+  display: flex;
+  gap: 0.25rem;
+}
+.notes-toolbar-separator {
+  width: 1px;
+  height: 24px;
+  background: rgba(255,255,255,0.1);
+  margin: 0 0.25rem;
+}
+.notes-toolbar-spacer {
+  flex: 1;
+}
+.notes-toolbar-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--gray-400);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.notes-toolbar-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--gray-200);
+}
+.notes-toolbar-btn.active {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+.notes-ai-btn, .notes-export-btn {
+  width: auto;
+  padding: 0 0.75rem;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+.notes-ai-btn {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0.08) 100%);
+  border-color: rgba(139, 92, 246, 0.3);
+  color: #a78bfa;
+}
+.notes-ai-btn:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(139, 92, 246, 0.15) 100%);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+.notes-export-dropdown {
+  position: relative;
+}
+.notes-export-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.35rem;
+  min-width: 140px;
+  background: var(--gray-800);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 100;
+  overflow: hidden;
+}
+.notes-export-menu.active {
+  display: block;
+}
+.notes-export-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: transparent;
+  border: none;
+  color: var(--gray-300);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.notes-export-menu button:hover {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+.notes-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.15);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.notes-title-input {
+  flex: 1;
+  padding: 0.5rem 0;
+  background: transparent;
+  border: none;
+  color: var(--light);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.notes-title-input:focus {
+  outline: none;
+}
+.notes-title-input::placeholder {
+  color: var(--gray-500);
+}
+.notes-save-status {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  padding: 0.25rem 0.5rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 4px;
+}
+.notes-save-status.saving {
+  color: var(--warning);
+}
+.notes-save-status.saved {
+  color: var(--success);
+}
+.notes-editor-content {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+.notes-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--gray-500);
+  gap: 1rem;
+  padding: 2rem;
+}
+.notes-placeholder svg {
+  opacity: 0.3;
+}
+.notes-create-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.1) 100%);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 8px;
+  color: var(--success);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.notes-create-btn:hover {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3) 0%, rgba(34, 197, 94, 0.2) 100%);
+  transform: translateY(-1px);
+}
+.notes-editor {
+  min-height: 100%;
+  padding: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--gray-200);
+  outline: none;
+}
+.notes-editor:focus {
+  outline: none;
+}
+.notes-editor h1, .notes-editor h2, .notes-editor h3 {
+  color: var(--light);
+  margin: 0.5em 0;
+}
+.notes-editor h1 { font-size: 1.5rem; }
+.notes-editor h2 { font-size: 1.25rem; }
+.notes-editor h3 { font-size: 1.1rem; }
+.notes-editor blockquote {
+  margin: 0.5rem 0;
+  padding: 0.5rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border-left: 3px solid var(--success);
+  color: var(--gray-400);
+}
+.notes-editor pre, .notes-editor code {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+}
+.notes-editor code {
+  padding: 0.15rem 0.3rem;
+  font-size: 0.85em;
+}
+.notes-editor pre {
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+.notes-editor ul, .notes-editor ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+.notes-editor a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* Notes Attachments */
+.notes-attachments {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.15);
+}
+.notes-attachments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gray-400);
+}
+.notes-attach-btn {
+  padding: 0.25rem 0.5rem;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 4px;
+  color: var(--success);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.notes-attach-btn:hover {
+  background: rgba(34, 197, 94, 0.25);
+}
+.notes-attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.notes-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--gray-300);
+}
+.notes-attachment-item:hover {
+  background: rgba(255,255,255,0.08);
+}
+.notes-attachment-remove {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--gray-500);
+  cursor: pointer;
+  border-radius: 50%;
+}
+.notes-attachment-remove:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
 }
 
 /* Collapsible Sections for Tasks/Chains - Improved Scrollable Design */
@@ -7449,6 +8554,10 @@ main {
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
         <span class="tab-label">Schedule</span>
       </button>
+      <button class="sidebar-tab" data-tab="tools">
+        <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+        <span class="tab-label">Tools</span>
+      </button>
       <button class="sidebar-tab" data-tab="settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         <span class="tab-label">Settings</span>
@@ -7561,6 +8670,250 @@ main {
         <div class="chain-builder-footer">
           <button class="chain-builder-btn chain-builder-btn-cancel" onclick="closeChainBuilder()">Cancel</button>
           <button class="chain-builder-btn chain-builder-btn-create" onclick="createChain()">Create Chain</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tools Tab Content -->
+    <div class="tab-content" id="tab-tools">
+      <div class="sidebar-header">
+        <span class="header-title">
+          <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+          Tools
+        </span>
+      </div>
+      
+      <!-- Tools Sub-Tabs -->
+      <div class="tools-subtabs">
+        <button class="tools-subtab active" data-subtab="reports" onclick="switchToolsSubtab('reports')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span>Reports</span>
+        </button>
+        <button class="tools-subtab" data-subtab="notes" onclick="switchToolsSubtab('notes')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          <span>Notes</span>
+        </button>
+      </div>
+      
+      <!-- Reports Sub-Tab Content -->
+      <div class="tools-subtab-content active" id="tools-reports">
+        <div class="tools-section-header">
+          <span class="tools-section-title">📊 Generated Reports</span>
+          <button class="tools-refresh-btn" onclick="loadReportsDirectory()" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="reports-filter-bar">
+          <input type="text" class="reports-search-input" id="reports-search" placeholder="Search reports..." oninput="filterReports()">
+          <select class="reports-type-filter" id="reports-type-filter" onchange="filterReports()">
+            <option value="all">All Types</option>
+            <option value="html">HTML</option>
+            <option value="pdf">PDF</option>
+            <option value="md">Markdown</option>
+            <option value="json">JSON</option>
+          </select>
+        </div>
+        <div class="reports-list" id="reports-list">
+          <div class="reports-loading">
+            <div class="spinner"></div>
+            <span>Loading reports...</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Notes Sub-Tab Content -->
+      <div class="tools-subtab-content" id="tools-notes">
+        <div class="notes-container">
+          <!-- Notes Sidebar with Folder Tree -->
+          <div class="notes-sidebar">
+            <div class="notes-sidebar-header">
+              <span>📁 Notes</span>
+              <div class="notes-sidebar-actions">
+                <button class="notes-action-btn" onclick="createNewNoteFolder()" title="New Folder">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    <line x1="12" y1="11" x2="12" y2="17"></line>
+                    <line x1="9" y1="14" x2="15" y2="14"></line>
+                  </svg>
+                </button>
+                <button class="notes-action-btn" onclick="createNewNote()" title="New Note">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="notes-tree" id="notes-tree">
+              <div class="notes-tree-loading">Loading notes...</div>
+            </div>
+          </div>
+          
+          <!-- Notes Editor Area -->
+          <div class="notes-editor-area">
+            <div class="notes-editor-toolbar" id="notes-toolbar">
+              <div class="notes-toolbar-group">
+                <button class="notes-toolbar-btn" onclick="formatNoteText('bold')" title="Bold (Ctrl+B)">
+                  <strong>B</strong>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('italic')" title="Italic (Ctrl+I)">
+                  <em>I</em>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('underline')" title="Underline (Ctrl+U)">
+                  <u>U</u>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('strikethrough')" title="Strikethrough">
+                  <s>S</s>
+                </button>
+              </div>
+              <div class="notes-toolbar-separator"></div>
+              <div class="notes-toolbar-group">
+                <button class="notes-toolbar-btn" onclick="formatNoteText('h1')" title="Heading 1">H1</button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('h2')" title="Heading 2">H2</button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('h3')" title="Heading 3">H3</button>
+              </div>
+              <div class="notes-toolbar-separator"></div>
+              <div class="notes-toolbar-group">
+                <button class="notes-toolbar-btn" onclick="formatNoteText('ul')" title="Bullet List">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <line x1="8" y1="6" x2="21" y2="6"></line>
+                    <line x1="8" y1="12" x2="21" y2="12"></line>
+                    <line x1="8" y1="18" x2="21" y2="18"></line>
+                    <circle cx="3" cy="6" r="1" fill="currentColor"></circle>
+                    <circle cx="3" cy="12" r="1" fill="currentColor"></circle>
+                    <circle cx="3" cy="18" r="1" fill="currentColor"></circle>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('ol')" title="Numbered List">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <line x1="10" y1="6" x2="21" y2="6"></line>
+                    <line x1="10" y1="12" x2="21" y2="12"></line>
+                    <line x1="10" y1="18" x2="21" y2="18"></line>
+                    <text x="3" y="8" font-size="8" fill="currentColor">1</text>
+                    <text x="3" y="14" font-size="8" fill="currentColor">2</text>
+                    <text x="3" y="20" font-size="8" fill="currentColor">3</text>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('quote')" title="Quote">
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                    <path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn" onclick="formatNoteText('code')" title="Code Block">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <polyline points="16 18 22 12 16 6"></polyline>
+                    <polyline points="8 6 2 12 8 18"></polyline>
+                  </svg>
+                </button>
+              </div>
+              <div class="notes-toolbar-separator"></div>
+              <div class="notes-toolbar-group">
+                <button class="notes-toolbar-btn" onclick="insertNoteLink()" title="Insert Link">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn" onclick="attachNoteFile()" title="Attach File">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn" onclick="insertNoteImage()" title="Insert Image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                </button>
+              </div>
+              <div class="notes-toolbar-spacer"></div>
+              <div class="notes-toolbar-group notes-toolbar-actions">
+                <button class="notes-toolbar-btn notes-ai-btn" onclick="processNoteWithAI()" title="Process with AI">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+                    <circle cx="7.5" cy="14.5" r="1.5"></circle>
+                    <circle cx="16.5" cy="14.5" r="1.5"></circle>
+                  </svg>
+                  <span>AI</span>
+                </button>
+                <button class="notes-toolbar-btn" onclick="createTaskFromNote()" title="Create Task from Note">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                  </svg>
+                  <span>Task</span>
+                </button>
+                <div class="notes-export-dropdown">
+                  <button class="notes-toolbar-btn notes-export-btn" onclick="toggleNoteExportMenu()" title="Export Note">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    <span>Export</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10">
+                      <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                  </button>
+                  <div class="notes-export-menu" id="notes-export-menu">
+                    <button onclick="exportNote('html')">📄 HTML</button>
+                    <button onclick="exportNote('pdf')">📕 PDF</button>
+                    <button onclick="exportNote('md')">📝 Markdown</button>
+                    <button onclick="exportNote('txt')">📃 Plain Text</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="notes-editor-header" id="notes-editor-header" style="display: none;">
+              <input type="text" class="notes-title-input" id="note-title-input" placeholder="Note title..." onchange="updateNoteTitle()">
+              <span class="notes-save-status" id="notes-save-status">Saved</span>
+            </div>
+            
+            <div class="notes-editor-content" id="notes-editor-content">
+              <div class="notes-placeholder" id="notes-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+                <span>Select a note or create a new one</span>
+                <button class="notes-create-btn" onclick="createNewNote()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                  Create New Note
+                </button>
+              </div>
+              <div class="notes-editor" id="notes-editor" contenteditable="true" style="display: none;" 
+                   oninput="onNoteContentChange()" 
+                   onkeydown="handleNoteKeydown(event)"></div>
+            </div>
+            
+            <!-- Attachments Section -->
+            <div class="notes-attachments" id="notes-attachments" style="display: none;">
+              <div class="notes-attachments-header">
+                <span>📎 Attachments</span>
+                <button class="notes-attach-btn" onclick="attachNoteFile()">+ Add</button>
+              </div>
+              <div class="notes-attachments-list" id="notes-attachments-list"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -8296,13 +9649,57 @@ main {
           </span>
           <div>
             <span class="task-modal-title">Schedule Task</span>
-            <span class="schedule-modal-subtitle">Automate recurring security scans</span>
+            <span class="schedule-modal-subtitle">Automate recurring security assessments</span>
           </div>
         </div>
         <button class="task-modal-close" onclick="closeScheduleModal()">&times;</button>
       </div>
       <div class="task-modal-body schedule-modal-body">
         <div class="schedule-form">
+          <!-- Task Templates Section -->
+          <div class="schedule-form-section">
+            <label class="form-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              Quick Templates
+            </label>
+            <div class="schedule-templates">
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('daily_scan')">
+                <span class="template-icon">🔍</span>
+                <span class="template-text">
+                  <span class="template-name">Daily Recon</span>
+                  <span class="template-desc">Subdomain & port scan</span>
+                </span>
+              </button>
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('weekly_vuln')">
+                <span class="template-icon">🛡️</span>
+                <span class="template-text">
+                  <span class="template-name">Weekly Vuln Scan</span>
+                  <span class="template-desc">Full vulnerability assessment</span>
+                </span>
+              </button>
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('osint_check')">
+                <span class="template-icon">🕵️</span>
+                <span class="template-text">
+                  <span class="template-name">OSINT Monitor</span>
+                  <span class="template-desc">Breach & exposure check</span>
+                </span>
+              </button>
+              <button type="button" class="schedule-template-btn" onclick="applyScheduleTemplate('ssl_monitor')">
+                <span class="template-icon">🔒</span>
+                <span class="template-text">
+                  <span class="template-name">SSL Monitor</span>
+                  <span class="template-desc">Certificate expiry check</span>
+                </span>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Task Details Section -->
           <div class="schedule-form-section">
             <div class="form-group">
               <label class="form-label">
@@ -8312,7 +9709,20 @@ main {
                 </svg>
                 Task Name
               </label>
-              <input type="text" id="schedule-name" class="schedule-input" placeholder="e.g., Daily security scan">
+              <input type="text" id="schedule-name" class="schedule-input" placeholder="e.g., Daily security scan for example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <line x1="21.17" y1="8" x2="12" y2="8"></line>
+                  <line x1="3.95" y1="6.06" x2="8.54" y2="14"></line>
+                  <line x1="10.88" y1="21.94" x2="15.46" y2="14"></line>
+                </svg>
+                Target (optional)
+              </label>
+              <input type="text" id="schedule-target" class="schedule-input" placeholder="e.g., example.com, 192.168.1.0/24">
             </div>
             <div class="form-group">
               <label class="form-label">
@@ -8321,66 +9731,80 @@ main {
                   <polyline points="2 17 12 22 22 17"></polyline>
                   <polyline points="2 12 12 17 22 12"></polyline>
                 </svg>
-                Task Prompt
+                Task Instructions
               </label>
-              <textarea id="schedule-prompt" class="schedule-textarea" placeholder="e.g., Run nmap -sV scan on target.com and report findings..." rows="3"></textarea>
+              <textarea id="schedule-prompt" class="schedule-textarea" placeholder="Describe what the agent should do...&#10;&#10;Example: Run comprehensive reconnaissance including subdomain enumeration, port scanning, and technology detection. Generate a summary report." rows="4"></textarea>
             </div>
           </div>
           
+          <!-- Timing Section -->
           <div class="schedule-form-section schedule-timing-section">
-            <div class="form-group">
-              <label class="form-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                  <line x1="16" y1="2" x2="16" y2="6"></line>
-                  <line x1="8" y1="2" x2="8" y2="6"></line>
-                  <line x1="3" y1="10" x2="21" y2="10"></line>
-                </svg>
-                Schedule Time
-              </label>
-              <input type="datetime-local" id="schedule-time" class="schedule-input schedule-datetime">
+            <div class="schedule-timing-grid">
+              <div class="form-group">
+                <label class="form-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                  </svg>
+                  First Run
+                </label>
+                <input type="datetime-local" id="schedule-time" class="schedule-input schedule-datetime">
+              </div>
+              <div class="form-group">
+                <label class="form-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                  </svg>
+                  Frequency
+                </label>
+                <select id="schedule-frequency" class="schedule-input schedule-select" onchange="updateFrequencyOptions()">
+                  <option value="once">Run Once</option>
+                  <option value="hourly">Hourly</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="custom">Custom Interval</option>
+                </select>
+              </div>
             </div>
             
-            <div class="schedule-recurring-toggle">
-              <label class="checkbox-wrapper schedule-checkbox">
-                <input type="checkbox" id="schedule-recurring">
-                <span class="checkmark"></span>
-                <span class="checkbox-label">
-                  <span class="label-icon">🔄</span>
-                  <span>Make this a recurring task</span>
-                </span>
-              </label>
-            </div>
-            
-            <div id="recurring-options" class="recurring-options">
-              <label class="form-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                  <polyline points="23 4 23 10 17 10"></polyline>
-                  <polyline points="1 20 1 14 7 14"></polyline>
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                </svg>
-                Repeat Interval
-              </label>
-              <div class="recurring-interval-row">
+            <div id="custom-interval-options" class="custom-interval-options">
+              <label class="form-label">Custom Interval</label>
+              <div class="custom-interval-row">
                 <input type="number" id="schedule-interval" class="schedule-input interval-input" value="60" min="5">
-                <span class="interval-label">minutes</span>
+                <select id="schedule-interval-unit" class="schedule-input interval-unit-select">
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
               </div>
-              <div class="recurring-presets">
-                <button type="button" class="preset-btn" onclick="setInterval(30)">30m</button>
-                <button type="button" class="preset-btn" onclick="setInterval(60)">1h</button>
-                <button type="button" class="preset-btn" onclick="setInterval(360)">6h</button>
-                <button type="button" class="preset-btn" onclick="setInterval(1440)">24h</button>
-              </div>
+            </div>
+            
+            <div class="schedule-summary" id="schedule-summary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <span>This task will run once at the scheduled time</span>
             </div>
           </div>
           
-          <button class="btn btn-primary schedule-submit-btn" onclick="createScheduledTask()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-            Schedule Task
-          </button>
+          <!-- Action Buttons -->
+          <div class="schedule-actions">
+            <button type="button" class="btn-schedule-cancel" onclick="closeScheduleModal()">Cancel</button>
+            <button class="btn btn-primary schedule-submit-btn" onclick="createScheduledTask()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              Create Scheduled Task
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -9608,6 +11032,643 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateSubtabsScrollArrows, 100);
   }
 });
+
+// ============== TOOLS TAB FUNCTIONS ==============
+// Store for notes and reports
+let notesStore = {};
+let currentNoteId = null;
+let notesSaveTimeout = null;
+let reportsStore = [];
+
+// Switch between Reports and Notes sub-tabs
+function switchToolsSubtab(subtab) {
+  document.querySelectorAll('.tools-subtab').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.getAttribute('data-subtab') === subtab) {
+      btn.classList.add('active');
+    }
+  });
+  
+  document.querySelectorAll('.tools-subtab-content').forEach(panel => {
+    panel.classList.remove('active');
+  });
+  
+  const activePanel = document.getElementById('tools-' + subtab);
+  if (activePanel) {
+    activePanel.classList.add('active');
+  }
+  
+  // Load data for specific tabs
+  if (subtab === 'reports') {
+    loadReportsDirectory();
+  } else if (subtab === 'notes') {
+    loadNotesTree();
+  }
+}
+
+// ============== REPORTS DIRECTORY ==============
+async function loadReportsDirectory() {
+  const listEl = document.getElementById('reports-list');
+  listEl.innerHTML = '<div class="reports-loading"><div class="spinner"></div><span>Loading reports...</span></div>';
+  
+  try {
+    const response = await fetch('/api/reports');
+    if (!response.ok) throw new Error('Failed to load reports');
+    reportsStore = await response.json();
+    renderReportsList(reportsStore);
+  } catch (error) {
+    console.error('Error loading reports:', error);
+    listEl.innerHTML = '<div class="no-reports">Failed to load reports</div>';
+  }
+}
+
+function renderReportsList(reports) {
+  const listEl = document.getElementById('reports-list');
+  
+  if (!reports || reports.length === 0) {
+    listEl.innerHTML = '<div class="no-reports">No reports found. Generate reports using the agent.</div>';
+    return;
+  }
+  
+  listEl.innerHTML = reports.map(report => {
+    const icon = getReportIcon(report.type);
+    const size = formatFileSize(report.size);
+    const date = new Date(report.modified).toLocaleDateString();
+    
+    return `
+      <div class="report-item" data-type="${report.type}" data-name="${report.name.toLowerCase()}">
+        <div class="report-icon">${icon}</div>
+        <div class="report-info">
+          <div class="report-name">${escapeHtml(report.name)}</div>
+          <div class="report-meta">
+            <span>${size}</span>
+            <span>${date}</span>
+          </div>
+        </div>
+        <div class="report-actions">
+          <button class="report-action-btn" onclick="viewReport('${escapeHtml(report.path)}')" title="View">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+          <button class="report-action-btn" onclick="downloadReport('${escapeHtml(report.path)}')" title="Download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+          <button class="report-action-btn" onclick="deleteReport('${escapeHtml(report.path)}')" title="Delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function getReportIcon(type) {
+  const icons = {
+    'html': '📄',
+    'pdf': '📕',
+    'md': '📝',
+    'json': '📋',
+    'txt': '📃'
+  };
+  return icons[type] || '📄';
+}
+
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function filterReports() {
+  const searchTerm = document.getElementById('reports-search').value.toLowerCase();
+  const typeFilter = document.getElementById('reports-type-filter').value;
+  
+  const filtered = reportsStore.filter(report => {
+    const matchesSearch = report.name.toLowerCase().includes(searchTerm);
+    const matchesType = typeFilter === 'all' || report.type === typeFilter;
+    return matchesSearch && matchesType;
+  });
+  
+  renderReportsList(filtered);
+}
+
+async function viewReport(path) {
+  try {
+    const response = await fetch('/api/reports/view?path=' + encodeURIComponent(path));
+    if (!response.ok) throw new Error('Failed to load report');
+    const data = await response.json();
+    
+    // Open in a modal or new tab
+    const modal = document.getElementById('task-modal');
+    const title = document.getElementById('task-modal-title');
+    const body = document.getElementById('task-modal-body');
+    
+    title.textContent = 'Report: ' + data.name;
+    
+    if (data.type === 'html') {
+      // Use iframe for HTML reports
+      body.innerHTML = '<iframe srcdoc="' + escapeHtml(data.content) + '" style="width:100%;height:500px;border:none;background:white;border-radius:8px;"></iframe>';
+    } else {
+      body.innerHTML = '<pre style="white-space:pre-wrap;font-family:JetBrains Mono,monospace;font-size:0.85rem;max-height:500px;overflow:auto;">' + escapeHtml(data.content) + '</pre>';
+    }
+    
+    modal.classList.add('active');
+  } catch (error) {
+    console.error('Error viewing report:', error);
+    alert('Failed to view report: ' + error.message);
+  }
+}
+
+async function downloadReport(path) {
+  try {
+    const link = document.createElement('a');
+    link.href = '/api/reports/download?path=' + encodeURIComponent(path);
+    link.download = path.split('/').pop();
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (error) {
+    console.error('Error downloading report:', error);
+    alert('Failed to download report');
+  }
+}
+
+async function deleteReport(path) {
+  if (!confirm('Are you sure you want to delete this report?')) return;
+  
+  try {
+    const response = await fetch('/api/reports/delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete report');
+    loadReportsDirectory();
+  } catch (error) {
+    console.error('Error deleting report:', error);
+    alert('Failed to delete report: ' + error.message);
+  }
+}
+
+// ============== NOTES FUNCTIONALITY ==============
+async function loadNotesTree() {
+  const treeEl = document.getElementById('notes-tree');
+  treeEl.innerHTML = '<div class="notes-tree-loading">Loading notes...</div>';
+  
+  try {
+    const response = await fetch('/api/notes');
+    if (!response.ok) throw new Error('Failed to load notes');
+    notesStore = await response.json();
+    renderNotesTree(notesStore);
+  } catch (error) {
+    console.error('Error loading notes:', error);
+    treeEl.innerHTML = '<div class="notes-tree-loading">Failed to load notes</div>';
+  }
+}
+
+function renderNotesTree(notes) {
+  const treeEl = document.getElementById('notes-tree');
+  
+  if (!notes || (!notes.folders && !notes.files) || (notes.folders?.length === 0 && notes.files?.length === 0)) {
+    treeEl.innerHTML = '<div class="notes-tree-loading">No notes yet. Create one!</div>';
+    return;
+  }
+  
+  let html = '';
+  
+  // Render folders
+  if (notes.folders) {
+    notes.folders.forEach(folder => {
+      html += renderNoteFolder(folder);
+    });
+  }
+  
+  // Render root-level files
+  if (notes.files) {
+    notes.files.forEach(file => {
+      html += renderNoteFile(file);
+    });
+  }
+  
+  treeEl.innerHTML = html;
+}
+
+function renderNoteFolder(folder) {
+  const childrenHtml = (folder.children || []).map(child => {
+    if (child.type === 'folder') return renderNoteFolder(child);
+    return renderNoteFile(child);
+  }).join('');
+  
+  return `
+    <div class="notes-folder" data-path="${escapeHtml(folder.path)}">
+      <div class="notes-folder-header" onclick="toggleNoteFolder(this)">
+        <svg class="folder-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>${escapeHtml(folder.name)}</span>
+      </div>
+      <div class="notes-folder-children">${childrenHtml}</div>
+    </div>
+  `;
+}
+
+function renderNoteFile(file) {
+  const activeClass = currentNoteId === file.id ? 'active' : '';
+  return `
+    <div class="notes-file ${activeClass}" data-id="${file.id}" onclick="selectNote('${file.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+      </svg>
+      <span>${escapeHtml(file.name)}</span>
+    </div>
+  `;
+}
+
+function toggleNoteFolder(headerEl) {
+  const folderEl = headerEl.closest('.notes-folder');
+  folderEl.classList.toggle('expanded');
+  headerEl.classList.toggle('expanded');
+}
+
+async function createNewNote(folderId = null) {
+  const name = prompt('Enter note name:', 'New Note');
+  if (!name) return;
+  
+  try {
+    const response = await fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, folder_id: folderId, content: '' })
+    });
+    
+    if (!response.ok) throw new Error('Failed to create note');
+    const note = await response.json();
+    await loadNotesTree();
+    selectNote(note.id);
+  } catch (error) {
+    console.error('Error creating note:', error);
+    alert('Failed to create note: ' + error.message);
+  }
+}
+
+async function createNewNoteFolder() {
+  const name = prompt('Enter folder name:', 'New Folder');
+  if (!name) return;
+  
+  try {
+    const response = await fetch('/api/notes/folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    
+    if (!response.ok) throw new Error('Failed to create folder');
+    await loadNotesTree();
+  } catch (error) {
+    console.error('Error creating folder:', error);
+    alert('Failed to create folder: ' + error.message);
+  }
+}
+
+async function selectNote(noteId) {
+  // Save current note if exists
+  if (currentNoteId) {
+    await saveCurrentNote();
+  }
+  
+  currentNoteId = noteId;
+  
+  // Update tree selection
+  document.querySelectorAll('.notes-file').forEach(el => {
+    el.classList.remove('active');
+    if (el.getAttribute('data-id') === noteId) {
+      el.classList.add('active');
+    }
+  });
+  
+  try {
+    const response = await fetch('/api/notes/' + noteId);
+    if (!response.ok) throw new Error('Failed to load note');
+    const note = await response.json();
+    
+    // Show editor
+    document.getElementById('notes-placeholder').style.display = 'none';
+    document.getElementById('notes-editor').style.display = 'block';
+    document.getElementById('notes-editor-header').style.display = 'flex';
+    document.getElementById('notes-toolbar').style.display = 'flex';
+    
+    // Load content
+    document.getElementById('note-title-input').value = note.name;
+    document.getElementById('notes-editor').innerHTML = note.content || '';
+    
+    // Load attachments if any
+    if (note.attachments && note.attachments.length > 0) {
+      document.getElementById('notes-attachments').style.display = 'block';
+      renderNoteAttachments(note.attachments);
+    } else {
+      document.getElementById('notes-attachments').style.display = 'none';
+    }
+    
+    updateSaveStatus('saved');
+  } catch (error) {
+    console.error('Error loading note:', error);
+    alert('Failed to load note: ' + error.message);
+  }
+}
+
+function renderNoteAttachments(attachments) {
+  const listEl = document.getElementById('notes-attachments-list');
+  listEl.innerHTML = attachments.map(att => `
+    <div class="notes-attachment-item" data-id="${att.id}">
+      <span>📎 ${escapeHtml(att.name)}</span>
+      <button class="notes-attachment-remove" onclick="removeNoteAttachment('${att.id}')">&times;</button>
+    </div>
+  `).join('');
+}
+
+function onNoteContentChange() {
+  updateSaveStatus('saving');
+  
+  // Debounce auto-save
+  if (notesSaveTimeout) clearTimeout(notesSaveTimeout);
+  notesSaveTimeout = setTimeout(async () => {
+    await saveCurrentNote();
+    updateSaveStatus('saved');
+  }, 1000);
+}
+
+async function updateNoteTitle() {
+  updateSaveStatus('saving');
+  await saveCurrentNote();
+  await loadNotesTree();
+  updateSaveStatus('saved');
+}
+
+async function saveCurrentNote() {
+  if (!currentNoteId) return;
+  
+  const title = document.getElementById('note-title-input').value;
+  const content = document.getElementById('notes-editor').innerHTML;
+  
+  try {
+    await fetch('/api/notes/' + currentNoteId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: title, content })
+    });
+  } catch (error) {
+    console.error('Error saving note:', error);
+    updateSaveStatus('error');
+  }
+}
+
+function updateSaveStatus(status) {
+  const statusEl = document.getElementById('notes-save-status');
+  statusEl.className = 'notes-save-status ' + status;
+  statusEl.textContent = status === 'saved' ? 'Saved' : status === 'saving' ? 'Saving...' : 'Error';
+}
+
+// Text formatting functions
+function formatNoteText(format) {
+  const editor = document.getElementById('notes-editor');
+  editor.focus();
+  
+  switch(format) {
+    case 'bold':
+      document.execCommand('bold', false, null);
+      break;
+    case 'italic':
+      document.execCommand('italic', false, null);
+      break;
+    case 'underline':
+      document.execCommand('underline', false, null);
+      break;
+    case 'strikethrough':
+      document.execCommand('strikeThrough', false, null);
+      break;
+    case 'h1':
+      document.execCommand('formatBlock', false, '<h1>');
+      break;
+    case 'h2':
+      document.execCommand('formatBlock', false, '<h2>');
+      break;
+    case 'h3':
+      document.execCommand('formatBlock', false, '<h3>');
+      break;
+    case 'ul':
+      document.execCommand('insertUnorderedList', false, null);
+      break;
+    case 'ol':
+      document.execCommand('insertOrderedList', false, null);
+      break;
+    case 'quote':
+      document.execCommand('formatBlock', false, '<blockquote>');
+      break;
+    case 'code':
+      const selection = window.getSelection();
+      if (selection.toString()) {
+        document.execCommand('insertHTML', false, '<code>' + selection.toString() + '</code>');
+      } else {
+        document.execCommand('insertHTML', false, '<pre><code>code here</code></pre>');
+      }
+      break;
+  }
+  
+  onNoteContentChange();
+}
+
+function insertNoteLink() {
+  const url = prompt('Enter URL:');
+  if (url) {
+    const text = prompt('Enter link text:', url);
+    document.execCommand('insertHTML', false, '<a href="' + url + '">' + (text || url) + '</a>');
+    onNoteContentChange();
+  }
+}
+
+async function attachNoteFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.onchange = async (e) => {
+    const files = e.target.files;
+    if (!files.length || !currentNoteId) return;
+    
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file);
+    }
+    
+    try {
+      const response = await fetch('/api/notes/' + currentNoteId + '/attachments', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) throw new Error('Failed to upload attachments');
+      const attachments = await response.json();
+      
+      document.getElementById('notes-attachments').style.display = 'block';
+      renderNoteAttachments(attachments);
+    } catch (error) {
+      console.error('Error uploading attachments:', error);
+      alert('Failed to upload attachments');
+    }
+  };
+  input.click();
+}
+
+async function insertNoteImage() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Convert to base64 for inline display
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      document.execCommand('insertHTML', false, 
+        '<img src="' + event.target.result + '" style="max-width:100%;border-radius:8px;margin:0.5rem 0;" />');
+      onNoteContentChange();
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+
+async function processNoteWithAI() {
+  if (!currentNoteId) return;
+  
+  const content = document.getElementById('notes-editor').innerText;
+  if (!content.trim()) {
+    alert('Note is empty');
+    return;
+  }
+  
+  const action = prompt('What should AI do with this note?\\n\\nExamples:\\n- Summarize\\n- Fix grammar\\n- Convert to task list\\n- Extract key points\\n- Translate to Spanish');
+  if (!action) return;
+  
+  try {
+    const response = await fetch('/api/notes/' + currentNoteId + '/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, content })
+    });
+    
+    if (!response.ok) throw new Error('Failed to process note');
+    const result = await response.json();
+    
+    if (result.content) {
+      document.getElementById('notes-editor').innerHTML = result.content;
+      onNoteContentChange();
+    }
+  } catch (error) {
+    console.error('Error processing note:', error);
+    alert('Failed to process note with AI: ' + error.message);
+  }
+}
+
+function createTaskFromNote() {
+  if (!currentNoteId) return;
+  
+  const content = document.getElementById('notes-editor').innerText;
+  const title = document.getElementById('note-title-input').value;
+  
+  // Pre-fill the schedule modal with note content
+  document.getElementById('schedule-name').value = title;
+  document.getElementById('schedule-prompt').value = content.substring(0, 2000);
+  
+  showScheduleModal();
+}
+
+function toggleNoteExportMenu() {
+  const menu = document.getElementById('notes-export-menu');
+  menu.classList.toggle('active');
+  
+  // Close on click outside
+  if (menu.classList.contains('active')) {
+    setTimeout(() => {
+      document.addEventListener('click', closeExportMenuOnClickOutside);
+    }, 0);
+  }
+}
+
+function closeExportMenuOnClickOutside(e) {
+  const menu = document.getElementById('notes-export-menu');
+  const btn = document.querySelector('.notes-export-btn');
+  if (!menu.contains(e.target) && !btn.contains(e.target)) {
+    menu.classList.remove('active');
+    document.removeEventListener('click', closeExportMenuOnClickOutside);
+  }
+}
+
+async function exportNote(format) {
+  if (!currentNoteId) return;
+  
+  document.getElementById('notes-export-menu').classList.remove('active');
+  
+  try {
+    const response = await fetch('/api/notes/' + currentNoteId + '/export?format=' + format);
+    if (!response.ok) throw new Error('Failed to export note');
+    
+    const blob = await response.blob();
+    const title = document.getElementById('note-title-input').value || 'note';
+    const ext = format === 'md' ? 'md' : format;
+    
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = title + '.' + ext;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  } catch (error) {
+    console.error('Error exporting note:', error);
+    alert('Failed to export note: ' + error.message);
+  }
+}
+
+function handleNoteKeydown(event) {
+  // Ctrl+B for bold
+  if (event.ctrlKey && event.key === 'b') {
+    event.preventDefault();
+    formatNoteText('bold');
+  }
+  // Ctrl+I for italic
+  else if (event.ctrlKey && event.key === 'i') {
+    event.preventDefault();
+    formatNoteText('italic');
+  }
+  // Ctrl+U for underline
+  else if (event.ctrlKey && event.key === 'u') {
+    event.preventDefault();
+    formatNoteText('underline');
+  }
+  // Ctrl+S to save
+  else if (event.ctrlKey && event.key === 's') {
+    event.preventDefault();
+    saveCurrentNote();
+    updateSaveStatus('saved');
+  }
+}
 
 // ============== CLOUDFLARE TUNNEL MANAGEMENT ==============
 let tunnelCheckInterval = null;
@@ -12278,6 +14339,46 @@ function renderScheduledTasks() {
 }
 
 let editingScheduledTaskId = null;
+let selectedScheduleTemplate = null;
+
+// Schedule Task Templates
+const scheduleTemplates = {
+  osint: {
+    name: 'OSINT Reconnaissance',
+    prompt: 'Perform comprehensive OSINT reconnaissance on the target. Gather subdomains using subfinder and other tools, identify exposed services, search for leaked credentials and sensitive information, check social media profiles and public records. Generate a detailed report.'
+  },
+  fullaudit: {
+    name: 'Full Security Audit',
+    prompt: 'Conduct a complete security audit including: 1) Port scanning and service enumeration, 2) Web vulnerability scanning (XSS, SQLi, CSRF), 3) SSL/TLS configuration analysis, 4) Security headers check, 5) Directory enumeration, 6) Technology stack identification. Provide remediation recommendations.'
+  },
+  network: {
+    name: 'Network Scan',
+    prompt: 'Perform a thorough network scan: Identify all open ports, detect running services and versions, check for default credentials, identify potential misconfigurations, map network topology if possible. Include CVE references for vulnerable services.'
+  },
+  apisec: {
+    name: 'API Security Test',
+    prompt: 'Test API security: Check authentication mechanisms, test for broken access control, verify rate limiting, test input validation, check for information disclosure in error messages, test CORS configuration, check API versioning security. Document all findings.'
+  }
+};
+
+function applyScheduleTemplate(templateId) {
+  const template = scheduleTemplates[templateId];
+  if (!template) return;
+  
+  // Update form fields
+  document.getElementById('schedule-name').value = template.name;
+  document.getElementById('schedule-prompt').value = template.prompt;
+  
+  // Update button states
+  document.querySelectorAll('.schedule-template-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  event.target.closest('.schedule-template-btn').classList.add('active');
+  selectedScheduleTemplate = templateId;
+  
+  // Focus on time field so user can set schedule
+  document.getElementById('schedule-time').focus();
+}
 
 function showScheduleModal(taskId = null) {
   const modal = document.getElementById('schedule-modal');
@@ -12286,6 +14387,10 @@ function showScheduleModal(taskId = null) {
   
   editingScheduledTaskId = taskId;
   const recurringOptions = document.getElementById('recurring-options');
+  
+  // Clear template selection
+  selectedScheduleTemplate = null;
+  document.querySelectorAll('.schedule-template-btn').forEach(btn => btn.classList.remove('active'));
   
   if (taskId && scheduledTasksStore[taskId]) {
     // Editing existing task
@@ -12671,6 +14776,7 @@ window.renameChat = renameChat;
 window.deleteChat = deleteChat;
 window.showScheduleModal = showScheduleModal;
 window.closeScheduleModal = closeScheduleModal;
+window.applyScheduleTemplate = applyScheduleTemplate;
 window.createScheduledTask = createScheduledTask;
 window.toggleScheduledTask = toggleScheduledTask;
 window.deleteScheduledTask = deleteScheduledTask;
@@ -12701,6 +14807,29 @@ window.setDbType = setDbType;
 window.testDbConnection = testDbConnection;
 window.connectDatabase = connectDatabase;
 window.disconnectDatabase = disconnectDatabase;
+// Tools tab functions
+window.switchToolsSubtab = switchToolsSubtab;
+window.loadReportsDirectory = loadReportsDirectory;
+window.filterReports = filterReports;
+window.viewReport = viewReport;
+window.downloadReport = downloadReport;
+window.deleteReport = deleteReport;
+// Notes functions
+window.createNewNote = createNewNote;
+window.createNewNoteFolder = createNewNoteFolder;
+window.selectNote = selectNote;
+window.toggleNoteFolder = toggleNoteFolder;
+window.formatNoteText = formatNoteText;
+window.insertNoteLink = insertNoteLink;
+window.attachNoteFile = attachNoteFile;
+window.insertNoteImage = insertNoteImage;
+window.processNoteWithAI = processNoteWithAI;
+window.createTaskFromNote = createTaskFromNote;
+window.toggleNoteExportMenu = toggleNoteExportMenu;
+window.exportNote = exportNote;
+window.onNoteContentChange = onNoteContentChange;
+window.updateNoteTitle = updateNoteTitle;
+window.handleNoteKeydown = handleNoteKeydown;
 </script>
 </body>
 </html>
