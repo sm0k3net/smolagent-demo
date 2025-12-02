@@ -2572,10 +2572,46 @@ def generate_html_report() -> str:
         file_path = reports_dir / filename
         file_path.write_text(html, encoding='utf-8')
         print(f"📄 Report saved to: {file_path}")
+        
+        # Auto-save pentest session for regeneration
+        _save_session_data()
     except Exception as e:
         print(f"⚠️ Could not auto-save report: {e}")
     
     return html
+
+
+def _save_session_data():
+    """Internal function to save session data after report generation."""
+    global _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED, _LAST_PENTEST_DATA
+    import json
+    from pathlib import Path
+    
+    try:
+        _LAST_PENTEST_DATA = {
+            "title": _CURRENT_REPORT_DATA.get("title", ""),
+            "subtitle": _CURRENT_REPORT_DATA.get("subtitle", ""),
+            "target": _CURRENT_REPORT_DATA.get("target", ""),
+            "author": _CURRENT_REPORT_DATA.get("author", ""),
+            "date": _CURRENT_REPORT_DATA.get("date", ""),
+            "executive_summary": _CURRENT_REPORT_DATA.get("executive_summary", ""),
+            "scope": list(_CURRENT_REPORT_DATA.get("scope", [])),
+            "methodology": _CURRENT_REPORT_DATA.get("methodology", ""),
+            "tools": list(_CURRENT_REPORT_DATA.get("tools", set())),
+            "findings": list(_CURRENT_REPORT_DATA.get("findings", [])),
+            "conclusion": _CURRENT_REPORT_DATA.get("conclusion", ""),
+            "references": list(_CURRENT_REPORT_DATA.get("references", [])),
+            "infrastructure": dict(_CURRENT_REPORT_DATA.get("infrastructure", {})),
+            "recon_data": dict(_CURRENT_REPORT_DATA.get("recon_data", {})),
+            "session_tools": list(_SESSION_TOOLS_USED)
+        }
+        
+        session_file = Path("data/reports/last_pentest_session.json")
+        session_file.parent.mkdir(parents=True, exist_ok=True)
+        session_file.write_text(json.dumps(_LAST_PENTEST_DATA, indent=2, default=str))
+        print(f"📋 Session saved for future regeneration")
+    except Exception as e:
+        print(f"⚠️ Could not save session: {e}")
 
 
 @tool
@@ -3086,3 +3122,380 @@ def get_report_data() -> dict:
     """Get current report data (non-tool function for internal use)."""
     global _CURRENT_REPORT_DATA
     return _CURRENT_REPORT_DATA.copy() if _CURRENT_REPORT_DATA else {}
+
+
+# ============== NOTE ACCESS TOOLS ==============
+
+@tool
+def get_note_content(note_name: str) -> str:
+    """Retrieve content from a specific note by name for use in reports or other tasks.
+    
+    This tool allows the agent to read information that users have stored in their notes.
+    Useful for incorporating user-provided data into reports or tasks.
+    
+    Args:
+        note_name: Name or partial name of the note to retrieve.
+        
+    Returns: The note content as text, or error message if not found.
+    """
+    import json
+    from pathlib import Path
+    
+    notes_dir = Path("data/notes")
+    if not notes_dir.exists():
+        return "Error: Notes directory not found."
+    
+    # Search for notes matching the name
+    matching_notes = []
+    
+    for note_file in notes_dir.glob("*.json"):
+        if note_file.name == "index.json":
+            continue
+        try:
+            note_data = json.loads(note_file.read_text())
+            if note_name.lower() in note_data.get("name", "").lower():
+                matching_notes.append(note_data)
+        except:
+            continue
+    
+    if not matching_notes:
+        return f"No notes found matching '{note_name}'. Available notes: " + ", ".join(
+            [json.loads(f.read_text()).get("name", "Unknown") 
+             for f in notes_dir.glob("*.json") if f.name != "index.json"][:10]
+        )
+    
+    if len(matching_notes) == 1:
+        note = matching_notes[0]
+        # Strip HTML tags for plain text
+        import re
+        content = note.get("content", "")
+        text_content = re.sub(r'<[^>]+>', '', content)
+        text_content = text_content.replace('&nbsp;', ' ').replace('&amp;', '&')
+        return f"Note: {note.get('name')}\n\n{text_content}"
+    
+    # Multiple matches - list them
+    result = f"Multiple notes found matching '{note_name}':\n"
+    for note in matching_notes[:5]:
+        result += f"- {note.get('name')} (ID: {note.get('id')})\n"
+    result += "\nPlease specify the exact note name."
+    return result
+
+
+@tool  
+def list_available_notes() -> str:
+    """List all available notes that can be accessed by the agent.
+    
+    Returns: List of note names and their brief descriptions.
+    """
+    import json
+    from pathlib import Path
+    
+    notes_dir = Path("data/notes")
+    if not notes_dir.exists():
+        return "No notes available."
+    
+    notes = []
+    for note_file in notes_dir.glob("*.json"):
+        if note_file.name == "index.json":
+            continue
+        try:
+            note_data = json.loads(note_file.read_text())
+            name = note_data.get("name", "Unknown")
+            # Get first 100 chars of content as preview
+            import re
+            content = note_data.get("content", "")
+            text_content = re.sub(r'<[^>]+>', '', content)[:100]
+            notes.append(f"- {name}: {text_content}...")
+        except:
+            continue
+    
+    if not notes:
+        return "No notes found."
+    
+    return "Available notes:\n" + "\n".join(notes[:20])
+
+
+@tool
+def insert_note_content_to_report(note_name: str, section: str = "findings") -> str:
+    """Insert content from a note into the current report.
+    
+    This allows users to prepare findings or other information in notes
+    and have the agent incorporate them into the report.
+    
+    Args:
+        note_name: Name of the note to insert content from.
+        section: Report section to add to (findings, executive_summary, scope, conclusion).
+        
+    Returns: Confirmation of content insertion or error.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    import json
+    from pathlib import Path
+    import re
+    
+    notes_dir = Path("data/notes")
+    
+    # Find the note
+    for note_file in notes_dir.glob("*.json"):
+        if note_file.name == "index.json":
+            continue
+        try:
+            note_data = json.loads(note_file.read_text())
+            if note_name.lower() in note_data.get("name", "").lower():
+                content = note_data.get("content", "")
+                text_content = re.sub(r'<[^>]+>', '\n', content)
+                text_content = text_content.replace('&nbsp;', ' ').replace('&amp;', '&')
+                
+                if section == "executive_summary":
+                    existing = _CURRENT_REPORT_DATA.get("executive_summary", "")
+                    _CURRENT_REPORT_DATA["executive_summary"] = existing + "\n\n" + text_content
+                    return f"Added content from '{note_data.get('name')}' to executive summary."
+                elif section == "conclusion":
+                    existing = _CURRENT_REPORT_DATA.get("conclusion", "")
+                    _CURRENT_REPORT_DATA["conclusion"] = existing + "\n\n" + text_content
+                    return f"Added content from '{note_data.get('name')}' to conclusion."
+                elif section == "scope":
+                    # Parse scope items from note
+                    lines = [l.strip() for l in text_content.split('\n') if l.strip()]
+                    for line in lines:
+                        if line not in _CURRENT_REPORT_DATA.get("scope", []):
+                            _CURRENT_REPORT_DATA["scope"].append(line)
+                    return f"Added {len(lines)} scope items from '{note_data.get('name')}'."
+                else:
+                    # Add as finding reference
+                    _CURRENT_REPORT_DATA["references"].append({
+                        "source": f"Note: {note_data.get('name')}",
+                        "content": text_content[:500]
+                    })
+                    return f"Added reference from '{note_data.get('name')}' to report."
+        except:
+            continue
+    
+    return f"Note '{note_name}' not found."
+
+
+# ============== REPORT REGENERATION TOOLS ==============
+
+# Store for last completed pentest data
+_LAST_PENTEST_DATA: dict = {}
+
+
+@tool
+def save_pentest_session() -> str:
+    """Save the current pentest session data for later regeneration.
+    
+    Call this after completing a pentest to enable report regeneration.
+    
+    Returns: Confirmation of session save.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _LAST_PENTEST_DATA, _SESSION_TOOLS_USED
+    
+    if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
+        return "No active pentest session to save. Enable report mode first."
+    
+    import json
+    from pathlib import Path
+    
+    # Deep copy the current data
+    _LAST_PENTEST_DATA = {
+        "title": _CURRENT_REPORT_DATA.get("title", ""),
+        "subtitle": _CURRENT_REPORT_DATA.get("subtitle", ""),
+        "target": _CURRENT_REPORT_DATA.get("target", ""),
+        "author": _CURRENT_REPORT_DATA.get("author", ""),
+        "date": _CURRENT_REPORT_DATA.get("date", ""),
+        "executive_summary": _CURRENT_REPORT_DATA.get("executive_summary", ""),
+        "scope": list(_CURRENT_REPORT_DATA.get("scope", [])),
+        "methodology": _CURRENT_REPORT_DATA.get("methodology", ""),
+        "tools": list(_CURRENT_REPORT_DATA.get("tools", set())),
+        "findings": list(_CURRENT_REPORT_DATA.get("findings", [])),
+        "conclusion": _CURRENT_REPORT_DATA.get("conclusion", ""),
+        "references": list(_CURRENT_REPORT_DATA.get("references", [])),
+        "infrastructure": dict(_CURRENT_REPORT_DATA.get("infrastructure", {})),
+        "recon_data": dict(_CURRENT_REPORT_DATA.get("recon_data", {})),
+        "session_tools": list(_SESSION_TOOLS_USED)
+    }
+    
+    # Also save to file for persistence
+    session_file = Path("data/reports/last_pentest_session.json")
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(json.dumps(_LAST_PENTEST_DATA, indent=2, default=str))
+    
+    return f"✅ Pentest session saved. Target: {_LAST_PENTEST_DATA.get('target')}, Findings: {len(_LAST_PENTEST_DATA.get('findings', []))}"
+
+
+@tool
+def restore_pentest_session() -> str:
+    """Restore the last saved pentest session for report regeneration.
+    
+    This reloads all findings, tools used, and other data from the last pentest.
+    
+    Returns: Confirmation of session restore or error.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _LAST_PENTEST_DATA, _SESSION_TOOLS_USED
+    
+    import json
+    from pathlib import Path
+    
+    # Try to load from file if not in memory
+    if not _LAST_PENTEST_DATA:
+        session_file = Path("data/reports/last_pentest_session.json")
+        if session_file.exists():
+            _LAST_PENTEST_DATA = json.loads(session_file.read_text())
+    
+    if not _LAST_PENTEST_DATA:
+        return "No saved pentest session found. Run a pentest with report mode enabled first."
+    
+    # Restore to current report data
+    _REPORT_MODE_ENABLED = True
+    _CURRENT_REPORT_DATA = {
+        "title": _LAST_PENTEST_DATA.get("title", ""),
+        "subtitle": _LAST_PENTEST_DATA.get("subtitle", ""),
+        "target": _LAST_PENTEST_DATA.get("target", ""),
+        "author": _LAST_PENTEST_DATA.get("author", ""),
+        "date": datetime.now().strftime("%Y-%m-%d"),  # Update date
+        "executive_summary": _LAST_PENTEST_DATA.get("executive_summary", ""),
+        "scope": list(_LAST_PENTEST_DATA.get("scope", [])),
+        "methodology": _LAST_PENTEST_DATA.get("methodology", ""),
+        "tools": set(_LAST_PENTEST_DATA.get("tools", [])),
+        "findings": list(_LAST_PENTEST_DATA.get("findings", [])),
+        "conclusion": _LAST_PENTEST_DATA.get("conclusion", ""),
+        "references": list(_LAST_PENTEST_DATA.get("references", [])),
+        "infrastructure": dict(_LAST_PENTEST_DATA.get("infrastructure", {})),
+        "recon_data": dict(_LAST_PENTEST_DATA.get("recon_data", {})),
+        "artifacts": []
+    }
+    _SESSION_TOOLS_USED = set(_LAST_PENTEST_DATA.get("session_tools", []))
+    
+    findings_count = len(_CURRENT_REPORT_DATA.get("findings", []))
+    return f"✅ Pentest session restored!\nTarget: {_CURRENT_REPORT_DATA.get('target')}\nFindings: {findings_count}\nTools: {len(_CURRENT_REPORT_DATA.get('tools', set()))}\n\nYou can now modify findings and regenerate the report."
+
+
+@tool
+def modify_finding(finding_id: int, field: str, new_value: str) -> str:
+    """Modify a specific field of a finding in the current report.
+    
+    Use this to fix mistakes or update information in findings before regenerating.
+    
+    Args:
+        finding_id: The ID number of the finding to modify.
+        field: Field to modify (title, description, severity, remediation, affected_component).
+        new_value: New value for the field.
+        
+    Returns: Confirmation of modification or error.
+    """
+    global _CURRENT_REPORT_DATA
+    
+    if not _CURRENT_REPORT_DATA:
+        return "No report data available. Restore a pentest session first."
+    
+    findings = _CURRENT_REPORT_DATA.get("findings", [])
+    
+    for finding in findings:
+        if finding.get("id") == finding_id:
+            valid_fields = ["title", "description", "severity", "remediation", "affected_component", "impact", "likelihood"]
+            if field not in valid_fields:
+                return f"Invalid field. Valid fields: {', '.join(valid_fields)}"
+            
+            old_value = finding.get(field, "")
+            finding[field] = new_value
+            return f"✅ Finding #{finding_id} updated.\nField: {field}\nOld: {old_value[:100]}...\nNew: {new_value[:100]}..."
+    
+    return f"Finding #{finding_id} not found. Available IDs: {[f.get('id') for f in findings]}"
+
+
+@tool
+def remove_finding(finding_id: int) -> str:
+    """Remove a finding from the current report.
+    
+    Args:
+        finding_id: The ID number of the finding to remove.
+        
+    Returns: Confirmation of removal or error.
+    """
+    global _CURRENT_REPORT_DATA
+    
+    if not _CURRENT_REPORT_DATA:
+        return "No report data available. Restore a pentest session first."
+    
+    findings = _CURRENT_REPORT_DATA.get("findings", [])
+    
+    for i, finding in enumerate(findings):
+        if finding.get("id") == finding_id:
+            removed = findings.pop(i)
+            return f"✅ Finding #{finding_id} removed: {removed.get('title')}"
+    
+    return f"Finding #{finding_id} not found."
+
+
+@tool
+def list_current_findings() -> str:
+    """List all findings in the current report session.
+    
+    Returns: Formatted list of findings with IDs and severities.
+    """
+    global _CURRENT_REPORT_DATA
+    
+    if not _CURRENT_REPORT_DATA:
+        return "No report data available. Restore a pentest session first."
+    
+    findings = _CURRENT_REPORT_DATA.get("findings", [])
+    
+    if not findings:
+        return "No findings in current report."
+    
+    severity_icons = {
+        "Critical": "🔴",
+        "High": "🟠", 
+        "Medium": "🟡",
+        "Low": "🟢",
+        "Info": "🔵"
+    }
+    
+    result = f"Current findings ({len(findings)} total):\n\n"
+    for f in findings:
+        icon = severity_icons.get(f.get("severity", "Info"), "⚪")
+        result += f"{icon} #{f.get('id')} [{f.get('severity')}] {f.get('title')}\n"
+        result += f"   Component: {f.get('affected_component', 'N/A')[:50]}\n\n"
+    
+    return result
+
+
+@tool
+def update_executive_summary(new_summary: str) -> str:
+    """Update the executive summary of the current report.
+    
+    Args:
+        new_summary: New executive summary text.
+        
+    Returns: Confirmation of update.
+    """
+    global _CURRENT_REPORT_DATA
+    
+    if not _CURRENT_REPORT_DATA:
+        return "No report data available. Restore a pentest session first."
+    
+    _CURRENT_REPORT_DATA["executive_summary"] = new_summary
+    return f"✅ Executive summary updated ({len(new_summary)} characters)."
+
+
+@tool
+def update_conclusion(new_conclusion: str) -> str:
+    """Update the conclusion section of the current report.
+    
+    Args:
+        new_conclusion: New conclusion text.
+        
+    Returns: Confirmation of update.
+    """
+    global _CURRENT_REPORT_DATA
+    
+    if not _CURRENT_REPORT_DATA:
+        return "No report data available. Restore a pentest session first."
+    
+    _CURRENT_REPORT_DATA["conclusion"] = new_conclusion
+    return f"✅ Conclusion updated ({len(new_conclusion)} characters)."
+

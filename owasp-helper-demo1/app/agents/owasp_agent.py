@@ -123,6 +123,18 @@ from app.tools.report_tools import (
     add_technology_stack,
     add_network_topology,
     record_tool_used,
+    # Note access tools
+    get_note_content,
+    list_available_notes,
+    insert_note_content_to_report,
+    # Report regeneration tools
+    save_pentest_session,
+    restore_pentest_session,
+    modify_finding,
+    remove_finding,
+    list_current_findings,
+    update_executive_summary,
+    update_conclusion,
 )
 from app.tools.telegram_tool import (
     telegram_connect,
@@ -373,6 +385,18 @@ def build_owasp_agent() -> CodeAgent:
         add_technology_stack,
         add_network_topology,
         record_tool_used,
+        # Note access tools
+        get_note_content,
+        list_available_notes,
+        insert_note_content_to_report,
+        # Report regeneration tools
+        save_pentest_session,
+        restore_pentest_session,
+        modify_finding,
+        remove_finding,
+        list_current_findings,
+        update_executive_summary,
+        update_conclusion,
     ])
     
     # Telegram integration tools

@@ -3270,8 +3270,26 @@ async def create_note(data: dict):
     note_entry = {"id": note_id, "name": name, "type": "file"}
     
     if folder_id:
-        # Add to folder (would need recursive find)
-        pass
+        # Add to folder recursively
+        def add_to_folder(folders, target_id, entry):
+            for folder in folders:
+                if folder.get("id") == target_id:
+                    if "children" not in folder:
+                        folder["children"] = []
+                    folder["children"].append(entry)
+                    return True
+                if "children" in folder:
+                    if add_to_folder([c for c in folder["children"] if c.get("type") == "folder"], target_id, entry):
+                        return True
+            return False
+        
+        # Also store folder_id in the note file
+        note_data["folder_id"] = folder_id
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        if not add_to_folder(notes_index.get("folders", []), folder_id, note_entry):
+            # Folder not found, add to root
+            notes_index["files"].append(note_entry)
     else:
         notes_index["files"].append(note_entry)
     
@@ -3393,6 +3411,42 @@ async def upload_note_attachments(note_id: str, files: List[UploadFile] = File(.
         note_file.write_text(json.dumps(note_data, indent=2))
         
         return JSONResponse(attachments)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.delete("/api/notes/{note_id}/attachments/{att_id}")
+async def delete_note_attachment(note_id: str, att_id: str):
+    """Delete an attachment from a note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        attachments = note_data.get("attachments", [])
+        
+        # Find and remove attachment
+        att_to_remove = None
+        for att in attachments:
+            if att.get("id") == att_id:
+                att_to_remove = att
+                break
+        
+        if not att_to_remove:
+            return JSONResponse({"error": "Attachment not found"}, status_code=404)
+        
+        # Delete file
+        att_path = Path(att_to_remove.get("path", ""))
+        if att_path.exists():
+            att_path.unlink()
+        
+        # Remove from note
+        attachments.remove(att_to_remove)
+        note_data["attachments"] = attachments
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse({"success": True})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -3537,6 +3591,7 @@ async def export_note(note_id: str, format: str = "html"):
 @app.post("/api/notes/{note_id}/move")
 async def move_note(note_id: str, data: dict):
     """Move a note or folder to a different parent folder."""
+    global notes_index
     target_folder_id = data.get("target_folder_id")  # None means root
     
     note_file = NOTES_DIR / f"{note_id}.json"
@@ -3548,12 +3603,54 @@ async def move_note(note_id: str, data: dict):
         # Load note data
         note_data = json.loads(note_file.read_text())
         
-        # Update parent folder
+        # Update parent folder in note file
         note_data["folder_id"] = target_folder_id
         note_data["updated_at"] = datetime.now().isoformat()
-        
-        # Save updated note
         note_file.write_text(json.dumps(note_data, indent=2))
+        
+        # Helper to remove note from current location in index
+        def remove_from_index(items, nid):
+            for i, item in enumerate(items):
+                if item.get("id") == nid:
+                    return items.pop(i)
+                if item.get("type") == "folder" and "children" in item:
+                    result = remove_from_index(item["children"], nid)
+                    if result:
+                        return result
+            return None
+        
+        # Helper to add note to target folder
+        def add_to_folder(folders, target_id, entry):
+            for folder in folders:
+                if folder.get("id") == target_id:
+                    if "children" not in folder:
+                        folder["children"] = []
+                    folder["children"].append(entry)
+                    return True
+                if "children" in folder:
+                    if add_to_folder([c for c in folder["children"] if c.get("type") == "folder"], target_id, entry):
+                        return True
+            return False
+        
+        # Remove from current location (check both files and folders)
+        note_entry = remove_from_index(notes_index.get("files", []), note_id)
+        if not note_entry:
+            note_entry = remove_from_index(notes_index.get("folders", []), note_id)
+        
+        if not note_entry:
+            # Reconstruct entry from note data
+            note_entry = {"id": note_id, "name": note_data.get("name", "Note"), "type": "file"}
+        
+        # Add to new location
+        if target_folder_id:
+            if not add_to_folder(notes_index.get("folders", []), target_folder_id, note_entry):
+                # Target folder not found, add to root
+                notes_index["files"].append(note_entry)
+        else:
+            # Move to root
+            notes_index["files"].append(note_entry)
+        
+        save_notes_index(notes_index)
         
         return JSONResponse({"success": True, "note_id": note_id, "new_folder": target_folder_id})
     except Exception as e:
@@ -6280,6 +6377,125 @@ h1 {
   background: rgba(34, 197, 94, 0.15);
   border-color: rgba(34, 197, 94, 0.3);
   color: var(--success);
+}
+
+/* Insert Report Modal */
+.insert-report-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(8px);
+  z-index: 10001;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.insert-report-modal.active {
+  display: flex;
+}
+.insert-report-container {
+  width: 100%;
+  max-width: 550px;
+  max-height: 70vh;
+  background: var(--gray-900);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.insert-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  font-weight: 600;
+  color: var(--light);
+}
+.insert-report-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--gray-400);
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+.insert-report-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+}
+.insert-report-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+.insert-report-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.insert-report-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+.insert-report-item:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.1);
+}
+.report-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.report-item-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--light);
+}
+.report-item-meta {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+}
+.report-item-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.report-item-actions button {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.report-item-actions button:hover {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.inserted-report {
+  padding: 1rem;
+  margin: 1rem 0;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
 }
 
 .notes-export-dropdown {
@@ -9239,6 +9455,14 @@ main {
                     <line x1="15" y1="3" x2="15" y2="21"></line>
                   </svg>
                 </button>
+                <button class="notes-toolbar-btn" onclick="showInsertReportModal()" title="Insert Report">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                </button>
               </div>
               <div class="notes-toolbar-spacer"></div>
               <div class="notes-toolbar-group notes-toolbar-actions">
@@ -11811,6 +12035,8 @@ async function loadNotesTree() {
     renderNotesTree(notesStore);
     // Initialize drag and drop after rendering
     initNotesDragDrop();
+    // Setup image click handlers
+    setupNoteImageHandlers();
   } catch (error) {
     console.error('Error loading notes:', error);
     treeEl.innerHTML = '<div class="notes-tree-loading">Failed to load notes</div>';
@@ -11979,6 +12205,174 @@ function renderNoteAttachments(attachments) {
       <button class="notes-attachment-remove" onclick="removeNoteAttachment('${att.id}')">&times;</button>
     </div>
   `).join('');
+}
+
+async function removeNoteAttachment(attId) {
+  if (!currentNoteId) return;
+  
+  if (!confirm('Remove this attachment?')) return;
+  
+  try {
+    const response = await fetch('/api/notes/' + currentNoteId + '/attachments/' + attId, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Failed to remove attachment');
+    
+    // Reload note to update attachments
+    await selectNote(currentNoteId);
+  } catch (error) {
+    console.error('Error removing attachment:', error);
+    alert('Failed to remove attachment: ' + error.message);
+  }
+}
+
+// Image Modal for Notes
+function openNoteImageModal(imgSrc) {
+  const modal = document.getElementById('image-modal');
+  const img = document.getElementById('image-modal-img');
+  img.src = imgSrc;
+  modal.classList.add('active');
+}
+
+// Add click handlers to images in notes
+function setupNoteImageHandlers() {
+  const editor = document.getElementById('notes-editor');
+  if (!editor) return;
+  
+  editor.addEventListener('click', (e) => {
+    if (e.target.tagName === 'IMG') {
+      e.preventDefault();
+      openNoteImageModal(e.target.src);
+    }
+  });
+}
+
+// Insert Report into Note
+async function showInsertReportModal() {
+  if (!currentNoteId) {
+    alert('Please select a note first');
+    return;
+  }
+  
+  // Load available reports
+  try {
+    const response = await fetch('/api/reports');
+    if (!response.ok) throw new Error('Failed to load reports');
+    const reports = await response.json();
+    
+    if (reports.length === 0) {
+      alert('No reports available. Generate a report first.');
+      return;
+    }
+    
+    // Create modal content
+    let modalHtml = '<div class="insert-report-modal" id="insert-report-modal">';
+    modalHtml += '<div class="insert-report-container">';
+    modalHtml += '<div class="insert-report-header">';
+    modalHtml += '<span>📄 Insert Report into Note</span>';
+    modalHtml += '<button class="insert-report-close" onclick="closeInsertReportModal()">&times;</button>';
+    modalHtml += '</div>';
+    modalHtml += '<div class="insert-report-body">';
+    modalHtml += '<div class="insert-report-list">';
+    
+    reports.forEach(report => {
+      const date = new Date(report.modified).toLocaleDateString();
+      modalHtml += `
+        <div class="insert-report-item" data-path="${escapeHtml(report.path)}">
+          <div class="report-item-info">
+            <span class="report-item-name">${escapeHtml(report.name)}</span>
+            <span class="report-item-meta">${report.type.toUpperCase()} • ${date}</span>
+          </div>
+          <div class="report-item-actions">
+            <button class="btn-insert-attachment" onclick="insertReportAsAttachment('${escapeHtml(report.path)}', '${escapeHtml(report.name)}')" title="Insert as Attachment">📎</button>
+            <button class="btn-insert-content" onclick="insertReportContent('${escapeHtml(report.path)}')" title="Insert Content">📝</button>
+          </div>
+        </div>
+      `;
+    });
+    
+    modalHtml += '</div></div></div></div>';
+    
+    // Add modal to body if not exists
+    let existingModal = document.getElementById('insert-report-modal');
+    if (existingModal) existingModal.remove();
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    document.getElementById('insert-report-modal').classList.add('active');
+    
+  } catch (error) {
+    console.error('Error loading reports:', error);
+    alert('Failed to load reports: ' + error.message);
+  }
+}
+
+function closeInsertReportModal() {
+  const modal = document.getElementById('insert-report-modal');
+  if (modal) modal.remove();
+}
+
+async function insertReportAsAttachment(reportPath, reportName) {
+  if (!currentNoteId) return;
+  
+  try {
+    // Fetch report and save as attachment
+    const response = await fetch('/api/reports/view?path=' + encodeURIComponent(reportPath));
+    if (!response.ok) throw new Error('Failed to load report');
+    
+    const report = await response.json();
+    
+    // Create a link in the note
+    const editor = document.getElementById('notes-editor');
+    const linkHtml = `<p><a href="#" onclick="viewReportFromNote('${escapeHtml(reportPath)}'); return false;">📄 ${escapeHtml(reportName)}</a></p>`;
+    
+    editor.innerHTML += linkHtml;
+    onNoteContentChange();
+    
+    closeInsertReportModal();
+  } catch (error) {
+    console.error('Error inserting report:', error);
+    alert('Failed to insert report: ' + error.message);
+  }
+}
+
+async function insertReportContent(reportPath) {
+  if (!currentNoteId) return;
+  
+  try {
+    const response = await fetch('/api/reports/view?path=' + encodeURIComponent(reportPath));
+    if (!response.ok) throw new Error('Failed to load report');
+    
+    const report = await response.json();
+    
+    // Insert content into note
+    const editor = document.getElementById('notes-editor');
+    
+    // If HTML, insert directly; if markdown, convert basic formatting
+    let content = report.content;
+    if (report.type === 'md') {
+      // Basic markdown to HTML conversion
+      content = content.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+      content = content.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+      content = content.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+      content = content.replace(/\\*\\*(.*)\\*\\*/gim, '<strong>$1</strong>');
+      content = content.replace(/\\*(.*)\\*/gim, '<em>$1</em>');
+      content = content.replace(/\\n/gim, '<br>');
+    }
+    
+    editor.innerHTML += '<hr><div class="inserted-report">' + content + '</div>';
+    onNoteContentChange();
+    
+    closeInsertReportModal();
+  } catch (error) {
+    console.error('Error inserting report:', error);
+    alert('Failed to insert report: ' + error.message);
+  }
+}
+
+function viewReportFromNote(reportPath) {
+  // Open report viewer
+  window.open('/api/reports/view?path=' + encodeURIComponent(reportPath), '_blank');
 }
 
 function onNoteContentChange() {
