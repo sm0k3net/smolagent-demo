@@ -3,8 +3,47 @@ from __future__ import annotations
 import os
 import re
 import json
+import html as html_module
 from datetime import datetime
 from smolagents import tool
+
+
+def sanitize_html(text: str) -> str:
+    """Sanitize text for safe HTML insertion to prevent XSS attacks.
+    
+    Escapes HTML special characters while preserving newlines.
+    
+    Args:
+        text: Input text that may contain HTML/XSS payloads
+        
+    Returns:
+        Safe escaped text
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    return html_module.escape(text)
+
+
+def sanitize_url(url: str) -> str:
+    """Sanitize URL to prevent javascript: and data: XSS attacks.
+    
+    Args:
+        url: Input URL
+        
+    Returns:
+        Safe URL or empty string if dangerous
+    """
+    if url is None:
+        return ""
+    if not isinstance(url, str):
+        url = str(url)
+    url = url.strip().lower()
+    # Block javascript:, data:, and vbscript: protocols
+    if url.startswith(('javascript:', 'data:', 'vbscript:', 'about:')):
+        return "#blocked"
+    return html_module.escape(url)
 
 
 # Global state for report mode
@@ -1731,20 +1770,22 @@ def _build_scope_table(scope_items: list) -> str:
     if fqdns_urls:
         table_html += f'<tr class="scope-type-header"><td colspan="3">🌐 FQDNs / URLs ({len(fqdns_urls)})</td></tr>'
         for item in fqdns_urls:
+            safe_item = sanitize_html(item)
             item_type = "URL" if item.startswith(("http://", "https://")) else "FQDN"
-            table_html += f'<tr><td>{item_type}</td><td>{item}</td><td>In scope</td></tr>'
+            table_html += f'<tr><td>{item_type}</td><td>{safe_item}</td><td>In scope</td></tr>'
     
     # Add Subnets/IPs section
     if subnets_ips:
         table_html += f'<tr class="scope-type-header"><td colspan="3">🔢 Subnets / IP Addresses ({len(subnets_ips)})</td></tr>'
         for item in subnets_ips:
+            safe_item = sanitize_html(item)
             if "/" in item:
                 item_type = "Subnet (CIDR)"
             elif "-" in item:
                 item_type = "IP Range"
             else:
                 item_type = "IP Address"
-            table_html += f'<tr><td>{item_type}</td><td>{item}</td><td>In scope</td></tr>'
+            table_html += f'<tr><td>{item_type}</td><td>{safe_item}</td><td>In scope</td></tr>'
     
     if not fqdns_urls and not subnets_ips:
         table_html += '<tr><td colspan="3">No targets specified</td></tr>'
@@ -1834,7 +1875,8 @@ def _convert_markdown_to_html(text: str) -> str:
 
 def _build_executive_summary_html(summary: str, findings: list, severity_counts: dict) -> str:
     """Build structured executive summary HTML with proper formatting."""
-    # Convert any markdown in the summary to HTML
+    # Sanitize the summary first, then convert markdown
+    summary = sanitize_html(summary)
     summary = _convert_markdown_to_html(summary)
     
     # Split summary into paragraphs
@@ -1846,8 +1888,8 @@ def _build_executive_summary_html(summary: str, findings: list, severity_counts:
     desc_html = ""
     for p in paragraphs:
         # Check if it's already wrapped in HTML tags
-        if p.startswith('<h') or p.startswith('<ul') or p.startswith('<ol') or p.startswith('<p'):
-            desc_html += p
+        if p.startswith('&lt;h') or p.startswith('&lt;ul') or p.startswith('&lt;ol') or p.startswith('&lt;p'):
+            desc_html += f"<p>{p}</p>"  # Escaped tags are displayed as text
         else:
             # Convert single newlines to <br> within paragraphs
             p = p.replace('\n', '<br>')
@@ -1861,7 +1903,9 @@ def _build_executive_summary_html(summary: str, findings: list, severity_counts:
     for f in sorted_findings[:10]:  # Top 10 findings
         sev = f.get("severity", "Info")
         emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(sev, "⚪")
-        key_findings.append(f"{emoji} <strong>[{sev}]</strong> {f['title']}")
+        # Sanitize finding title
+        safe_title = sanitize_html(f.get('title', 'Untitled'))
+        key_findings.append(f"{emoji} <strong>[{sev}]</strong> {safe_title}")
     
     findings_html = ""
     if key_findings:
@@ -1888,7 +1932,7 @@ def _build_finding_steps_html(steps: str) -> str:
     
     lines = [l.strip() for l in steps.split('\n') if l.strip()]
     if not lines:
-        return f"<p>{steps}</p>"
+        return f"<p>{sanitize_html(steps)}</p>"
     
     # Check if lines are numbered
     is_numbered = any(re.match(numbered_pattern, line) for line in lines)
@@ -1897,13 +1941,13 @@ def _build_finding_steps_html(steps: str) -> str:
         # Build numbered list
         html = '<ol class="steps-list">'
         for line in lines:
-            # Remove existing numbers if present
+            # Remove existing numbers if present, then sanitize
             cleaned = re.sub(numbered_pattern, '', line)
-            html += f"<li>{cleaned}</li>"
+            html += f"<li>{sanitize_html(cleaned)}</li>"
         html += '</ol>'
         return html
     else:
-        return f"<p>{steps}</p>"
+        return f"<p>{sanitize_html(steps)}</p>"
 
 
 def _build_finding_screenshots_html(screenshots: list) -> str:
@@ -1913,11 +1957,13 @@ def _build_finding_screenshots_html(screenshots: list) -> str:
     
     html = '<h4>Exploitation Screenshots</h4>'
     for screenshot in screenshots:
+        safe_caption = sanitize_html(screenshot.get("caption", "Screenshot"))
+        safe_url = sanitize_html(screenshot.get("url", ""))
         html += f'''
         <div class="finding-screenshot">
-            <img src="data:image/png;base64,{screenshot.get("data", "")}" alt="{screenshot.get("caption", "Screenshot")}">
+            <img src="data:image/png;base64,{screenshot.get("data", "")}" alt="{safe_caption}">
             <div class="finding-screenshot-caption">
-                {screenshot.get("caption", "Exploitation evidence")} - {screenshot.get("url", "")}
+                {sanitize_html(screenshot.get("caption", "Exploitation evidence"))} - {safe_url}
             </div>
         </div>
         '''
@@ -1931,14 +1977,20 @@ def _build_finding_references_html(references: str, owasp_cat: str, cwe_id: str)
     
     # Add OWASP reference
     if owasp_cat and owasp_cat != "N/A":
-        # Extract category ID (e.g., A01 from A01:2021)
+        # Extract category ID (e.g., A01 from A01:2021) - sanitize before use
+        safe_owasp = sanitize_html(owasp_cat)
         cat_match = owasp_cat.split(":")[0] if ":" in owasp_cat else owasp_cat
-        refs.append(f'<a href="https://owasp.org/Top10/{cat_match}/" target="_blank">OWASP Top 10 - {owasp_cat}</a>')
+        # Validate cat_match is alphanumeric before using in URL
+        if cat_match.replace("-", "").isalnum():
+            refs.append(f'<a href="https://owasp.org/Top10/{cat_match}/" target="_blank">OWASP Top 10 - {safe_owasp}</a>')
     
     # Add CWE reference
     if cwe_id and cwe_id != "N/A":
+        safe_cwe = sanitize_html(cwe_id)
         cwe_num = cwe_id.replace("CWE-", "").replace("cwe-", "")
-        refs.append(f'<a href="https://cwe.mitre.org/data/definitions/{cwe_num}.html" target="_blank">{cwe_id}</a>')
+        # Validate CWE number is numeric before using in URL
+        if cwe_num.isdigit():
+            refs.append(f'<a href="https://cwe.mitre.org/data/definitions/{cwe_num}.html" target="_blank">{safe_cwe}</a>')
     
     # Parse custom references
     if references:
@@ -1946,11 +1998,13 @@ def _build_finding_references_html(references: str, owasp_cat: str, cwe_id: str)
             ref = ref.strip()
             if ref:
                 if ref.startswith(("http://", "https://")):
-                    refs.append(f'<a href="{ref}" target="_blank">{ref}</a>')
-                elif ref.startswith("CVE-"):
-                    refs.append(f'<a href="https://nvd.nist.gov/vuln/detail/{ref}" target="_blank">{ref}</a>')
+                    safe_ref = sanitize_url(ref)
+                    refs.append(f'<a href="{safe_ref}" target="_blank">{sanitize_html(ref)}</a>')
+                elif ref.startswith("CVE-") and ref.replace("CVE-", "").replace("-", "").isalnum():
+                    safe_ref = sanitize_html(ref)
+                    refs.append(f'<a href="https://nvd.nist.gov/vuln/detail/{safe_ref}" target="_blank">{safe_ref}</a>')
                 else:
-                    refs.append(ref)
+                    refs.append(sanitize_html(ref))
     
     if not refs:
         return ""
@@ -1993,7 +2047,9 @@ def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dic
     
     for f in findings:
         sev = f.get("severity", "Info")
-        item = f"Fix: {f['title']}"
+        # Sanitize finding title before adding to remediation lists
+        safe_title = sanitize_html(f.get('title', 'Untitled'))
+        item = f"Fix: {safe_title}"
         if sev == "Critical":
             immediate_actions.append(item)
         elif sev == "High":
@@ -2003,18 +2059,16 @@ def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dic
         else:
             long_term_actions.append(item)
     
-    # Parse conclusion text into paragraphs - convert markdown to HTML first
+    # Parse conclusion text into paragraphs - sanitize first, then convert markdown to HTML
     conclusion_paragraphs = ""
     if conclusion:
+        conclusion = sanitize_html(conclusion)
         conclusion = _convert_markdown_to_html(conclusion)
         for p in conclusion.split('\n\n'):
             p = p.strip()
             if p:
-                # Check if already wrapped in HTML tags
-                if p.startswith('<h') or p.startswith('<ul') or p.startswith('<ol') or p.startswith('<p'):
-                    conclusion_paragraphs += p
-                else:
-                    conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
+                # Escaped tags are now safe text, wrap in paragraphs
+                conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
     
     html = f'''
     <div class="risk-summary" style="border-color: {risk_color};">
@@ -2139,10 +2193,11 @@ def generate_html_report() -> str:
     tools_html = ""
     for t in sorted(all_tools):
         icon = tool_icons.get(t.lower(), "🛠️")
+        safe_tool_name = sanitize_html(t)
         tools_html += f'''
         <div class="tool-card">
             <div class="tool-icon">{icon}</div>
-            <div class="tool-name">{t}</div>
+            <div class="tool-name">{safe_tool_name}</div>
         </div>
         '''
     
@@ -2162,7 +2217,11 @@ def generate_html_report() -> str:
         if dns_records:
             dns_rows = ""
             for rec in sorted(dns_records, key=lambda x: (x["type"], x["name"])):
-                dns_rows += f'<tr><td>{rec["type"]}</td><td>{rec["name"]}</td><td><code>{rec["value"]}</code></td><td>{rec["ttl"]}</td></tr>'
+                safe_type = sanitize_html(rec.get("type", ""))
+                safe_name = sanitize_html(rec.get("name", ""))
+                safe_value = sanitize_html(rec.get("value", ""))
+                safe_ttl = sanitize_html(str(rec.get("ttl", "")))
+                dns_rows += f'<tr><td>{safe_type}</td><td>{safe_name}</td><td><code>{safe_value}</code></td><td>{safe_ttl}</td></tr>'
             
             recon_content += f'''
             <div class="infrastructure-table">
@@ -2178,9 +2237,15 @@ def generate_html_report() -> str:
         services = infrastructure.get("services", [])
         if services:
             svc_rows = ""
-            for svc in sorted(services, key=lambda x: (x["host"], x["port"])):
-                state_class = "open" if svc["state"] == "open" else "filtered"
-                svc_rows += f'<tr><td>{svc["host"]}</td><td>{svc["port"]}</td><td>{svc["protocol"].upper()}</td><td>{svc["service"]}</td><td>{svc["version"]}</td><td class="port-{state_class}">{svc["state"]}</td></tr>'
+            for svc in sorted(services, key=lambda x: (x.get("host", ""), x.get("port", 0))):
+                safe_host = sanitize_html(svc.get("host", ""))
+                safe_port = sanitize_html(str(svc.get("port", "")))
+                safe_protocol = sanitize_html(svc.get("protocol", "").upper())
+                safe_service = sanitize_html(svc.get("service", ""))
+                safe_version = sanitize_html(svc.get("version", ""))
+                safe_state = sanitize_html(svc.get("state", ""))
+                state_class = "open" if svc.get("state") == "open" else "filtered"
+                svc_rows += f'<tr><td>{safe_host}</td><td>{safe_port}</td><td>{safe_protocol}</td><td>{safe_service}</td><td>{safe_version}</td><td class="port-{state_class}">{safe_state}</td></tr>'
             
             recon_content += f'''
             <div class="infrastructure-table">
@@ -2196,8 +2261,12 @@ def generate_html_report() -> str:
         technologies = infrastructure.get("technologies", [])
         if technologies:
             tech_rows = ""
-            for tech in sorted(technologies, key=lambda x: x["category"]):
-                tech_rows += f'<tr><td>{tech["technology"]}</td><td>{tech["category"].replace("_", " ").title()}</td><td>{tech["version"]}</td><td><code>{tech["url"]}</code></td></tr>'
+            for tech in sorted(technologies, key=lambda x: x.get("category", "")):
+                safe_tech = sanitize_html(tech.get("technology", ""))
+                safe_category = sanitize_html(tech.get("category", "").replace("_", " ").title())
+                safe_version = sanitize_html(tech.get("version", ""))
+                safe_url = sanitize_html(tech.get("url", ""))
+                tech_rows += f'<tr><td>{safe_tech}</td><td>{safe_category}</td><td>{safe_version}</td><td><code>{safe_url}</code></td></tr>'
             
             recon_content += f'''
             <div class="infrastructure-table">
@@ -2214,7 +2283,11 @@ def generate_html_report() -> str:
         if topology:
             topo_rows = ""
             for entry in topology:
-                topo_rows += f'<tr><td>{entry["source"]}</td><td>{entry["relationship"]}</td><td>{entry["destination"]}</td><td>{entry.get("details", "")}</td></tr>'
+                safe_source = sanitize_html(entry.get("source", ""))
+                safe_rel = sanitize_html(entry.get("relationship", ""))
+                safe_dest = sanitize_html(entry.get("destination", ""))
+                safe_details = sanitize_html(entry.get("details", ""))
+                topo_rows += f'<tr><td>{safe_source}</td><td>{safe_rel}</td><td>{safe_dest}</td><td>{safe_details}</td></tr>'
             
             recon_content += f'''
             <div class="infrastructure-table">
@@ -2230,14 +2303,15 @@ def generate_html_report() -> str:
         if recon_data:
             recon_cards = ""
             for data_type, items in sorted(recon_data.items()):
-                items_html = "".join([f"<code>{item}</code>" for item in items])
+                safe_items_html = "".join([f"<code>{sanitize_html(str(item))}</code>" for item in items])
+                safe_data_type = sanitize_html(data_type.replace('_', ' ').title())
                 recon_cards += f'''
                 <div class="recon-data-card">
                     <div class="recon-data-header">
-                        <span>{data_type.replace('_', ' ').title()}</span>
+                        <span>{safe_data_type}</span>
                         <span class="recon-data-count">{len(items)} items</span>
                     </div>
-                    <div class="recon-data-list">{items_html}</div>
+                    <div class="recon-data-list">{safe_items_html}</div>
                 </div>
                 '''
             
@@ -2264,7 +2338,7 @@ def generate_html_report() -> str:
     for f in sorted(data.get("findings", []), key=lambda x: ["Critical", "High", "Medium", "Low", "Info"].index(x.get("severity", "Info"))):
         sev_class = f.get("severity", "Info").lower()
         
-        # Build steps to reproduce HTML
+        # Build steps to reproduce HTML (already sanitized in helper)
         steps_html = _build_finding_steps_html(f.get("steps_to_reproduce", ""))
         if steps_html:
             steps_html = f"<h4>Steps to Reproduce</h4>{steps_html}"
@@ -2276,8 +2350,8 @@ def generate_html_report() -> str:
             command_html = f'''
             <h4>Command Executed</h4>
             <div class="command-block">
-                <div class="command-label"># {tool_display_name} command</div>
-                {f["command_used"]}
+                <div class="command-label"># {sanitize_html(tool_display_name)} command</div>
+                {sanitize_html(f["command_used"])}
             </div>
             '''
         
@@ -2288,42 +2362,61 @@ def generate_html_report() -> str:
             f.get("cwe_id", "")
         )
         
+        # Build evidence section with screenshots embedded inside
+        evidence_html = ""
+        if f.get('evidence') or f.get('screenshots'):
+            evidence_html = "<h4>Evidence / Proof of Concept</h4>"
+            if f.get('evidence'):
+                evidence_html += f"<pre>{sanitize_html(f['evidence'])}</pre>"
+            # Screenshots are placed directly in Evidence section
+            evidence_html += _build_finding_screenshots_html(f.get('screenshots', []))
+        
+        # Sanitize all user-supplied content
+        safe_title = sanitize_html(f.get('title', 'Untitled'))
+        safe_severity = sanitize_html(f.get('severity', 'Info'))
+        safe_owasp = sanitize_html(f.get('owasp_category', 'N/A'))
+        safe_cwe = sanitize_html(f.get('cwe_id', 'N/A'))
+        safe_description = sanitize_html(f.get('description', ''))
+        safe_component = sanitize_html(f.get('affected_component', 'N/A'))
+        safe_impact = sanitize_html(f.get('impact', ''))
+        safe_remediation = sanitize_html(f.get('remediation', ''))
+        safe_cvss = sanitize_html(str(f.get('cvss_score', 'N/A')))
+        safe_tool = sanitize_html(normalize_tool_name(f.get('tool_used', 'Manual')))
+        
         findings_html += f'''
         <div class="finding">
             <div class="finding-header {sev_class}">
-                <span class="finding-title">#{f['id']}: {f['title']}</span>
-                <span class="tag">{f['severity']}</span>
-                <span class="tag">{f['owasp_category']}</span>
-                {f'<span class="tag">{f["cwe_id"]}</span>' if f.get("cwe_id") and f["cwe_id"] != "N/A" else ""}
+                <span class="finding-title">#{f['id']}: {safe_title}</span>
+                <span class="tag">{safe_severity}</span>
+                <span class="tag">{safe_owasp}</span>
+                {f'<span class="tag">{safe_cwe}</span>' if f.get("cwe_id") and f["cwe_id"] != "N/A" else ""}
             </div>
             <div class="finding-body">
                 <h4>Description</h4>
-                <p>{f['description']}</p>
+                <p>{safe_description}</p>
                 
                 <h4>Affected Component</h4>
-                <p><code>{f['affected_component']}</code></p>
+                <p><code>{safe_component}</code></p>
                 
                 <h4>Impact</h4>
-                <p>{f['impact']}</p>
+                <p>{safe_impact}</p>
                 
-                {"<h4>Evidence / Proof of Concept</h4><pre>" + f['evidence'] + "</pre>" if f.get('evidence') else ""}
-                
-                {_build_finding_screenshots_html(f.get('screenshots', []))}
+                {evidence_html}
                 
                 {steps_html}
                 
                 {command_html}
                 
                 <h4>Remediation</h4>
-                <p>{f['remediation']}</p>
+                <p>{safe_remediation}</p>
                 
                 {references_html}
                 
                 <h4>Technical Details</h4>
                 <table>
-                    <tr><th>CVSS Score</th><td>{f['cvss_score']}</td></tr>
-                    <tr><th>CWE ID</th><td>{f.get('cwe_id', 'N/A')}</td></tr>
-                    <tr><th>Tool Used</th><td>{normalize_tool_name(f['tool_used'])}</td></tr>
+                    <tr><th>CVSS Score</th><td>{safe_cvss}</td></tr>
+                    <tr><th>CWE ID</th><td>{safe_cwe}</td></tr>
+                    <tr><th>Tool Used</th><td>{safe_tool}</td></tr>
                 </table>
             </div>
         </div>
@@ -2356,38 +2449,51 @@ def generate_html_report() -> str:
         artifacts_html = ""
         for artifact in filtered_artifacts:
             if artifact.get("type") == "screenshot":
+                # Sanitize screenshot metadata
+                safe_desc = sanitize_html(artifact.get("description", "Screenshot"))
+                safe_timestamp = sanitize_html(artifact.get("timestamp", ""))
+                safe_url = sanitize_url(artifact.get("url", "N/A"))
+                # Base64 data is safe as it only contains alphanumeric and +/=
                 artifacts_html += f'''
                 <div class="artifact-card">
                     <div class="artifact-header screenshot">
-                        <span>📸 {artifact.get("description", "Screenshot")}</span>
-                        <span style="font-size: 0.8rem; opacity: 0.8;">{artifact.get("timestamp", "")}</span>
+                        <span>📸 {safe_desc}</span>
+                        <span style="font-size: 0.8rem; opacity: 0.8;">{safe_timestamp}</span>
                     </div>
                     <div class="artifact-body">
-                        <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{artifact.get("description", "Screenshot")}" onclick="window.open(this.src)">
-                        <div class="artifact-meta">URL: {artifact.get("url", "N/A")}</div>
+                        <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{safe_desc}" onclick="window.open(this.src)">
+                        <div class="artifact-meta">URL: {safe_url}</div>
                     </div>
                 </div>
                 '''
             elif artifact.get("type") == "tool_output":
                 # Truncate very long outputs in HTML, but provide download
                 output_data = artifact.get("data", "")
-                display_data = output_data[:5000] + ("\\n... [truncated, see download]" if len(output_data) > 5000 else "")
-                # Create data URL for download
+                display_data = output_data[:5000] + ("\n... [truncated, see download]" if len(output_data) > 5000 else "")
+                # CRITICAL: Escape HTML to prevent nmap/tool HTML output from breaking the page
+                safe_display_data = sanitize_html(display_data)
+                # Create data URL for download - raw data is base64 encoded (safe)
                 import base64
                 encoded_data = base64.b64encode(output_data.encode()).decode()
-                mime_types = {"xml": "application/xml", "json": "application/json", "csv": "text/csv", "text": "text/plain"}
+                mime_types = {"xml": "application/xml", "json": "application/json", "csv": "text/csv", "text": "text/plain", "html": "text/html"}
                 mime = mime_types.get(artifact.get("format", "text"), "text/plain")
+                
+                # Sanitize metadata
+                safe_filename = sanitize_html(artifact.get("filename", "output.txt"))
+                safe_tool_name = sanitize_html(artifact.get("tool_name", ""))
+                safe_description = sanitize_html(artifact.get("description", ""))
+                safe_timestamp = sanitize_html(artifact.get("timestamp", ""))
                 
                 artifacts_html += f'''
                 <div class="artifact-card">
                     <div class="artifact-header tool-output">
-                        <span>📄 {artifact.get("filename", "output.txt")}</span>
-                        <span style="font-size: 0.8rem; opacity: 0.8;">{artifact.get("tool_name", "")}</span>
+                        <span>📄 {safe_filename}</span>
+                        <span style="font-size: 0.8rem; opacity: 0.8;">{safe_tool_name}</span>
                     </div>
                     <div class="artifact-body">
-                        <pre>{display_data}</pre>
-                        <div class="artifact-meta">{artifact.get("description", "")} | {artifact.get("timestamp", "")}</div>
-                        <a class="download-btn" href="data:{mime};base64,{encoded_data}" download="{artifact.get("filename", "output.txt")}">📥 Download {artifact.get("filename", "file")}</a>
+                        <pre>{safe_display_data}</pre>
+                        <div class="artifact-meta">{safe_description} | {safe_timestamp}</div>
+                        <a class="download-btn" href="data:{mime};base64,{encoded_data}" download="{safe_filename}">📥 Download {safe_filename}</a>
                     </div>
                 </div>
                 '''
@@ -2412,13 +2518,13 @@ def generate_html_report() -> str:
         severity_counts
     )
     
-    # Replace placeholders
+    # Replace placeholders - sanitize all user-supplied data
     html = template
-    html = html.replace("{{title}}", data.get("title", "Security Assessment Report"))
-    html = html.replace("{{subtitle}}", data.get("subtitle", "Penetration Test Report"))
-    html = html.replace("{{target}}", data.get("target", "N/A"))
-    html = html.replace("{{date}}", data.get("date", datetime.now().strftime("%Y-%m-%d")))
-    html = html.replace("{{author}}", data.get("author", "Pentest.Systems Assistant"))
+    html = html.replace("{{title}}", sanitize_html(data.get("title", "Security Assessment Report")))
+    html = html.replace("{{subtitle}}", sanitize_html(data.get("subtitle", "Penetration Test Report")))
+    html = html.replace("{{target}}", sanitize_html(data.get("target", "N/A")))
+    html = html.replace("{{date}}", sanitize_html(data.get("date", datetime.now().strftime("%Y-%m-%d"))))
+    html = html.replace("{{author}}", sanitize_html(data.get("author", "Pentest.Systems Assistant")))
     html = html.replace("{{executive_summary_html}}", exec_summary_html)
     html = html.replace("{{critical_count}}", str(severity_counts["Critical"]))
     html = html.replace("{{high_count}}", str(severity_counts["High"]))
@@ -2444,7 +2550,7 @@ def generate_html_report() -> str:
     html = html.replace("{{info_percent}}", str(info_pct))
     
     html = html.replace("{{scope_table}}", scope_table)
-    html = html.replace("{{methodology}}", data.get("methodology", ""))
+    html = html.replace("{{methodology}}", sanitize_html(data.get("methodology", "")))
     html = html.replace("{{recon_section}}", recon_section)
     html = html.replace("{{tools_used}}", tools_html or '<div class="tool-card"><div class="tool-icon">🛠️</div><div class="tool-name">Manual Testing</div></div>')
     html = html.replace("{{findings_html}}", findings_html or "<p>No findings recorded.</p>")

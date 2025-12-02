@@ -10199,8 +10199,8 @@ function getActivityPhase(toolName, activityType) {
     return 'scanning';
   }
   
-  // Manual Research phase - browsing, forms, analysis
-  if (['browse', 'page', 'get_page', 'fill_form', 'click', 'intercept', 'console', 'screenshot', 'curl_request', 'classify', 'owasp', 'scenario'].some(t => tool.includes(t))) {
+  // Manual Research phase - browsing, forms, analysis, planning
+  if (['browse', 'page', 'get_page', 'fill_form', 'click', 'intercept', 'console', 'screenshot', 'curl_request', 'classify', 'owasp', 'scenario', 'planning', 'classifier'].some(t => tool.includes(t))) {
     return 'manual';
   }
   
@@ -12249,6 +12249,7 @@ The report should be comprehensive and professional, suitable for executive stak
                             step_count = 0
                             tool_count = 0
                             start_time = time.time()
+                            last_tool_name = ""  # Track last tool for result categorization
                             
                             for event in agent.run(full_message, stream=True):
                                 step_count += 1
@@ -12259,6 +12260,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                     for tool_call in event.tool_calls:
                                         tool_count += 1
                                         tool_name = getattr(tool_call, 'name', str(tool_call))
+                                        last_tool_name = tool_name  # Remember for result categorization
                                         tool_args = getattr(tool_call, 'arguments', {})
                                         
                                         # Map tool names to activity types
@@ -12315,8 +12317,9 @@ The report should be comprehensive and professional, suitable for executive stak
                                     event_queue.put({
                                         "type": "activity",
                                         "activity_type": "tool-result",
-                                        "title": "Tool Result",
+                                        "title": f"Result: {last_tool_name}" if last_tool_name else "Tool Result",
                                         "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
+                                        "tool_name": last_tool_name,  # Include tool name for phase categorization
                                         "tool_count": tool_count,
                                         "step_count": step_count
                                     })
@@ -12329,6 +12332,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                         "activity_type": "thinking",
                                         "title": "Agent Planning",
                                         "content": plan,
+                                        "tool_name": "planning",  # For phase categorization
                                         "tool_count": tool_count,
                                         "step_count": step_count
                                     })

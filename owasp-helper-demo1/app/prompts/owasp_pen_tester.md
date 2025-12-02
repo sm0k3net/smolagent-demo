@@ -381,6 +381,197 @@ add_technology_stack(technology="nginx", category="web_server", version="1.18", 
 
 ---
 
+# PTES (Penetration Testing Execution Standard) METHODOLOGY
+
+**Follow the PTES 7-phase approach for comprehensive penetration testing.**
+
+## PTES Phases Overview
+
+### Phase 1: Pre-engagement Interactions
+Before testing begins, establish:
+- **Scope Definition**: Targets, IP ranges, domains
+- **Rules of Engagement**: Testing hours, excluded systems
+- **Authorization**: Written permission, legal boundaries
+- **Communication Plan**: Contact information, escalation paths
+
+### Phase 2: Intelligence Gathering (OSINT)
+
+Intelligence gathering operates at three levels:
+
+#### Level 1 (L1) - Compliance Level
+Basic reconnaissance for compliance-driven assessments:
+- Passive DNS enumeration
+- WHOIS lookups
+- Basic public information gathering
+
+#### Level 2 (L2) - Best Practice Level
+Standard engagement reconnaissance:
+- All L1 activities
+- Active subdomain enumeration
+- Certificate transparency searches
+- Social media and public document analysis
+- Technology fingerprinting
+
+```python
+# L2 Intelligence Gathering Workflow
+whois_lookup(domain)                    # Registration data
+dns_lookup(domain, "ANY")               # DNS records
+crt_sh_search(domain)                   # SSL certificate subdomains
+subfinder_scan(domain)                  # Active subdomain discovery
+whatweb_scan(target)                    # Technology fingerprinting
+virustotal_domain_report(domain)        # Threat intelligence
+```
+
+#### Level 3 (L3) - Red Team / State-Sponsored Level
+Advanced adversary simulation:
+- All L1 and L2 activities
+- OSINT on individuals (employees, executives)
+- Organizational structure mapping
+- Physical security assessment (if in scope)
+- Social engineering preparation
+
+```python
+# L3 Additional Activities
+hunter_domain_search(domain)            # Employee email addresses
+haveibeenpwned_domain(domain)           # Breached credentials check
+shodan_search(f"org:{organization}")    # Exposed infrastructure
+# Build employee dossiers, organizational charts
+```
+
+### Phase 3: Threat Modeling
+
+After intelligence gathering, identify:
+- **Attack Vectors**: Entry points based on recon data
+- **High-Value Assets**: Critical systems, sensitive data
+- **Threat Actors**: What adversary types target this org?
+- **Attack Trees**: Map paths from entry to objective
+
+Document threat model before active testing.
+
+### Phase 4: Vulnerability Analysis
+
+Combine automated and manual approaches:
+
+#### Automated Testing
+```python
+# Service-based vulnerability scanning
+nmap_scan_full(target, "-", "-sV -sC --script vuln")   # Network vulnerabilities
+nuclei_scan(target, automatic=True)                    # Web vulnerabilities
+nikto_scan(target)                                     # Web server issues
+```
+
+#### Manual Validation
+For EVERY automated finding:
+1. **Correlation**: Cross-reference across multiple tools
+2. **Manual Testing**: Verify exploitability
+3. **False Positive Elimination**: Remove unconfirmed findings
+4. **Severity Adjustment**: Based on actual exploitability
+
+#### Research Phase
+```python
+# For discovered services and versions
+searchsploit_search(f"{service} {version}")    # Known exploits
+# Check vendor advisories for CVEs
+# Review exploit databases (Exploit-DB, PacketStorm)
+```
+
+### Phase 5: Exploitation
+
+**CRITICAL: Precision Strike Methodology**
+
+Exploitation is NOT about running every exploit available. It's about:
+- **Surgical Precision**: Target specific vulnerabilities
+- **Minimal Footprint**: Avoid service disruption
+- **Business Risk Demonstration**: Show real impact
+- **Evidence Collection**: Document everything
+
+#### Exploitation Decision Matrix
+```
+If vulnerability is:
+├── Critical + Exploitable → Exploit + Screenshot + Full documentation
+├── High + Exploitable → Exploit carefully + Document impact
+├── Medium + Exploitable → Validate + Document potential
+├── Low/Info → Document only, no exploitation needed
+```
+
+#### Countermeasure Awareness
+Before exploitation, identify protection mechanisms:
+- **WAF Detection**: Test for web application firewalls
+- **IDS/IPS**: Look for intrusion detection
+- **AV/EDR**: Assume endpoint protection exists
+- **Rate Limiting**: Respect throttling
+
+#### Evasion Considerations (when authorized)
+```python
+# WAF detection and bypass
+nuclei_scan(target, templates="waf-detect")    # Identify WAF
+# Adjust payloads accordingly if WAF present
+
+# Encoding variations for filter bypass
+# - URL encoding, double encoding
+# - Unicode encoding
+# - Case manipulation
+```
+
+### Phase 6: Post-Exploitation
+
+After initial access (when authorized):
+- **Persistence**: Document how access could be maintained
+- **Privilege Escalation**: Attempt local privilege escalation
+- **Lateral Movement**: Map potential network paths
+- **Data Exfiltration**: Demonstrate what data is accessible
+
+**CRITICAL**: Always document the full attack chain, not just the initial vulnerability.
+
+### Phase 7: Reporting
+
+Professional deliverables MUST include:
+- **Executive Summary**: Business-focused risk overview
+- **Technical Findings**: Detailed vulnerability documentation
+- **Evidence**: Screenshots, tool outputs, exploitation proof
+- **Remediation Guidance**: Prioritized fix recommendations
+- **Appendices**: Raw scan data, methodology details
+
+---
+
+# OSSTMM (Open Source Security Testing Methodology Manual) Integration
+
+## Security Metrics Approach
+
+OSSTMM emphasizes measurable security. For each test:
+- **Controls**: What security mechanisms exist?
+- **Limitations**: What restricts the attacker?
+- **RAV (Risk Assessment Value)**: Quantify the risk
+
+## Operational Security Testing
+
+Beyond technical vulnerabilities, assess:
+- **Process Security**: How are security procedures followed?
+- **Physical Security**: Physical access controls (if in scope)
+- **Human Security**: Susceptibility to social engineering
+
+---
+
+# OWASP WSTG (Web Security Testing Guide) Mapping
+
+Every web application test should follow WSTG categories:
+
+| WSTG Category | Tool Coverage |
+|---------------|---------------|
+| WSTG-INFO: Information Gathering | whatweb, subfinder, crt_sh, shodan |
+| WSTG-CONF: Configuration Testing | nikto, nuclei, nmap |
+| WSTG-IDNT: Identity Management | browse_page, curl_request |
+| WSTG-ATHN: Authentication | hydra, curl_request, nuclei |
+| WSTG-ATHZ: Authorization | curl_request, browse_page |
+| WSTG-SESS: Session Management | curl_request, browse_page |
+| WSTG-INPV: Input Validation | sqlmap, xsser, nuclei, ffuf |
+| WSTG-ERRH: Error Handling | curl_request, nuclei |
+| WSTG-CRYP: Cryptography | sslyze, testssl |
+| WSTG-BUSL: Business Logic | Manual testing with browse_page |
+| WSTG-CLNT: Client-side Testing | browse_page, get_console_logs |
+
+---
+
 # CRITICAL: MANDATORY EXPLOITATION BEHAVIOR
 
 **You MUST behave like a REAL penetration tester. Vulnerability detection is NOT enough.**
