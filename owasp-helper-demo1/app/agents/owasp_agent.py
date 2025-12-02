@@ -380,5 +380,14 @@ def build_owasp_agent() -> CodeAgent:
         ])
     
     # Provide instructions from prompt file
-    agent = CodeAgent(tools=tools, model=model, instructions=load_prompt_text())
+    # max_print_outputs_length limits tool output size to prevent context overflow
+    # DeepSeek has 128K context limit, so we limit outputs to ~20K chars per tool
+    # max_steps limits iterations to prevent runaway context growth
+    agent = CodeAgent(
+        tools=tools, 
+        model=model, 
+        instructions=load_prompt_text(),
+        max_print_outputs_length=20000,  # Limit each tool output to prevent context explosion
+        max_steps=30,  # Allow more steps but still bounded
+    )
     return agent

@@ -808,6 +808,99 @@ chain_monitor_stop_event = threading.Event()
 API_KEYS_FILE = os.path.join(os.path.dirname(__file__), ".api_keys.json")
 api_keys_store: Dict[str, str] = {}
 
+# Activity Monitor server-side state - persists across browser reconnections
+# Structure: { task_id: { prompt, status, logs, startTime, stepCount, toolCount, taskLabel, targetType } }
+activity_state_store: Dict[str, Dict[str, Any]] = {}
+activity_state_lock = threading.Lock()
+
+def update_activity_state(task_id: str, **kwargs):
+    """Update activity state for a task (thread-safe)."""
+    with activity_state_lock:
+        if task_id not in activity_state_store:
+            activity_state_store[task_id] = {
+                "prompt": "",
+                "status": "running",
+                "logs": [],
+                "startTime": time.time() * 1000,  # JS timestamp
+                "stepCount": 0,
+                "toolCount": 0,
+                "taskLabel": "general",
+                "targetType": None,
+                "progress": 0,
+            }
+        activity_state_store[task_id].update(kwargs)
+
+def add_activity_log(task_id: str, log_entry: dict):
+    """Add a log entry to activity state (thread-safe)."""
+    with activity_state_lock:
+        if task_id in activity_state_store:
+            # Keep only last 500 logs to prevent memory issues
+            if len(activity_state_store[task_id]["logs"]) >= 500:
+                activity_state_store[task_id]["logs"] = activity_state_store[task_id]["logs"][-400:]
+            activity_state_store[task_id]["logs"].append(log_entry)
+
+def get_activity_state(task_id: str = None) -> Dict:
+    """Get activity state (thread-safe). If task_id is None, returns all."""
+    with activity_state_lock:
+        if task_id:
+            return activity_state_store.get(task_id, {}).copy()
+        return {k: v.copy() for k, v in activity_state_store.items()}
+
+def clear_activity_state(task_id: str):
+    """Remove activity state for a completed/closed task."""
+    with activity_state_lock:
+        if task_id in activity_state_store:
+            del activity_state_store[task_id]
+
+def cleanup_old_activity_states():
+    """Remove activity states older than 2 hours to prevent memory leaks."""
+    with activity_state_lock:
+        current_time = time.time() * 1000
+        max_age_ms = 2 * 60 * 60 * 1000  # 2 hours
+        
+        tasks_to_remove = []
+        for task_id, state in activity_state_store.items():
+            # Remove if task is completed/failed and older than max_age
+            if state.get("status") in ["completed", "failed"]:
+                start_time = state.get("startTime", current_time)
+                if current_time - start_time > max_age_ms:
+                    tasks_to_remove.append(task_id)
+            # Also remove running tasks older than 4 hours (likely abandoned)
+            elif state.get("status") == "running":
+                start_time = state.get("startTime", current_time)
+                if current_time - start_time > max_age_ms * 2:
+                    tasks_to_remove.append(task_id)
+        
+        for task_id in tasks_to_remove:
+            del activity_state_store[task_id]
+        
+        if tasks_to_remove:
+            print(f"[ActivityState] Cleaned up {len(tasks_to_remove)} old activity states")
+
+
+# Activity cleanup thread management
+activity_cleanup_thread = None
+activity_cleanup_stop_event = threading.Event()
+
+def activity_cleanup_worker():
+    """Background thread to periodically clean up old activity states."""
+    while not activity_cleanup_stop_event.is_set():
+        try:
+            cleanup_old_activity_states()
+        except Exception as e:
+            print(f"[ActivityState] Cleanup error: {e}")
+        # Run cleanup every 30 minutes
+        activity_cleanup_stop_event.wait(timeout=1800)
+
+def start_activity_cleanup_thread():
+    """Start the activity cleanup background thread."""
+    global activity_cleanup_thread
+    if activity_cleanup_thread is None or not activity_cleanup_thread.is_alive():
+        activity_cleanup_stop_event.clear()
+        activity_cleanup_thread = threading.Thread(target=activity_cleanup_worker, daemon=True)
+        activity_cleanup_thread.start()
+        print("[ActivityState] Cleanup thread started")
+
 
 def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
     """Classify a task prompt into a label and detect target type.
@@ -1656,6 +1749,8 @@ async def startup():
             start_scheduler()
             # Start chain monitor
             start_chain_monitor()
+            # Start activity state cleanup thread
+            start_activity_cleanup_thread()
             # Build agent
             agent = build_owasp_agent()
 
@@ -1700,6 +1795,28 @@ async def api_health_check():
         "llm_provider": current_provider,
         "llm_model": provider_settings_store.get("model", "deepseek-chat"),
     })
+
+
+@app.get("/api/activity/state")
+async def get_activity_state_endpoint():
+    """Get server-side activity state for all tasks. Used by client to restore state on reconnection."""
+    return JSONResponse(get_activity_state())
+
+
+@app.get("/api/activity/state/{task_id}")
+async def get_activity_state_by_task(task_id: str):
+    """Get activity state for a specific task."""
+    state = get_activity_state(task_id)
+    if not state:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    return JSONResponse(state)
+
+
+@app.delete("/api/activity/state/{task_id}")
+async def delete_activity_state_endpoint(task_id: str):
+    """Clear activity state for a task (called when user closes a task tab)."""
+    clear_activity_state(task_id)
+    return JSONResponse({"status": "ok"})
 
 
 # API Keys management endpoints
@@ -10404,6 +10521,9 @@ function closeActivityTask(taskId) {
   
   delete activityTasks[taskId];
   
+  // Notify server to clear activity state for this task
+  fetch(`/api/activity/state/${taskId}`, { method: 'DELETE' }).catch(() => {});
+  
   // Switch to another task or show no-tasks message
   const remainingTasks = Object.keys(activityTasks);
   if (remainingTasks.length > 0) {
@@ -10953,7 +11073,68 @@ ws.onopen = () => {
   statusBadge.className = 'status-badge connected';
   statusText.textContent = 'Connected';
   addMessage('system', '🟢 Connected to Pentest.Systems Assistant - Ready for security analysis');
+  
+  // Restore activity state from server on reconnection
+  restoreActivityState();
 };
+
+// Function to restore activity state from server
+async function restoreActivityState() {
+  try {
+    const response = await fetch('/api/activity/state');
+    if (!response.ok) return;
+    
+    const state = await response.json();
+    const taskIds = Object.keys(state);
+    
+    if (taskIds.length === 0) return;
+    
+    console.log(`Restoring ${taskIds.length} activity tasks from server`);
+    
+    // Restore each task
+    for (const taskId of taskIds) {
+      const taskState = state[taskId];
+      
+      // Skip if task already exists in client
+      if (activityTasks[taskId]) continue;
+      
+      // Create the task in client
+      createActivityTask(taskId, taskState.prompt, taskState.taskLabel, taskState.targetType);
+      
+      // Update stats
+      if (activityTasks[taskId]) {
+        activityTasks[taskId].stepCount = taskState.stepCount || 0;
+        activityTasks[taskId].toolCount = taskState.toolCount || 0;
+        activityTasks[taskId].status = taskState.status || 'running';
+        activityTasks[taskId].startTime = taskState.startTime;
+        
+        // Update UI stats
+        updateTaskStats(taskId, taskState.stepCount || 0, taskState.toolCount || 0);
+        
+        // Replay logs
+        if (taskState.logs && Array.isArray(taskState.logs)) {
+          for (const log of taskState.logs) {
+            addActivity(log.type, log.title || '', log.content || '', null, taskId);
+          }
+        }
+        
+        // Update status in UI
+        if (taskState.status === 'completed') {
+          completeActivityTask(taskId, taskState.status);
+        } else if (taskState.status === 'failed') {
+          completeActivityTask(taskId, 'failed');
+        }
+      }
+    }
+    
+    // Show notification if tasks were restored
+    if (taskIds.length > 0) {
+      addMessage('system', `📋 Restored ${taskIds.length} active task(s) from previous session`);
+    }
+  } catch (error) {
+    console.error('Failed to restore activity state:', error);
+  }
+}
 
 ws.onclose = () => {
   statusBadge.className = 'status-badge disconnected';
@@ -12282,6 +12463,16 @@ The report should be comprehensive and professional, suitable for executive stak
                     "task_id": request_task_id
                 }))
                 
+                # Initialize server-side activity state for this task
+                update_activity_state(
+                    request_task_id,
+                    prompt=msg_content,
+                    status="running",
+                    taskLabel=rt_task_label.value,
+                    targetType=rt_target_type,
+                    startTime=time.time() * 1000
+                )
+                
                 # Send initial progress
                 await ws.send_text(json.dumps({
                     "type": "activity",
@@ -12291,6 +12482,14 @@ The report should be comprehensive and professional, suitable for executive stak
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
                 }))
+                
+                # Store initial activity log
+                add_activity_log(request_task_id, {
+                    "type": "start",
+                    "title": "Task Started",
+                    "content": f"Processing: {msg_content[:100]}...",
+                    "timestamp": time.time() * 1000
+                })
                 
                 await ws.send_text(json.dumps({
                     "type": "progress",
@@ -12463,8 +12662,7 @@ The report should be comprehensive and professional, suitable for executive stak
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                # Send activity update with counts, chat_id, task_id and tool_name
-                                await ws.send_text(json.dumps({
+                                activity_msg = {
                                     "type": "activity",
                                     "activity_type": event["activity_type"],
                                     "title": event["title"],
@@ -12474,7 +12672,23 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "step_count": last_step_count,
                                     "chat_id": request_chat_id,
                                     "task_id": request_task_id
-                                }))
+                                }
+                                
+                                # Send activity update with counts, chat_id, task_id and tool_name
+                                await ws.send_text(json.dumps(activity_msg))
+                                
+                                # Store in server-side activity state for reconnection
+                                add_activity_log(request_task_id, {
+                                    "type": event["activity_type"],
+                                    "title": event["title"],
+                                    "content": event["content"],
+                                    "tool_name": event.get("tool_name", ""),
+                                    "timestamp": time.time() * 1000
+                                })
+                                update_activity_state(request_task_id, 
+                                    stepCount=last_step_count, 
+                                    toolCount=last_tool_count
+                                )
                                 
                                 # Also send progress update for chat
                                 await ws.send_text(json.dumps({
@@ -12489,6 +12703,19 @@ The report should be comprehensive and professional, suitable for executive stak
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
+                                # Update server-side state to completed
+                                update_activity_state(request_task_id, 
+                                    status="completed",
+                                    stepCount=last_step_count,
+                                    toolCount=last_tool_count
+                                )
+                                add_activity_log(request_task_id, {
+                                    "type": "complete",
+                                    "title": "Task Completed",
+                                    "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
+                                    "timestamp": time.time() * 1000
+                                })
+                                
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": "complete",
@@ -12502,6 +12729,15 @@ The report should be comprehensive and professional, suitable for executive stak
                                 break
                             
                             elif event["type"] == "error":
+                                # Update server-side state to failed
+                                update_activity_state(request_task_id, status="failed")
+                                add_activity_log(request_task_id, {
+                                    "type": "error",
+                                    "title": "Error Occurred",
+                                    "content": event["error"],
+                                    "timestamp": time.time() * 1000
+                                })
+                                
                                 await ws.send_text(json.dumps({
                                     "type": "activity",
                                     "activity_type": "error",
@@ -12527,6 +12763,15 @@ The report should be comprehensive and professional, suitable for executive stak
                             break
                             
                     except Exception as e:
+                        # Update server-side state to failed
+                        update_activity_state(request_task_id, status="failed")
+                        add_activity_log(request_task_id, {
+                            "type": "error",
+                            "title": "Error",
+                            "content": str(e),
+                            "timestamp": time.time() * 1000
+                        })
+                        
                         await ws.send_text(json.dumps({
                             "type": "activity",
                             "activity_type": "error", 
