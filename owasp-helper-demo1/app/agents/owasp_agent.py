@@ -35,22 +35,22 @@ from app.tools.osint_tools import (
 )
 # Enhanced SearXNG tools with auto-discovery
 from app.tools.searxng_tools import (
-    searxng_discover_instances,
+    searxng_find_instances,
     searxng_search as searxng_metasearch,
-    searxng_search_security,
-    searxng_search_osint,
+    searxng_security_search,
+    searxng_dork_search,
 )
 # Enhanced VirusTotal tools
 from app.tools.virustotal_tools import (
-    virustotal_get_subdomains,
-    virustotal_get_dns_records,
-    virustotal_get_historical_whois,
-    virustotal_get_communicating_files,
-    virustotal_domain_full_report,
-    virustotal_scan_url,
-    virustotal_get_url_report,
-    virustotal_scan_file,
-    virustotal_search,
+    virustotal_subdomains,
+    virustotal_domain_analysis,
+    virustotal_ip_analysis,
+    virustotal_resolutions,
+    virustotal_url_scan,
+    virustotal_file_hash,
+    virustotal_ssl_certificates,
+    virustotal_communicating_files,
+    virustotal_whois_history,
 )
 from app.tools.pentest_tools import (
     dnsrecon_scan,
@@ -275,23 +275,23 @@ def build_owasp_agent() -> CodeAgent:
     
     # Enhanced SearXNG tools with auto-discovery
     tools.extend([
-        searxng_discover_instances,
+        searxng_find_instances,
         searxng_metasearch,
-        searxng_search_security,
-        searxng_search_osint,
+        searxng_security_search,
+        searxng_dork_search,
     ])
     
     # Enhanced VirusTotal tools
     tools.extend([
-        virustotal_get_subdomains,
-        virustotal_get_dns_records,
-        virustotal_get_historical_whois,
-        virustotal_get_communicating_files,
-        virustotal_domain_full_report,
-        virustotal_scan_url,
-        virustotal_get_url_report,
-        virustotal_scan_file,
-        virustotal_search,
+        virustotal_subdomains,
+        virustotal_domain_analysis,
+        virustotal_ip_analysis,
+        virustotal_resolutions,
+        virustotal_url_scan,
+        virustotal_file_hash,
+        virustotal_ssl_certificates,
+        virustotal_communicating_files,
+        virustotal_whois_history,
     ])
     
     # Pentest / Active Recon tools
