@@ -3362,6 +3362,116 @@ async def delete_note(note_id: str):
     
     return JSONResponse({"success": True})
 
+@app.post("/api/notes/{note_id}/version")
+async def save_note_version(note_id: str, data: dict = None):
+    """Save a version of the note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        
+        # Initialize versions array if not exists
+        if "versions" not in note_data:
+            note_data["versions"] = []
+        
+        # Create version snapshot
+        version_name = (data or {}).get("name", f"Version {len(note_data['versions']) + 1}")
+        version = {
+            "id": str(uuid4()),
+            "name": version_name,
+            "content": note_data.get("content", ""),
+            "created_at": datetime.now().isoformat()
+        }
+        
+        # Add version (keep max 20 versions)
+        note_data["versions"].insert(0, version)
+        if len(note_data["versions"]) > 20:
+            note_data["versions"] = note_data["versions"][:20]
+        
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse({"success": True, "version": version})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/notes/{note_id}/versions")
+async def get_note_versions(note_id: str):
+    """Get all versions of a note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        versions = note_data.get("versions", [])
+        # Return versions without full content for listing
+        versions_summary = [{
+            "id": v["id"],
+            "name": v["name"],
+            "created_at": v["created_at"]
+        } for v in versions]
+        return JSONResponse({"versions": versions_summary})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/notes/{note_id}/restore/{version_id}")
+async def restore_note_version(note_id: str, version_id: str):
+    """Restore a specific version of a note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        versions = note_data.get("versions", [])
+        
+        # Find the version
+        version = next((v for v in versions if v["id"] == version_id), None)
+        if not version:
+            return JSONResponse({"error": "Version not found"}, status_code=404)
+        
+        # Save current content as a version before restoring
+        current_version = {
+            "id": str(uuid4()),
+            "name": f"Auto-save before restore",
+            "content": note_data.get("content", ""),
+            "created_at": datetime.now().isoformat()
+        }
+        note_data["versions"].insert(0, current_version)
+        if len(note_data["versions"]) > 20:
+            note_data["versions"] = note_data["versions"][:20]
+        
+        # Restore the selected version
+        note_data["content"] = version["content"]
+        note_data["updated_at"] = datetime.now().isoformat()
+        
+        note_file.write_text(json.dumps(note_data, indent=2))
+        
+        return JSONResponse({"success": True, "content": version["content"]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.delete("/api/notes/{note_id}/version/{version_id}")
+async def delete_note_version(note_id: str, version_id: str):
+    """Delete a specific version of a note."""
+    note_file = NOTES_DIR / f"{note_id}.json"
+    
+    if not note_file.exists():
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+    
+    try:
+        note_data = json.loads(note_file.read_text())
+        note_data["versions"] = [v for v in note_data.get("versions", []) if v["id"] != version_id]
+        note_file.write_text(json.dumps(note_data, indent=2))
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.post("/api/notes/folder")
 async def create_note_folder(data: dict):
     """Create a new folder."""
@@ -6089,6 +6199,7 @@ h1 {
   transition: all 0.15s ease;
   font-size: 0.8rem;
   color: var(--gray-400);
+  position: relative;
 }
 .notes-file:hover {
   background: rgba(255,255,255,0.05);
@@ -6101,6 +6212,29 @@ h1 {
 .notes-file svg {
   width: 14px;
   height: 14px;
+}
+.notes-file .note-delete-btn {
+  display: none;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(239, 68, 68, 0.2);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: #ef4444;
+  transition: all 0.15s ease;
+}
+.notes-file:hover .note-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.notes-file .note-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
 }
 
 /* Notes Editor Area */
@@ -6761,6 +6895,133 @@ h1 {
 .notes-editor a {
   color: var(--primary);
   text-decoration: underline;
+}
+
+/* Notes Version History */
+.notes-versions-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 280px;
+  height: 100%;
+  background: var(--dark-200);
+  border-left: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.3);
+}
+.notes-versions-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: var(--gray-200);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+.notes-versions-header span {
+  flex: 1;
+}
+.notes-versions-close {
+  background: none;
+  border: none;
+  color: var(--gray-400);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.notes-versions-close:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--gray-200);
+}
+.notes-versions-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+.notes-versions-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--gray-500);
+  font-size: 0.85rem;
+}
+.notes-version-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.15s ease;
+}
+.notes-version-item:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.1);
+}
+.notes-version-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+.notes-version-item-name {
+  font-size: 0.85rem;
+  color: var(--gray-200);
+  font-weight: 500;
+}
+.notes-version-item-date {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+}
+.notes-version-item-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.notes-version-item-actions button {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+}
+.notes-version-restore-btn {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--success);
+}
+.notes-version-restore-btn:hover {
+  background: rgba(34, 197, 94, 0.3);
+}
+.notes-version-delete-btn {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.notes-version-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+.notes-version-btn,
+.notes-history-btn {
+  color: var(--primary);
+}
+.notes-version-btn:hover,
+.notes-history-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+.notes-editor-area {
+  position: relative;
 }
 
 /* Notes Attachments */
@@ -9574,6 +9835,20 @@ main {
               </div>
               <div class="notes-toolbar-spacer"></div>
               <div class="notes-toolbar-group notes-toolbar-actions">
+                <button class="notes-toolbar-btn notes-version-btn" onclick="saveNoteVersion()" title="Save Version">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                  </svg>
+                </button>
+                <button class="notes-toolbar-btn notes-history-btn" onclick="toggleNoteVersionsPanel()" title="Version History">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                </button>
+                <div class="notes-toolbar-separator"></div>
                 <button class="notes-toolbar-btn notes-expand-btn" onclick="openNotesFullscreen()" title="Open in Fullscreen">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -9642,6 +9917,26 @@ main {
               <div class="notes-editor" id="notes-editor" contenteditable="true" style="display: none;" 
                    oninput="onNoteContentChange()" 
                    onkeydown="handleNoteKeydown(event)"></div>
+            </div>
+            
+            <!-- Version History Panel -->
+            <div class="notes-versions-panel" id="notes-versions-panel" style="display: none;">
+              <div class="notes-versions-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span>Version History</span>
+                <button class="notes-versions-close" onclick="toggleNoteVersionsPanel()" title="Close">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+              <div class="notes-versions-list" id="notes-versions-list">
+                <div class="notes-versions-empty">No versions saved yet</div>
+              </div>
             </div>
             
             <!-- Attachments Section -->
@@ -12352,6 +12647,12 @@ function renderNoteFile(file) {
         <polyline points="14 2 14 8 20 8"></polyline>
       </svg>
       <span>${escapeHtml(file.name)}</span>
+      <button class="note-delete-btn" onclick="event.stopPropagation(); deleteNote('${file.id}', '${escapeHtml(file.name)}')" title="Delete note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+      </button>
     </div>
   `;
 }
@@ -12380,6 +12681,191 @@ async function createNewNote(folderId = null) {
   } catch (error) {
     console.error('Error creating note:', error);
     alert('Failed to create note: ' + error.message);
+  }
+}
+
+async function deleteNote(noteId, noteName) {
+  if (!confirm(`Are you sure you want to delete "${noteName}"? This action cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/notes/${noteId}`, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete note');
+    
+    // If the deleted note was selected, clear the editor
+    if (currentNoteId === noteId) {
+      currentNoteId = null;
+      const editorContent = document.getElementById('notes-editor-content');
+      const editorTitle = document.querySelector('.notes-editor-title');
+      if (editorContent) editorContent.innerHTML = '<p>Select a note to view or edit</p>';
+      if (editorTitle) editorTitle.textContent = 'No Note Selected';
+    }
+    
+    await loadNotesTree();
+    showNotification('Note deleted successfully', 'success');
+  } catch (error) {
+    console.error('Error deleting note:', error);
+    alert('Failed to delete note: ' + error.message);
+  }
+}
+
+// Note Version History Functions
+async function saveNoteVersion() {
+  if (!currentNoteId) {
+    showNotification('No note selected', 'warning');
+    return;
+  }
+  
+  // First save current content
+  await saveCurrentNote();
+  
+  const versionName = prompt('Enter version name (optional):', `Version ${new Date().toLocaleString()}`);
+  if (versionName === null) return; // User cancelled
+  
+  try {
+    const response = await fetch(`/api/notes/${currentNoteId}/version`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: versionName || undefined })
+    });
+    
+    if (!response.ok) throw new Error('Failed to save version');
+    const result = await response.json();
+    
+    showNotification('Version saved successfully', 'success');
+    await loadNoteVersions();
+  } catch (error) {
+    console.error('Error saving version:', error);
+    alert('Failed to save version: ' + error.message);
+  }
+}
+
+async function loadNoteVersions() {
+  if (!currentNoteId) return;
+  
+  const versionsList = document.getElementById('notes-versions-list');
+  if (!versionsList) return;
+  
+  try {
+    const response = await fetch(`/api/notes/${currentNoteId}/versions`);
+    if (!response.ok) throw new Error('Failed to load versions');
+    const data = await response.json();
+    
+    if (!data.versions || data.versions.length === 0) {
+      versionsList.innerHTML = '<div class="notes-versions-empty">No versions saved yet</div>';
+      return;
+    }
+    
+    versionsList.innerHTML = data.versions.map(version => `
+      <div class="notes-version-item" data-version-id="${version.id}">
+        <div class="notes-version-item-header">
+          <span class="notes-version-item-name">${escapeHtml(version.name)}</span>
+        </div>
+        <div class="notes-version-item-date">${formatVersionDate(version.created_at)}</div>
+        <div class="notes-version-item-actions">
+          <button class="notes-version-restore-btn" onclick="restoreNoteVersion('${version.id}')" title="Restore this version">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+              <path d="M3 3v5h5"></path>
+            </svg>
+            Restore
+          </button>
+          <button class="notes-version-delete-btn" onclick="deleteNoteVersion('${version.id}')" title="Delete version">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            Delete
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch (error) {
+    console.error('Error loading versions:', error);
+    versionsList.innerHTML = '<div class="notes-versions-empty">Error loading versions</div>';
+  }
+}
+
+function formatVersionDate(dateStr) {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = now - date;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+}
+
+function toggleNoteVersionsPanel() {
+  const panel = document.getElementById('notes-versions-panel');
+  if (!panel) return;
+  
+  const isVisible = panel.style.display !== 'none';
+  panel.style.display = isVisible ? 'none' : 'flex';
+  
+  if (!isVisible && currentNoteId) {
+    loadNoteVersions();
+  }
+}
+
+async function restoreNoteVersion(versionId) {
+  if (!currentNoteId) return;
+  
+  if (!confirm('Are you sure you want to restore this version? Your current content will be saved as a new version first.')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/notes/${currentNoteId}/restore/${versionId}`, {
+      method: 'POST'
+    });
+    
+    if (!response.ok) throw new Error('Failed to restore version');
+    const result = await response.json();
+    
+    // Update the editor with restored content
+    const editor = document.getElementById('notes-editor');
+    if (editor && result.content !== undefined) {
+      editor.innerHTML = result.content;
+    }
+    
+    showNotification('Version restored successfully', 'success');
+    await loadNoteVersions();
+  } catch (error) {
+    console.error('Error restoring version:', error);
+    alert('Failed to restore version: ' + error.message);
+  }
+}
+
+async function deleteNoteVersion(versionId) {
+  if (!currentNoteId) return;
+  
+  if (!confirm('Are you sure you want to delete this version?')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/notes/${currentNoteId}/version/${versionId}`, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete version');
+    
+    showNotification('Version deleted', 'success');
+    await loadNoteVersions();
+  } catch (error) {
+    console.error('Error deleting version:', error);
+    alert('Failed to delete version: ' + error.message);
   }
 }
 

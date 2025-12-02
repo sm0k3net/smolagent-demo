@@ -55,6 +55,35 @@ _SESSION_TOOLS_USED: set = set()
 _REPORT_ARTIFACTS: list = []
 
 
+def _add_screenshot_to_report_internal(
+    url: str,
+    base64_data: str,
+    description: str = "Website Screenshot",
+    timestamp: str | None = None,
+    screenshot_type: str = "website"
+) -> str:
+    """Internal function to add screenshot - can be called directly without tool decorator.
+    
+    This is used by other tools like playwright_tool to add screenshots directly.
+    """
+    global _REPORT_MODE_ENABLED, _REPORT_ARTIFACTS
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled."
+    
+    artifact = {
+        "type": "screenshot",
+        "url": url,
+        "description": description,
+        "data": base64_data,
+        "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "screenshot_type": screenshot_type
+    }
+    
+    _REPORT_ARTIFACTS.append(artifact)
+    return f"✅ Screenshot added to report ({screenshot_type}): {description} ({url})"
+
+
 # Mapping of function names to real tool names for command display
 _TOOL_NAME_MAPPING = {
     "sqlmap_scan": "sqlmap",
@@ -292,6 +321,149 @@ def _get_report_template_html() -> str:
             margin-bottom: 1rem; 
             line-height: 1.8; 
             color: var(--neutral-700);
+        }
+        
+        /* Executive Summary Dashboard */
+        .exec-summary-narrative { margin-bottom: 1.5rem; }
+        .exec-summary-narrative p { margin-bottom: 0.75rem; line-height: 1.7; color: var(--neutral-700); }
+        
+        .exec-summary-dashboard { }
+        
+        .exec-risk-card {
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1.5rem;
+        }
+        .risk-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .risk-icon { font-size: 2rem; }
+        .risk-title span { font-size: 1.1rem; display: block; margin-bottom: 0.25rem; }
+        .risk-description { font-size: 0.9rem; color: var(--neutral-600); margin: 0; }
+        
+        .exec-charts-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        @media (max-width: 768px) {
+            .exec-charts-row { grid-template-columns: 1fr; }
+        }
+        
+        .exec-chart-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid var(--neutral-200);
+        }
+        .exec-chart-card h4 {
+            margin: 0 0 1rem 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--neutral-700);
+        }
+        
+        /* Mini Severity Bars */
+        .mini-severity-bars { display: flex; flex-direction: column; gap: 0.5rem; }
+        .mini-bar-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .mini-label {
+            width: 60px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .mini-bar-container {
+            flex: 1;
+            height: 18px;
+            background: var(--neutral-100);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .mini-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        .mini-count {
+            width: 25px;
+            text-align: right;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--neutral-700);
+        }
+        
+        /* Pie Chart */
+        .pie-chart-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+        }
+        .pie-chart {
+            width: 120px;
+            height: 120px;
+        }
+        .pie-legend {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .pie-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--neutral-700);
+        }
+        .pie-legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+        
+        /* Quick Stats */
+        .exec-quick-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+        }
+        @media (max-width: 768px) {
+            .exec-quick-stats { grid-template-columns: repeat(2, 1fr); }
+        }
+        .quick-stat {
+            text-align: center;
+            padding: 1rem;
+            border-radius: 10px;
+            background: var(--neutral-50);
+            border: 1px solid var(--neutral-200);
+        }
+        .quick-stat.critical-high { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #fecaca; }
+        .quick-stat.total { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-color: #bae6fd; }
+        .quick-stat.app { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border-color: #ddd6fe; }
+        .quick-stat.network { background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%); border-color: #a5f3fc; }
+        .stat-number {
+            display: block;
+            font-size: 1.75rem;
+            font-weight: 800;
+            color: var(--neutral-800);
+        }
+        .quick-stat.critical-high .stat-number { color: #dc2626; }
+        .quick-stat.total .stat-number { color: #0369a1; }
+        .quick-stat.app .stat-number { color: #7c3aed; }
+        .quick-stat.network .stat-number { color: #0891b2; }
+        .stat-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--neutral-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         /* Severity Chart */
@@ -1617,24 +1789,8 @@ def add_screenshot_to_report(
         screenshot_type: Type of screenshot - "website" goes to Artifacts, "exploitation" can be linked to findings.
     Returns: Confirmation that screenshot was added.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS
-    
-    if not _REPORT_MODE_ENABLED:
-        return "Report mode is not enabled. Use enable_report_mode() first."
-    
-    artifact = {
-        "type": "screenshot",
-        "url": url,
-        "description": description,
-        "data": base64_data,
-        "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "screenshot_type": screenshot_type  # "website" or "exploitation"
-    }
-    
-    # Only add to _REPORT_ARTIFACTS to avoid duplication
-    _REPORT_ARTIFACTS.append(artifact)
-    
-    return f"✅ Screenshot added to report ({screenshot_type}): {description} ({url})"
+    # Use internal function to avoid duplication
+    return _add_screenshot_to_report_internal(url, base64_data, description, timestamp, screenshot_type)
 
 
 @tool
@@ -1874,7 +2030,7 @@ def _convert_markdown_to_html(text: str) -> str:
 
 
 def _build_executive_summary_html(summary: str, findings: list, severity_counts: dict) -> str:
-    """Build structured executive summary HTML with proper formatting."""
+    """Build structured executive summary HTML with proper formatting and visualizations."""
     # Sanitize the summary first, then convert markdown
     summary = sanitize_html(summary)
     summary = _convert_markdown_to_html(summary)
@@ -1885,40 +2041,212 @@ def _build_executive_summary_html(summary: str, findings: list, severity_counts:
         paragraphs = [summary] if summary else ["This report presents the findings from a security assessment."]
     
     # Build description section
-    desc_html = ""
+    desc_html = '<div class="exec-summary-narrative">'
     for p in paragraphs:
-        # Check if it's already wrapped in HTML tags
         if p.startswith('&lt;h') or p.startswith('&lt;ul') or p.startswith('&lt;ol') or p.startswith('&lt;p'):
-            desc_html += f"<p>{p}</p>"  # Escaped tags are displayed as text
+            desc_html += f"<p>{p}</p>"
         else:
-            # Convert single newlines to <br> within paragraphs
             p = p.replace('\n', '<br>')
             desc_html += f"<p>{p}</p>"
+    desc_html += '</div>'
     
-    # Build key findings bullet list
-    key_findings = []
-    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
-    sorted_findings = sorted(findings, key=lambda x: severity_order.index(x.get("severity", "Info")) if x.get("severity", "Info") in severity_order else 5)
+    # Calculate totals and risk assessment
+    total_findings = sum(severity_counts.values())
+    critical_count = severity_counts.get("Critical", 0)
+    high_count = severity_counts.get("High", 0)
+    medium_count = severity_counts.get("Medium", 0)
+    low_count = severity_counts.get("Low", 0)
+    info_count = severity_counts.get("Info", 0)
     
-    for f in sorted_findings[:10]:  # Top 10 findings
-        sev = f.get("severity", "Info")
-        emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Info": "🔵"}.get(sev, "⚪")
-        # Sanitize finding title
-        safe_title = sanitize_html(f.get('title', 'Untitled'))
-        key_findings.append(f"{emoji} <strong>[{sev}]</strong> {safe_title}")
+    # Categorize findings by layer (application vs network/infrastructure)
+    app_level_keywords = ["xss", "sql", "injection", "csrf", "authentication", "authorization", 
+                         "session", "cookie", "cors", "api", "upload", "download", "redirect",
+                         "input", "validation", "ssrf", "idor", "broken access", "directory traversal",
+                         "path traversal", "command", "rce", "lfi", "rfi", "xxe", "deserialization",
+                         "business logic", "encryption", "password", "credential", "oauth", "jwt", "token"]
     
-    findings_html = ""
-    if key_findings:
-        findings_html = '''
-        <div class="exec-summary-findings">
-            <h4>Key Findings</h4>
-            <ul>
-        '''
-        for finding in key_findings:
-            findings_html += f"<li>{finding}</li>"
-        findings_html += "</ul></div>"
+    network_level_keywords = ["ssl", "tls", "certificate", "port", "service", "dns", "subdomain",
+                             "header", "server", "banner", "version", "outdated", "vulnerable version",
+                             "misconfiguration", "firewall", "exposure", "open port", "network", "protocol",
+                             "smtp", "ftp", "ssh", "rdp", "smb", "infrastructure"]
     
-    return desc_html + findings_html
+    app_findings = 0
+    network_findings = 0
+    
+    for f in findings:
+        title_lower = f.get("title", "").lower()
+        desc_lower = f.get("description", "").lower()
+        combined = title_lower + " " + desc_lower
+        
+        is_app = any(kw in combined for kw in app_level_keywords)
+        is_network = any(kw in combined for kw in network_level_keywords)
+        
+        if is_app and not is_network:
+            app_findings += 1
+        elif is_network and not is_app:
+            network_findings += 1
+        elif is_app and is_network:
+            # If both, categorize by which has more matches
+            app_matches = sum(1 for kw in app_level_keywords if kw in combined)
+            network_matches = sum(1 for kw in network_level_keywords if kw in combined)
+            if app_matches >= network_matches:
+                app_findings += 1
+            else:
+                network_findings += 1
+        else:
+            # Default to application level
+            app_findings += 1
+    
+    # Calculate percentages for pie chart
+    app_percent = (app_findings / total_findings * 100) if total_findings > 0 else 0
+    network_percent = (network_findings / total_findings * 100) if total_findings > 0 else 0
+    
+    # Determine overall risk level
+    if critical_count > 0:
+        risk_level = "Critical"
+        risk_color = "#dc2626"
+        risk_bg = "linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)"
+        risk_icon = "🔴"
+        risk_text = "Immediate action required. Critical vulnerabilities pose severe risk."
+    elif high_count > 0:
+        risk_level = "High"
+        risk_color = "#ea580c"
+        risk_bg = "linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%)"
+        risk_icon = "🟠"
+        risk_text = "Priority attention needed. High severity issues should be addressed promptly."
+    elif medium_count > 0:
+        risk_level = "Medium"
+        risk_color = "#d97706"
+        risk_bg = "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)"
+        risk_icon = "🟡"
+        risk_text = "Moderate risk identified. Plan remediation within standard timelines."
+    elif low_count > 0:
+        risk_level = "Low"
+        risk_color = "#16a34a"
+        risk_bg = "linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)"
+        risk_icon = "🟢"
+        risk_text = "Minor issues found. Address during regular maintenance cycles."
+    else:
+        risk_level = "Minimal"
+        risk_color = "#2563eb"
+        risk_bg = "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)"
+        risk_icon = "🔵"
+        risk_text = "Low risk profile. Continue monitoring and good security practices."
+    
+    # Build the executive summary HTML with improved design
+    html = f'''
+    {desc_html}
+    
+    <div class="exec-summary-dashboard">
+        <!-- Risk Level Card -->
+        <div class="exec-risk-card" style="background: {risk_bg}; border-left: 4px solid {risk_color};">
+            <div class="risk-header">
+                <span class="risk-icon">{risk_icon}</span>
+                <div class="risk-title">
+                    <span style="color: {risk_color}; font-weight: 700;">Overall Risk: {risk_level}</span>
+                    <p class="risk-description">{risk_text}</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Findings Distribution -->
+        <div class="exec-charts-row">
+            <!-- Severity Distribution -->
+            <div class="exec-chart-card">
+                <h4>📊 Findings by Severity</h4>
+                <div class="mini-severity-bars">
+                    <div class="mini-bar-row">
+                        <span class="mini-label" style="color: #dc2626;">Critical</span>
+                        <div class="mini-bar-container">
+                            <div class="mini-bar-fill" style="width: {(critical_count/max(total_findings, 1))*100}%; background: #dc2626;"></div>
+                        </div>
+                        <span class="mini-count">{critical_count}</span>
+                    </div>
+                    <div class="mini-bar-row">
+                        <span class="mini-label" style="color: #ea580c;">High</span>
+                        <div class="mini-bar-container">
+                            <div class="mini-bar-fill" style="width: {(high_count/max(total_findings, 1))*100}%; background: #ea580c;"></div>
+                        </div>
+                        <span class="mini-count">{high_count}</span>
+                    </div>
+                    <div class="mini-bar-row">
+                        <span class="mini-label" style="color: #d97706;">Medium</span>
+                        <div class="mini-bar-container">
+                            <div class="mini-bar-fill" style="width: {(medium_count/max(total_findings, 1))*100}%; background: #d97706;"></div>
+                        </div>
+                        <span class="mini-count">{medium_count}</span>
+                    </div>
+                    <div class="mini-bar-row">
+                        <span class="mini-label" style="color: #16a34a;">Low</span>
+                        <div class="mini-bar-container">
+                            <div class="mini-bar-fill" style="width: {(low_count/max(total_findings, 1))*100}%; background: #16a34a;"></div>
+                        </div>
+                        <span class="mini-count">{low_count}</span>
+                    </div>
+                    <div class="mini-bar-row">
+                        <span class="mini-label" style="color: #2563eb;">Info</span>
+                        <div class="mini-bar-container">
+                            <div class="mini-bar-fill" style="width: {(info_count/max(total_findings, 1))*100}%; background: #2563eb;"></div>
+                        </div>
+                        <span class="mini-count">{info_count}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Issue Layer Pie Chart -->
+            <div class="exec-chart-card">
+                <h4>🎯 Issue Distribution by Layer</h4>
+                <div class="pie-chart-container">
+                    <svg viewBox="0 0 100 100" class="pie-chart">
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="#e5e7eb" stroke-width="20"/>
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="#8b5cf6" stroke-width="20"
+                            stroke-dasharray="{app_percent * 2.512} {100 * 2.512}"
+                            stroke-dashoffset="0"
+                            transform="rotate(-90 50 50)"/>
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="#06b6d4" stroke-width="20"
+                            stroke-dasharray="{network_percent * 2.512} {100 * 2.512}"
+                            stroke-dashoffset="{-app_percent * 2.512}"
+                            transform="rotate(-90 50 50)"/>
+                        <text x="50" y="50" text-anchor="middle" dy="0.35em" font-size="12" font-weight="700" fill="#374151">{total_findings}</text>
+                        <text x="50" y="62" text-anchor="middle" font-size="6" fill="#6b7280">Total</text>
+                    </svg>
+                    <div class="pie-legend">
+                        <div class="pie-legend-item">
+                            <span class="pie-legend-color" style="background: #8b5cf6;"></span>
+                            <span>Application ({app_findings})</span>
+                        </div>
+                        <div class="pie-legend-item">
+                            <span class="pie-legend-color" style="background: #06b6d4;"></span>
+                            <span>Network/Infra ({network_findings})</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Quick Stats -->
+        <div class="exec-quick-stats">
+            <div class="quick-stat critical-high">
+                <span class="stat-number">{critical_count + high_count}</span>
+                <span class="stat-label">Critical + High</span>
+            </div>
+            <div class="quick-stat total">
+                <span class="stat-number">{total_findings}</span>
+                <span class="stat-label">Total Findings</span>
+            </div>
+            <div class="quick-stat app">
+                <span class="stat-number">{app_findings}</span>
+                <span class="stat-label">Application Layer</span>
+            </div>
+            <div class="quick-stat network">
+                <span class="stat-number">{network_findings}</span>
+                <span class="stat-label">Network/Infrastructure</span>
+            </div>
+        </div>
+    </div>
+    '''
+    
+    return html
 
 
 def _build_finding_steps_html(steps: str) -> str:
