@@ -12423,11 +12423,28 @@ The report should be comprehensive and professional, suitable for executive stak
             # Classify the task for real-time tasks too
             rt_task_label, rt_target_type = classify_task_prompt(msg_content)
             
+            # Capture variables for this specific task to avoid closure issues
+            task_full_message = full_message
+            task_chat_id = chat_id
+            task_task_id = task_id
+            task_report_mode = report_mode_enabled
+            task_label = rt_task_label
+            task_target_type = rt_target_type
+            task_msg_content = msg_content
+            
             # Stream real agent execution with proper step callbacks
-            async def run_with_real_streaming():
-                # Capture chat_id and task_id for this request
-                request_chat_id = chat_id
-                request_task_id = task_id
+            async def run_with_real_streaming(
+                captured_full_message=task_full_message,
+                captured_chat_id=task_chat_id,
+                captured_task_id=task_task_id,
+                captured_report_mode=task_report_mode,
+                captured_task_label=task_label,
+                captured_target_type=task_target_type,
+                captured_msg_content=task_msg_content
+            ):
+                # Use captured variables for this request
+                request_chat_id = captured_chat_id
+                request_task_id = captured_task_id
                 
                 # Send task classification info first
                 label_icons = {
@@ -12455,10 +12472,10 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 await ws.send_text(json.dumps({
                     "type": "task_classification",
-                    "task_label": rt_task_label.value,
-                    "target_type": rt_target_type,
-                    "label_name": label_names.get(rt_task_label.value, "General Task"),
-                    "label_icon": label_icons.get(rt_task_label.value, "📝"),
+                    "task_label": captured_task_label.value,
+                    "target_type": captured_target_type,
+                    "label_name": label_names.get(captured_task_label.value, "General Task"),
+                    "label_icon": label_icons.get(captured_task_label.value, "📝"),
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
                 }))
@@ -12466,10 +12483,10 @@ The report should be comprehensive and professional, suitable for executive stak
                 # Initialize server-side activity state for this task
                 update_activity_state(
                     request_task_id,
-                    prompt=msg_content,
+                    prompt=captured_msg_content,
                     status="running",
-                    taskLabel=rt_task_label.value,
-                    targetType=rt_target_type,
+                    taskLabel=captured_task_label.value,
+                    targetType=captured_target_type,
                     startTime=time.time() * 1000
                 )
                 
@@ -12478,7 +12495,7 @@ The report should be comprehensive and professional, suitable for executive stak
                     "type": "activity",
                     "activity_type": "start",
                     "title": "Task Started",
-                    "content": f"Processing: {msg_content[:100]}...",
+                    "content": f"Processing: {captured_msg_content[:100]}...",
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
                 }))
@@ -12487,7 +12504,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 add_activity_log(request_task_id, {
                     "type": "start",
                     "title": "Task Started",
-                    "content": f"Processing: {msg_content[:100]}...",
+                    "content": f"Processing: {captured_msg_content[:100]}...",
                     "timestamp": time.time() * 1000
                 })
                 
@@ -12524,7 +12541,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         start_time = time.time()
                         last_tool_name = ""  # Track last tool for result categorization
                         
-                        for event in task_agent.run(full_message, stream=True):
+                        for event in task_agent.run(captured_full_message, stream=True):
                             step_count += 1
                             event_type = type(event).__name__
                             
@@ -12825,7 +12842,9 @@ The report should be comprehensive and professional, suitable for executive stak
                     "task_id": request_task_id
                 }))
             
-            await run_with_real_streaming()
+            # Create task without awaiting - allows parallel execution
+            asyncio.create_task(run_with_real_streaming())
+            # Continue immediately to process next message (don't block on task completion)
             
     except WebSocketDisconnect:
         return
