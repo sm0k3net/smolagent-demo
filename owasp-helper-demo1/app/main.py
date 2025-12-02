@@ -19214,9 +19214,6 @@ Be concise, helpful, and security-focused."""
                     messages_for_llm.extend(history_msgs)
                     messages_for_llm.append({"role": "user", "content": chat_context})
                     
-                    # Use the model's chat method for simple response
-                    chat_model = build_model()
-                    
                     await ws.send_text(json.dumps({
                         "type": "progress",
                         "content": "💬 Processing in chat mode...",
@@ -19224,16 +19221,25 @@ Be concise, helpful, and security-focused."""
                         "task_id": task_id
                     }))
                     
-                    # Make simple LLM call using smolagents model
-                    response = chat_model(messages_for_llm)
+                    # Use OpenAI-compatible API directly for chat mode
+                    from openai import OpenAI
+                    from app.config import get_settings
                     
-                    # Extract response content
-                    if hasattr(response, 'content'):
-                        response_text = response.content
-                    elif isinstance(response, str):
-                        response_text = response
-                    else:
-                        response_text = str(response)
+                    settings = get_settings()
+                    client = OpenAI(
+                        api_key=settings.get_active_api_key(),
+                        base_url=settings.get_active_api_base()
+                    )
+                    
+                    # Make the API call
+                    completion = client.chat.completions.create(
+                        model=settings.get_active_model(),
+                        messages=messages_for_llm,
+                        max_tokens=2000,
+                        temperature=0.7
+                    )
+                    
+                    response_text = completion.choices[0].message.content
                     
                     # Send the response
                     await ws.send_text(json.dumps({
