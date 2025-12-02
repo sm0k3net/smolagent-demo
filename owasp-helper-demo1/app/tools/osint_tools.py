@@ -407,3 +407,192 @@ def haveibeenpwned_domain(domain: str) -> str:
             return "\n".join(result)
     except Exception as e:
         return f"HIBP error: {e}"
+
+
+@tool
+def duckduckgo_search(query: str, max_results: int = 10, region: str = "wt-wt") -> str:
+    """Search DuckDuckGo for OSINT and reconnaissance information.
+    
+    This tool performs web searches using DuckDuckGo, useful for:
+    - Finding information about a target organization
+    - Discovering leaked credentials or data
+    - Finding subdomains and related sites
+    - Gathering public information for reconnaissance
+    
+    Args:
+        query: Search query string (e.g., 'site:example.com filetype:pdf', 'inurl:admin example.com')
+        max_results: Maximum number of results to return (default: 10, max: 25)
+        region: Region for search results (default: 'wt-wt' for worldwide)
+                Options: 'us-en', 'uk-en', 'de-de', 'fr-fr', etc.
+    Returns: Search results with titles, URLs, and snippets.
+    
+    Tips for security research queries:
+    - 'site:example.com' - Find all indexed pages
+    - 'site:example.com filetype:pdf' - Find PDF documents
+    - 'site:example.com inurl:admin' - Find admin pages
+    - '"example.com" password' - Find leaked credentials
+    - 'example.com employees linkedin' - Find employee information
+    """
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        return ("DuckDuckGo search library not installed. Install with:\n"
+                "  pip install duckduckgo-search\n"
+                "Then restart the application.")
+    
+    max_results = min(max_results, 25)  # Cap at 25 results
+    
+    try:
+        results = []
+        results.append(f"DuckDuckGo Search Results for: {query}")
+        results.append(f"Region: {region} | Max Results: {max_results}")
+        results.append("=" * 60)
+        
+        with DDGS() as ddgs:
+            search_results = list(ddgs.text(query, region=region, max_results=max_results))
+            
+            if not search_results:
+                return f"No results found for query: {query}"
+            
+            for i, r in enumerate(search_results, 1):
+                title = r.get('title', 'No title')
+                url = r.get('href', r.get('link', 'No URL'))
+                snippet = r.get('body', r.get('snippet', 'No description'))
+                
+                results.append(f"\n[{i}] {title}")
+                results.append(f"    URL: {url}")
+                results.append(f"    {snippet[:200]}{'...' if len(snippet) > 200 else ''}")
+        
+        results.append(f"\n{'=' * 60}")
+        results.append(f"Total: {len(search_results)} results")
+        
+        return "\n".join(results)
+        
+    except Exception as e:
+        return f"DuckDuckGo search error: {str(e)}"
+
+
+@tool
+def duckduckgo_news(query: str, max_results: int = 10) -> str:
+    """Search DuckDuckGo News for recent articles about a target.
+    
+    Useful for finding:
+    - Recent security incidents involving the target
+    - Data breaches and vulnerabilities
+    - Company news and announcements
+    - Technology stack mentions
+    
+    Args:
+        query: Search query (e.g., 'example.com breach', 'company name security')
+        max_results: Maximum number of news articles (default: 10, max: 25)
+    Returns: News articles with titles, dates, sources, and snippets.
+    """
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        return ("DuckDuckGo search library not installed. Install with:\n"
+                "  pip install duckduckgo-search\n"
+                "Then restart the application.")
+    
+    max_results = min(max_results, 25)
+    
+    try:
+        results = []
+        results.append(f"DuckDuckGo News Results for: {query}")
+        results.append("=" * 60)
+        
+        with DDGS() as ddgs:
+            news_results = list(ddgs.news(query, max_results=max_results))
+            
+            if not news_results:
+                return f"No news articles found for query: {query}"
+            
+            for i, article in enumerate(news_results, 1):
+                title = article.get('title', 'No title')
+                url = article.get('url', article.get('link', 'No URL'))
+                source = article.get('source', 'Unknown source')
+                date = article.get('date', 'Unknown date')
+                snippet = article.get('body', article.get('snippet', 'No description'))
+                
+                results.append(f"\n[{i}] {title}")
+                results.append(f"    Source: {source} | Date: {date}")
+                results.append(f"    URL: {url}")
+                results.append(f"    {snippet[:200]}{'...' if len(snippet) > 200 else ''}")
+        
+        results.append(f"\n{'=' * 60}")
+        results.append(f"Total: {len(news_results)} news articles")
+        
+        return "\n".join(results)
+        
+    except Exception as e:
+        return f"DuckDuckGo news search error: {str(e)}"
+
+
+@tool  
+def google_dork_suggestions(domain: str) -> str:
+    """Generate Google/DuckDuckGo dork queries for security reconnaissance.
+    
+    Returns a list of useful search queries for finding:
+    - Sensitive files and directories
+    - Login pages and admin panels
+    - Exposed configuration files
+    - Error messages and stack traces
+    - Backup files and source code
+    
+    Args:
+        domain: Target domain to generate dorks for.
+    Returns: List of dork queries ready to use with duckduckgo_search.
+    """
+    dorks = [
+        # Sensitive files
+        (f'site:{domain} filetype:pdf', "PDF documents (may contain sensitive info)"),
+        (f'site:{domain} filetype:xls OR filetype:xlsx', "Excel spreadsheets"),
+        (f'site:{domain} filetype:doc OR filetype:docx', "Word documents"),
+        (f'site:{domain} filetype:sql', "SQL files (database dumps)"),
+        (f'site:{domain} filetype:log', "Log files"),
+        (f'site:{domain} filetype:bak OR filetype:backup', "Backup files"),
+        (f'site:{domain} filetype:conf OR filetype:config', "Configuration files"),
+        (f'site:{domain} filetype:env', "Environment files"),
+        
+        # Admin panels and login
+        (f'site:{domain} inurl:admin', "Admin pages"),
+        (f'site:{domain} inurl:login', "Login pages"),
+        (f'site:{domain} inurl:dashboard', "Dashboard pages"),
+        (f'site:{domain} intitle:"index of"', "Directory listings"),
+        
+        # Errors and information disclosure
+        (f'site:{domain} "error" OR "warning" OR "exception"', "Error messages"),
+        (f'site:{domain} "sql syntax" OR "mysql_fetch"', "SQL errors"),
+        (f'site:{domain} "stack trace" OR "debug"', "Debug information"),
+        (f'site:{domain} "phpinfo()"', "PHP info pages"),
+        
+        # Credentials and sensitive data
+        (f'site:{domain} "password" OR "passwd" filetype:txt', "Password files"),
+        (f'site:{domain} inurl:".git"', "Git repositories"),
+        (f'site:{domain} inurl:".svn"', "SVN repositories"),
+        (f'site:{domain} "api_key" OR "apikey" OR "api-key"', "API keys"),
+        
+        # Technology detection
+        (f'site:{domain} "powered by"', "Technology stack hints"),
+        (f'site:{domain} "wordpress" OR "wp-content"', "WordPress detection"),
+        (f'site:{domain} "drupal" OR "sites/default/files"', "Drupal detection"),
+        
+        # External resources
+        (f'"{domain}" password leak', "Leaked passwords (external sites)"),
+        (f'"{domain}" site:pastebin.com', "Pastebin mentions"),
+        (f'"{domain}" site:github.com', "GitHub mentions"),
+    ]
+    
+    result = [f"Google/DuckDuckGo Dorks for: {domain}"]
+    result.append("=" * 60)
+    result.append("\nCopy these queries to use with duckduckgo_search():\n")
+    
+    for query, description in dorks:
+        result.append(f"Query: {query}")
+        result.append(f"  Purpose: {description}")
+        result.append("")
+    
+    result.append("=" * 60)
+    result.append("Tip: Use duckduckgo_search(query) with any of these queries")
+    
+    return "\n".join(result)

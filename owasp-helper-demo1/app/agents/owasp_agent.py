@@ -29,6 +29,9 @@ from app.tools.osint_tools import (
     crt_sh_search,
     securitytrails_domain_info,
     haveibeenpwned_domain,
+    duckduckgo_search,
+    duckduckgo_news,
+    google_dork_suggestions,
 )
 from app.tools.pentest_tools import (
     dnsrecon_scan,
@@ -234,6 +237,9 @@ def build_owasp_agent() -> CodeAgent:
         crt_sh_search,
         securitytrails_domain_info,
         haveibeenpwned_domain,
+        duckduckgo_search,
+        duckduckgo_news,
+        google_dork_suggestions,
     ])
     
     # Pentest / Active Recon tools

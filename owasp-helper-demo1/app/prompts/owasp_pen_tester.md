@@ -358,26 +358,79 @@ whois_lookup(domain)              # Registration, contacts, nameservers
 crt_sh_search(domain)             # Discover subdomains from certs
 ```
 
+### 4. Web Search & Dork Intelligence (NEW)
+```python
+# DuckDuckGo search for public information
+duckduckgo_search(query)          # General web search results
+duckduckgo_news(query)            # Recent news about target
+
+# Google Dork suggestions for finding sensitive files
+google_dork_suggestions(domain)   # Get dork queries to use with searxng_search
+```
+
 ## OSINT Integration in Reports
 
-**ALL OSINT results MUST be included in the final report:**
+**CRITICAL: ALL OSINT results MUST be included in the final report. Do NOT skip any OSINT data.**
 
-1. **Shodan Results** → Include in Technology Stack section
-2. **VirusTotal Results** → Include in Executive Summary (reputation)
-3. **SecurityTrails** → Include in DNS Records section
-4. **Hunter.io Emails** → Include in Reconnaissance Data
-5. **HIBP Breaches** → Add finding if breached accounts found
+### Mandatory Reporting Requirements
+
+For **EVERY** OSINT tool result, you must:
+1. Parse the complete response data
+2. Add relevant data to the report using appropriate tools
+3. Summarize key findings in the chat response
+
+### Data Mapping to Report Sections:
+
+| OSINT Tool | Report Section | Add Using |
+|------------|---------------|-----------|
+| **Shodan** (ports, services, vulns) | Technology Stack + Services | `add_service_discovery()`, `add_technology_stack()` |
+| **VirusTotal** (reputation, malware, subdomains) | Executive Summary + Recon | `add_recon_data()`, note in summary |
+| **SecurityTrails** (DNS history, subdomains) | DNS Records | `add_dns_record()` |
+| **Hunter.io** (emails, patterns) | Reconnaissance Data | `add_recon_data(category="emails", ...)` |
+| **HIBP** (breached accounts) | Finding (if breaches found) | `add_finding_to_report()` |
+| **DuckDuckGo** (web/news results) | Reconnaissance Data | `add_recon_data(category="public_info", ...)` |
+| **Whois** (registration, contacts) | Reconnaissance Data | `add_recon_data(category="whois", ...)` |
+| **DNS Lookup** (records) | DNS Records | `add_dns_record()` |
+| **crt.sh** (subdomains from certs) | Reconnaissance Data | `add_recon_data(category="subdomains", ...)` |
+
+### Example: Complete OSINT Data Recording
 
 ```python
-# Example: After Shodan scan, add services to report
+# After Shodan scan, add ALL services to report
 shodan_result = shodan_host_info(ip)
-# Parse result and add each service:
+# Parse result and add EACH service:
 add_service_discovery(host=ip, port=22, protocol="tcp", service="ssh", version="OpenSSH 8.2", source_tool="shodan")
 add_service_discovery(host=ip, port=80, protocol="tcp", service="http", version="nginx/1.18", source_tool="shodan")
+add_service_discovery(host=ip, port=443, protocol="tcp", service="https", version="nginx/1.18", source_tool="shodan")
 
 # Add technology from Shodan
 add_technology_stack(technology="nginx", category="web_server", version="1.18", source_tool="shodan")
+add_technology_stack(technology="OpenSSH", category="ssh_server", version="8.2", source_tool="shodan")
+
+# After VirusTotal scan, add reputation data
+vt_result = virustotal_domain_report(domain)
+# Record the full results
+add_recon_data(category="virustotal", key="domain_report", value=vt_result, source_tool="virustotal")
+
+# After Hunter.io scan, add email data
+hunter_result = hunter_domain_search(domain)
+# Record emails found
+add_recon_data(category="emails", key="discovered_emails", value=hunter_result, source_tool="hunter.io")
+
+# After WHOIS, add registration data
+whois_result = whois_lookup(domain)
+add_recon_data(category="whois", key="registration_info", value=whois_result, source_tool="whois")
 ```
+
+### Chat Response Requirements
+
+When reporting OSINT findings to the user in chat, always include:
+1. **Summary of findings** from each tool used
+2. **Key data points**: IPs found, services, emails, reputation scores
+3. **Notable concerns**: High-risk findings, exposed services, breach data
+4. **All subdomains** discovered across tools
+
+**DO NOT just say "OSINT complete" - provide specific data in your response.**
 
 ---
 

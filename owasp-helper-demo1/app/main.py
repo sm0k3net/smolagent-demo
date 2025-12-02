@@ -781,9 +781,9 @@ class TaskChain(BaseModel):
 
 
 app = FastAPI(title="Pentest.Systems Assistant")
-agent = None
+agent = None  # Global agent kept for startup but each task gets its own instance
 startup_lock = asyncio.Lock()
-agent_lock = threading.Lock()  # Lock for concurrent agent access
+# Note: Tasks now use dedicated agent instances for true parallel execution
 executor = ThreadPoolExecutor(max_workers=8)
 
 # File storage for sessions
@@ -10164,13 +10164,13 @@ const activityIcons = {
 
 // Activity phases for categorization - aligned with pentest methodology
 const ACTIVITY_PHASES = {
-  discovery: { name: 'Discovery', icon: '🔎', color: '#3b82f6' },
-  info_gathering: { name: 'Information Gathering', icon: '📡', color: '#06b6d4' },
+  discovery: { name: 'Discovery & Enumeration', icon: '🔎', color: '#3b82f6' },
+  info_gathering: { name: 'OSINT & Fingerprinting', icon: '📡', color: '#06b6d4' },
   scanning: { name: 'Vulnerability Scanning', icon: '🛡️', color: '#f59e0b' },
-  manual: { name: 'Manual Research', icon: '🔬', color: '#8b5cf6' },
+  manual: { name: 'Web Analysis & Testing', icon: '🌐', color: '#8b5cf6' },
   exploitation: { name: 'Validation & Exploitation', icon: '💥', color: '#ef4444' },
   reporting: { name: 'Reporting', icon: '📋', color: '#10b981' },
-  general: { name: 'Execution', icon: '⚡', color: '#64748b' }
+  general: { name: 'Processing', icon: '⚡', color: '#64748b' }
 };
 
 // Map tool names to phases
@@ -10178,19 +10178,19 @@ function getActivityPhase(toolName, activityType) {
   if (!toolName) return 'general';
   const tool = toolName.toLowerCase();
   
-  // Reporting phase
+  // Reporting phase - report generation and documentation
   if (activityType === 'complete') return 'reporting';
-  if (['report', 'finding', 'summary', 'conclusion', 'executive', 'add_scope', 'add_recon', 'add_dns', 'add_service', 'add_technology', 'add_network', 'generate_html', 'generate_markdown', 'generate_pdf'].some(t => tool.includes(t))) {
+  if (['report', 'finding', 'summary', 'conclusion', 'executive', 'add_scope', 'add_recon', 'add_dns', 'add_service', 'add_technology', 'add_network', 'generate_html', 'generate_markdown', 'generate_pdf', 'enable_report', 'add_tool_output'].some(t => tool.includes(t))) {
     return 'reporting';
   }
   
-  // Discovery phase - initial target discovery
-  if (['nmap', 'masscan', 'subfinder', 'amass', 'httpx', 'dnsrecon', 'fierce', 'dnsenum'].some(t => tool.includes(t))) {
+  // Discovery phase - initial target discovery and enumeration
+  if (['nmap', 'masscan', 'subfinder', 'amass', 'httpx', 'dnsrecon', 'fierce', 'dnsenum', 'install_system', 'check_and_install'].some(t => tool.includes(t))) {
     return 'discovery';
   }
   
   // Information Gathering phase - OSINT and fingerprinting
-  if (['virustotal', 'shodan', 'hunter', 'whois', 'dns_lookup', 'crt_sh', 'securitytrails', 'haveibeenpwned', 'osint', 'whatweb', 'wappalyzer', 'theharvester'].some(t => tool.includes(t))) {
+  if (['virustotal', 'shodan', 'hunter', 'whois', 'dns_lookup', 'crt_sh', 'securitytrails', 'haveibeenpwned', 'osint', 'whatweb', 'wappalyzer', 'theharvester', 'duckduckgo', 'search'].some(t => tool.includes(t))) {
     return 'info_gathering';
   }
   
@@ -10199,8 +10199,8 @@ function getActivityPhase(toolName, activityType) {
     return 'scanning';
   }
   
-  // Manual Research phase - browsing, forms, analysis, planning
-  if (['browse', 'page', 'get_page', 'fill_form', 'click', 'intercept', 'console', 'screenshot', 'curl_request', 'classify', 'owasp', 'scenario', 'planning', 'classifier'].some(t => tool.includes(t))) {
+  // Web Analysis phase - browsing, forms, HTTP analysis
+  if (['browse', 'page', 'get_page', 'fill_form', 'click', 'intercept', 'console', 'screenshot', 'take_screenshot', 'curl_request', 'curl', 'classify', 'owasp', 'scenario', 'planning', 'classifier', 'get_page_links', 'get_page_forms'].some(t => tool.includes(t))) {
     return 'manual';
   }
   
@@ -12232,133 +12232,134 @@ The report should be comprehensive and professional, suitable for executive stak
                 def run_agent_with_streaming():
                     """Run agent in thread and put events in queue."""
                     try:
-                        # Acquire lock for concurrent access
-                        with agent_lock:
-                            # Log command to database if enabled
-                            db_command_id = None
-                            if db_storage.enabled:
-                                db_command_id = db_storage.log_command(
-                                    session_id=session_id,
-                                    task_id=request_task_id or "interactive",
-                                    command=msg_content,
-                                    command_type="prompt"
-                                )
+                        # Create a dedicated agent for this task (enables true parallel execution)
+                        task_agent = build_owasp_agent()
+                        
+                        # Log command to database if enabled
+                        db_command_id = None
+                        if db_storage.enabled:
+                            db_command_id = db_storage.log_command(
+                                session_id=session_id,
+                                task_id=request_task_id or "interactive",
+                                command=msg_content,
+                                command_type="prompt"
+                            )
+                        
+                        # Use streaming mode for real-time updates
+                        final_result = None
+                        step_count = 0
+                        tool_count = 0
+                        start_time = time.time()
+                        last_tool_name = ""  # Track last tool for result categorization
+                        
+                        for event in task_agent.run(full_message, stream=True):
+                            step_count += 1
+                            event_type = type(event).__name__
                             
-                            # Use streaming mode for real-time updates
-                            final_result = None
-                            step_count = 0
-                            tool_count = 0
-                            start_time = time.time()
-                            last_tool_name = ""  # Track last tool for result categorization
-                            
-                            for event in agent.run(full_message, stream=True):
-                                step_count += 1
-                                event_type = type(event).__name__
-                                
-                                # Extract meaningful info from different event types
-                                if hasattr(event, 'tool_calls') and event.tool_calls:
-                                    for tool_call in event.tool_calls:
-                                        tool_count += 1
-                                        tool_name = getattr(tool_call, 'name', str(tool_call))
-                                        last_tool_name = tool_name  # Remember for result categorization
-                                        tool_args = getattr(tool_call, 'arguments', {})
-                                        
-                                        # Map tool names to activity types
-                                        activity_type = "tool"
-                                        
-                                        # Categorize tools for better display
-                                        if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
-                                            activity_msg = f"Running security scan: {tool_name}"
-                                        elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
-                                            activity_msg = f"OSINT lookup: {tool_name}"
-                                        elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
-                                            activity_msg = f"Browser automation: {tool_name}"
-                                        elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
-                                            activity_msg = f"HTTP request: {tool_name}"
-                                        elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
-                                            activity_msg = f"Report generation: {tool_name}"
-                                            activity_type = "tool-result"
-                                        elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
-                                            activity_msg = f"OWASP analysis: {tool_name}"
-                                        else:
-                                            activity_msg = f"Executing: {tool_name}"
-                                        
-                                        # Get target/args info
-                                        target_info = ""
-                                        if isinstance(tool_args, dict):
-                                            for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
-                                                if key in tool_args:
-                                                    target_info = f" → {tool_args[key][:60]}"
-                                                    break
-                                        
-                                        event_queue.put({
-                                            "type": "activity",
-                                            "activity_type": activity_type,
-                                            "title": activity_msg,
-                                            "content": f"Tool #{tool_count}: {tool_name}{target_info}",
-                                            "tool_name": tool_name,
-                                            "tool_count": tool_count,
-                                            "step_count": step_count
-                                        })
-                                        
-                                        # Log tool call to database
-                                        if db_storage.enabled:
-                                            tool_cmd_id = db_storage.log_command(
-                                                session_id=session_id,
-                                                task_id=request_task_id or "interactive",
-                                                command=f"{tool_name}: {str(tool_args)[:500]}",
-                                                command_type="tool_call",
-                                                tool_name=tool_name
-                                            )
-                                
-                                # Check for observations/results
-                                if hasattr(event, 'observations') and event.observations:
-                                    obs = str(event.observations)[:200]
+                            # Extract meaningful info from different event types
+                            if hasattr(event, 'tool_calls') and event.tool_calls:
+                                for tool_call in event.tool_calls:
+                                    tool_count += 1
+                                    tool_name = getattr(tool_call, 'name', str(tool_call))
+                                    last_tool_name = tool_name  # Remember for result categorization
+                                    tool_args = getattr(tool_call, 'arguments', {})
+                                    
+                                    # Map tool names to activity types
+                                    activity_type = "tool"
+                                    
+                                    # Categorize tools for better display
+                                    if any(x in tool_name.lower() for x in ['scan', 'nmap', 'nikto', 'dirb', 'gobuster', 'nuclei', 'zap']):
+                                        activity_msg = f"Running security scan: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['virustotal', 'shodan', 'hunter', 'dns', 'whois', 'osint']):
+                                        activity_msg = f"OSINT lookup: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['browse', 'page', 'screenshot', 'playwright', 'click', 'form']):
+                                        activity_msg = f"Browser automation: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['curl', 'request', 'http']):
+                                        activity_msg = f"HTTP request: {tool_name}"
+                                    elif any(x in tool_name.lower() for x in ['report', 'finding', 'summary']):
+                                        activity_msg = f"Report generation: {tool_name}"
+                                        activity_type = "tool-result"
+                                    elif any(x in tool_name.lower() for x in ['owasp', 'classify', 'scenario']):
+                                        activity_msg = f"OWASP analysis: {tool_name}"
+                                    else:
+                                        activity_msg = f"Executing: {tool_name}"
+                                    
+                                    # Get target/args info
+                                    target_info = ""
+                                    if isinstance(tool_args, dict):
+                                        for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
+                                            if key in tool_args:
+                                                target_info = f" → {tool_args[key][:60]}"
+                                                break
+                                    
                                     event_queue.put({
                                         "type": "activity",
-                                        "activity_type": "tool-result",
-                                        "title": f"Result: {last_tool_name}" if last_tool_name else "Tool Result",
-                                        "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
-                                        "tool_name": last_tool_name,  # Include tool name for phase categorization
+                                        "activity_type": activity_type,
+                                        "title": activity_msg,
+                                        "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                        "tool_name": tool_name,
                                         "tool_count": tool_count,
                                         "step_count": step_count
                                     })
-                                
-                                # Check for planning steps
-                                if hasattr(event, 'plan') and event.plan:
-                                    plan = str(event.plan)[:300]
-                                    event_queue.put({
-                                        "type": "activity",
-                                        "activity_type": "thinking",
-                                        "title": "Agent Planning",
-                                        "content": plan,
-                                        "tool_name": "planning",  # For phase categorization
-                                        "tool_count": tool_count,
-                                        "step_count": step_count
-                                    })
-                                
-                                # Capture final result
-                                if hasattr(event, 'output') and event.output is not None:
-                                    final_result = event.output
+                                    
+                                    # Log tool call to database
+                                    if db_storage.enabled:
+                                        tool_cmd_id = db_storage.log_command(
+                                            session_id=session_id,
+                                            task_id=request_task_id or "interactive",
+                                            command=f"{tool_name}: {str(tool_args)[:500]}",
+                                            command_type="tool_call",
+                                            tool_name=tool_name
+                                        )
                             
-                            # Log final output to database
-                            if db_storage.enabled and db_command_id:
-                                execution_time = int((time.time() - start_time) * 1000)
-                                db_storage.log_output(
-                                    command_id=db_command_id,
-                                    output=str(final_result)[:10000] if final_result else "Task completed",
-                                    output_type="final",
-                                    status="success",
-                                    execution_time_ms=execution_time
-                                )
+                            # Check for observations/results
+                            if hasattr(event, 'observations') and event.observations:
+                                obs = str(event.observations)[:200]
+                                event_queue.put({
+                                    "type": "activity",
+                                    "activity_type": "tool-result",
+                                    "title": f"Result: {last_tool_name}" if last_tool_name else "Tool Result",
+                                    "content": obs + ("..." if len(str(event.observations)) > 200 else ""),
+                                    "tool_name": last_tool_name,  # Include tool name for phase categorization
+                                    "tool_count": tool_count,
+                                    "step_count": step_count
+                                })
                             
-                            # Signal completion
-                            event_queue.put({
-                                "type": "complete",
-                                "result": final_result if final_result else "Task completed",
-                                "tool_count": tool_count,
-                                "step_count": step_count
-                            })
+                            # Check for planning steps
+                            if hasattr(event, 'plan') and event.plan:
+                                plan = str(event.plan)[:300]
+                                event_queue.put({
+                                    "type": "activity",
+                                    "activity_type": "thinking",
+                                    "title": "Agent Planning",
+                                    "content": plan,
+                                    "tool_name": "planning",  # For phase categorization
+                                    "tool_count": tool_count,
+                                    "step_count": step_count
+                                })
+                            
+                            # Capture final result
+                            if hasattr(event, 'output') and event.output is not None:
+                                final_result = event.output
+                        
+                        # Log final output to database
+                        if db_storage.enabled and db_command_id:
+                            execution_time = int((time.time() - start_time) * 1000)
+                            db_storage.log_output(
+                                command_id=db_command_id,
+                                output=str(final_result)[:10000] if final_result else "Task completed",
+                                output_type="final",
+                                status="success",
+                                execution_time_ms=execution_time
+                            )
+                        
+                        # Signal completion
+                        event_queue.put({
+                            "type": "complete",
+                            "result": final_result if final_result else "Task completed",
+                            "tool_count": tool_count,
+                            "step_count": step_count
+                        })
                         
                     except Exception as e:
                         event_queue.put({
