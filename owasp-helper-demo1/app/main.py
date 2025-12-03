@@ -9,7 +9,7 @@ from app.tools.report_tools import (
     enable_report_mode, disable_report_mode, get_report_status,
     generate_html_report, generate_markdown_report,
     is_report_mode_enabled, get_report_data, add_recon_data,
-    track_tool_usage, get_session_tools
+    track_tool_usage, get_session_tools, set_current_task_id
 )
 from app.task_persistence import (
     get_task_persistence, TaskState, TaskStep, TaskStatus,
@@ -14294,8 +14294,26 @@ async function dropTaskOnProject(event, projectId) {
         alert('Failed to add task to project: ' + (errData.error || 'Unknown error'));
       }
     } else if (data.type === 'report') {
-      // Moving a report - would need to reassign to task first
-      alert('To move a report, drag its parent task to the project.');
+      // Moving a report - move the parent task instead
+      const taskId = data.taskId;
+      if (!taskId) {
+        alert('This report is not associated with a task. Cannot move.');
+        return;
+      }
+      
+      // Move the parent task (which includes all its reports)
+      const response = await fetch('/api/projects/' + projectId + '/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId })
+      });
+      
+      if (response.ok) {
+        loadReportsDirectory();
+      } else {
+        const errData = await response.json();
+        alert('Failed to move task to project: ' + (errData.error || 'Unknown error'));
+      }
     }
   } catch (err) {
     // Fallback for old format (just taskId string)
@@ -19902,6 +19920,9 @@ The report should be comprehensive and professional, suitable for executive stak
                 # Use captured variables for this request
                 request_chat_id = captured_chat_id
                 request_task_id = captured_task_id
+                
+                # Set current task ID for report tools to use
+                set_current_task_id(request_task_id)
                 
                 # Initialize task persistence for crash recovery
                 task_persistence = get_task_persistence()

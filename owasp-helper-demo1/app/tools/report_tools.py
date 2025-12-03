@@ -53,6 +53,9 @@ _CURRENT_REPORT_DATA: dict = {}
 _SESSION_TOOLS_USED: set = set()
 # Artifacts storage (screenshots, raw tool outputs)
 _REPORT_ARTIFACTS: list = []
+# Current task ID for project association
+_CURRENT_TASK_ID: str = None
+_CURRENT_PROJECT_ID: str = None
 
 
 def _add_screenshot_to_report_internal(
@@ -4136,7 +4139,7 @@ def _markdown_to_html(text: str) -> str:
 # ============== PROJECT MANAGEMENT TOOLS ==============
 
 @tool
-def create_project(name: str, description: str = "", color: str = "#22c55e") -> str:
+def create_project(name: str, description: str = "", color: str = "#22c55e", add_current_task: bool = True) -> str:
     """Create a new project to organize tasks and reports.
     
     Projects help organize related security assessments, pentests, or research tasks.
@@ -4149,12 +4152,14 @@ def create_project(name: str, description: str = "", color: str = "#22c55e") -> 
         name: Project name (e.g., "Client A Security Assessment", "Bug Bounty - Target.com")
         description: Optional description of the project scope or goals
         color: Optional hex color for the project (default: green #22c55e)
+        add_current_task: If True, automatically add the current task to this project (default: True)
         
     Returns: Confirmation with project ID or error message.
     
     Example:
         create_project("ACME Corp Pentest Q4 2024", "Quarterly security assessment of ACME web applications")
     """
+    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
     import json
     import uuid
     from pathlib import Path
@@ -4176,7 +4181,28 @@ def create_project(name: str, description: str = "", color: str = "#22c55e") -> 
     # Check if project already exists
     for pid, proj in index.get("projects", {}).items():
         if proj.get("name", "").lower() == name.lower():
-            return f"Project '{name}' already exists (ID: {pid}). Use a different name or work with the existing project."
+            # Project exists - add current task to it if requested
+            if add_current_task and _CURRENT_TASK_ID:
+                if _CURRENT_TASK_ID not in proj.get("tasks", []):
+                    proj.setdefault("tasks", []).append(_CURRENT_TASK_ID)
+                    _CURRENT_PROJECT_ID = pid
+                    
+                    # Update task entry
+                    if _CURRENT_TASK_ID not in index.get("tasks", {}):
+                        index.setdefault("tasks", {})[_CURRENT_TASK_ID] = {
+                            "prompt": "Current task",
+                            "label": "general",
+                            "created_at": datetime.now().isoformat(),
+                            "project_id": pid,
+                            "reports": []
+                        }
+                    else:
+                        index["tasks"][_CURRENT_TASK_ID]["project_id"] = pid
+                    
+                    index_file.write_text(json.dumps(index, indent=2))
+                    return f"Project '{name}' already exists (ID: {pid}). ✅ Current task has been added to this project."
+            
+            return f"Project '{name}' already exists (ID: {pid}). Use add_task_to_project('{name}') to add tasks to it."
     
     # Generate project ID
     project_id = f"proj_{uuid.uuid4().hex[:8]}"
@@ -4190,10 +4216,34 @@ def create_project(name: str, description: str = "", color: str = "#22c55e") -> 
         "tasks": []
     }
     
+    result_msg = f"✅ Project '{name}' created successfully (ID: {project_id})."
+    
+    # Add current task to the new project if available
+    if add_current_task and _CURRENT_TASK_ID:
+        index["projects"][project_id]["tasks"].append(_CURRENT_TASK_ID)
+        _CURRENT_PROJECT_ID = project_id
+        
+        # Create or update task entry
+        if _CURRENT_TASK_ID not in index.get("tasks", {}):
+            index.setdefault("tasks", {})[_CURRENT_TASK_ID] = {
+                "prompt": "Current task",
+                "label": "general",
+                "created_at": datetime.now().isoformat(),
+                "project_id": project_id,
+                "reports": []
+            }
+        else:
+            index["tasks"][_CURRENT_TASK_ID]["project_id"] = project_id
+        
+        result_msg += f"\n\n✅ Current task (ID: {_CURRENT_TASK_ID}) has been added to this project."
+        result_msg += "\n\nAll reports generated during this task will be associated with the project."
+    else:
+        result_msg += "\n\nYou can now:\n1. Run security tasks - they will be tracked automatically\n2. Use add_task_to_project() to associate tasks with this project\n3. View the project in the Reports > Projects section of the UI"
+    
     # Save index
     index_file.write_text(json.dumps(index, indent=2))
     
-    return f"✅ Project '{name}' created successfully (ID: {project_id}).\n\nYou can now:\n1. Run security tasks - they will be tracked automatically\n2. Use add_task_to_project() to associate tasks with this project\n3. View the project in the Reports > Projects section of the UI"
+    return result_msg
 
 
 @tool
@@ -4231,8 +4281,21 @@ def list_projects() -> str:
     return result
 
 
+def set_current_task_id(task_id: str, project_id: str = None):
+    """Set the current task ID for project association. Called by the agent runner."""
+    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
+    _CURRENT_TASK_ID = task_id
+    _CURRENT_PROJECT_ID = project_id
+
+
+def get_current_task_id() -> str:
+    """Get the current task ID."""
+    global _CURRENT_TASK_ID
+    return _CURRENT_TASK_ID
+
+
 @tool
-def add_task_to_project(project_name: str, task_prompt: str, task_label: str = "general") -> str:
+def add_task_to_project(project_name: str, task_prompt: str = None, task_label: str = "general") -> str:
     """Associate the current task with a project.
     
     This links the current security assessment or task to a project for organization.
@@ -4240,13 +4303,13 @@ def add_task_to_project(project_name: str, task_prompt: str, task_label: str = "
     
     Args:
         project_name: Name or partial name of the project to add the task to
-        task_prompt: Brief description of what this task is doing (e.g., "Nmap scan of 192.168.1.0/24")
+        task_prompt: Optional brief description of what this task is doing (e.g., "Nmap scan of 192.168.1.0/24")
         task_label: Task type - one of: pentest_web, pentest_api, pentest_network, pentest_osint, scanning, recon, discovery, general
         
     Returns: Confirmation or error message.
     """
+    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
     import json
-    import uuid
     from pathlib import Path
     from datetime import datetime
     
@@ -4274,9 +4337,24 @@ def add_task_to_project(project_name: str, task_prompt: str, task_label: str = "
         available = ", ".join([p.get("name") for p in index.get("projects", {}).values()])
         return f"Project '{project_name}' not found. Available projects: {available or 'None'}"
     
-    # Create task entry
-    task_id = f"task_{uuid.uuid4().hex[:8]}"
+    # Use current task ID if available, otherwise create new one
+    task_id = _CURRENT_TASK_ID
+    if not task_id:
+        import uuid
+        task_id = f"task_{uuid.uuid4().hex[:8]}"
+        _CURRENT_TASK_ID = task_id
     
+    # Store the project ID globally so report generation can use it
+    _CURRENT_PROJECT_ID = project_id
+    
+    # Get the prompt from current report data if not provided
+    if not task_prompt:
+        if _CURRENT_REPORT_DATA and _CURRENT_REPORT_DATA.get("target"):
+            task_prompt = f"Security assessment of {_CURRENT_REPORT_DATA.get('target')}"
+        else:
+            task_prompt = "Security task"
+    
+    # Create or update task entry
     if task_id not in index.get("tasks", {}):
         index.setdefault("tasks", {})[task_id] = {
             "prompt": task_prompt,
@@ -4285,6 +4363,16 @@ def add_task_to_project(project_name: str, task_prompt: str, task_label: str = "
             "project_id": project_id,
             "reports": []
         }
+    else:
+        # Update existing task with project association
+        index["tasks"][task_id]["project_id"] = project_id
+        if task_prompt:
+            index["tasks"][task_id]["prompt"] = task_prompt
+    
+    # Remove from any other project first
+    for pid, proj in index.get("projects", {}).items():
+        if pid != project_id and task_id in proj.get("tasks", []):
+            proj["tasks"].remove(task_id)
     
     # Add task to project
     if task_id not in index["projects"][project_id].get("tasks", []):
