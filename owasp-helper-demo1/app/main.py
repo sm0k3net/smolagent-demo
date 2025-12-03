@@ -19481,18 +19481,39 @@ Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
                     settings = get_settings()
                     client = OpenAI(
                         api_key=settings.get_active_api_key(),
-                        base_url=settings.get_active_api_base()
+                        base_url=settings.get_active_api_base(),
+                        timeout=60.0  # 60 second timeout
                     )
                     
-                    # Make the API call
-                    completion = client.chat.completions.create(
-                        model=settings.get_active_model(),
-                        messages=messages_for_llm,
-                        max_tokens=2000,
-                        temperature=0.7
-                    )
+                    # Make the API call with retry logic
+                    max_retries = 3
+                    response_text = None
+                    last_error = None
                     
-                    response_text = completion.choices[0].message.content
+                    for attempt in range(max_retries):
+                        try:
+                            completion = client.chat.completions.create(
+                                model=settings.get_active_model(),
+                                messages=messages_for_llm,
+                                max_tokens=2000,
+                                temperature=0.7
+                            )
+                            response_text = completion.choices[0].message.content
+                            break  # Success, exit retry loop
+                        except Exception as api_error:
+                            last_error = api_error
+                            if attempt < max_retries - 1:
+                                await ws.send_text(json.dumps({
+                                    "type": "progress",
+                                    "content": f"⏳ Connection issue, retrying... ({attempt + 2}/{max_retries})",
+                                    "chat_id": chat_id,
+                                    "task_id": task_id
+                                }))
+                                await asyncio.sleep(2)  # Wait before retry
+                            continue
+                    
+                    if response_text is None:
+                        raise Exception(f"API call failed after {max_retries} attempts: {str(last_error)}")
                     
                     # Process action commands in response
                     action_results = []
