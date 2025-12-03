@@ -58,6 +58,101 @@ _CURRENT_TASK_ID: str = None
 _CURRENT_PROJECT_ID: str = None
 
 
+def save_task_output_as_report(output: str, tool_name: str, target: str, file_ext: str = "txt") -> str:
+    """Save scan/tool output as a report file associated with current task and project.
+    
+    This function automatically:
+    1. Creates a report file with the tool output
+    2. Links it to the current task (if _CURRENT_TASK_ID is set)
+    3. Links it to the current project (if _CURRENT_PROJECT_ID is set)
+    4. Updates the reports_index.json
+    
+    Args:
+        output: The tool output to save
+        tool_name: Name of the tool (e.g., "nmap", "wpscan")
+        target: Target that was scanned
+        file_ext: File extension (txt, html, json, xml)
+        
+    Returns: Path to the saved report file or error message
+    """
+    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
+    import json
+    import uuid
+    from pathlib import Path
+    from datetime import datetime
+    
+    if not output or not output.strip():
+        return ""
+    
+    reports_dir = Path("data/reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    index_file = reports_dir / "reports_index.json"
+    
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target_safe = target.replace("/", "_").replace(":", "_").replace(".", "-").replace(" ", "_")[:50]
+    report_id = uuid.uuid4().hex[:8]
+    filename = f"{tool_name}_{target_safe}_{timestamp}_{report_id}.{file_ext}"
+    file_path = reports_dir / filename
+    
+    # Save the output to file
+    try:
+        file_path.write_text(output, encoding='utf-8')
+    except Exception as e:
+        return f"Error saving report: {e}"
+    
+    # Load or create index
+    if index_file.exists():
+        try:
+            index = json.loads(index_file.read_text())
+        except:
+            index = {"reports": [], "tasks": {}, "projects": {}}
+    else:
+        index = {"reports": [], "tasks": {}, "projects": {}}
+    
+    # Create report entry
+    report_entry = {
+        "path": str(file_path),
+        "name": filename,
+        "type": file_ext,
+        "tool": tool_name,
+        "target": target,
+        "created_at": datetime.now().isoformat(),
+        "task_id": _CURRENT_TASK_ID,
+        "project_id": _CURRENT_PROJECT_ID
+    }
+    
+    # Add to reports list
+    index["reports"].append(report_entry)
+    
+    # Update task entry if we have a current task
+    if _CURRENT_TASK_ID:
+        if _CURRENT_TASK_ID not in index.get("tasks", {}):
+            index.setdefault("tasks", {})[_CURRENT_TASK_ID] = {
+                "prompt": f"{tool_name} scan of {target}",
+                "label": "scanning",
+                "created_at": datetime.now().isoformat(),
+                "project_id": _CURRENT_PROJECT_ID,
+                "reports": []
+            }
+        
+        # Add report path to task's reports list
+        if "reports" not in index["tasks"][_CURRENT_TASK_ID]:
+            index["tasks"][_CURRENT_TASK_ID]["reports"] = []
+        index["tasks"][_CURRENT_TASK_ID]["reports"].append(str(file_path))
+        
+        # Ensure task is in project's task list if project exists
+        if _CURRENT_PROJECT_ID and _CURRENT_PROJECT_ID in index.get("projects", {}):
+            project = index["projects"][_CURRENT_PROJECT_ID]
+            if _CURRENT_TASK_ID not in project.get("tasks", []):
+                project.setdefault("tasks", []).append(_CURRENT_TASK_ID)
+    
+    # Save index
+    index_file.write_text(json.dumps(index, indent=2))
+    
+    return str(file_path)
+
+
 def _add_screenshot_to_report_internal(
     url: str,
     base64_data: str,

@@ -5,6 +5,12 @@ import subprocess
 import tempfile
 import os
 
+# Import the helper to save outputs as reports
+try:
+    from .report_tools import save_task_output_as_report
+except ImportError:
+    save_task_output_as_report = None
+
 @tool
 def nmap_scan(target: str, ports: str | None = None, flags: str | None = "-sV -T4") -> str:
     """Run a simple nmap scan (requires nmap installed on the system).
@@ -28,7 +34,17 @@ def nmap_scan(target: str, ports: str | None = None, flags: str | None = "-sV -T
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if res.returncode != 0:
             return f"nmap error: {res.stderr.strip()}"
-        return res.stdout
+        
+        output = res.stdout
+        
+        # Auto-save output as a report file if task tracking is available
+        if save_task_output_as_report and output:
+            try:
+                save_task_output_as_report(output, "nmap", target, "txt")
+            except Exception:
+                pass  # Don't fail the scan if report saving fails
+        
+        return output
     except Exception as e:  # pragma: no cover
         return f"nmap execution error: {e}"
 
