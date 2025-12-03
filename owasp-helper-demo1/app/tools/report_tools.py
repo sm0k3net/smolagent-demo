@@ -4131,3 +4131,166 @@ def _markdown_to_html(text: str) -> str:
         html_lines.append('</pre>')
     
     return '\n'.join(html_lines)
+
+
+# ============== PROJECT MANAGEMENT TOOLS ==============
+
+@tool
+def create_project(name: str, description: str = "", color: str = "#22c55e") -> str:
+    """Create a new project to organize tasks and reports.
+    
+    Projects help organize related security assessments, pentests, or research tasks.
+    Tasks and their reports can be grouped under projects for better organization.
+    
+    This is different from Report Mode - Projects are for organizing multiple tasks,
+    while Report Mode is for generating a professional security report from a single assessment.
+    
+    Args:
+        name: Project name (e.g., "Client A Security Assessment", "Bug Bounty - Target.com")
+        description: Optional description of the project scope or goals
+        color: Optional hex color for the project (default: green #22c55e)
+        
+    Returns: Confirmation with project ID or error message.
+    
+    Example:
+        create_project("ACME Corp Pentest Q4 2024", "Quarterly security assessment of ACME web applications")
+    """
+    import json
+    import uuid
+    from pathlib import Path
+    from datetime import datetime
+    
+    reports_dir = Path("data/reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    index_file = reports_dir / "reports_index.json"
+    
+    # Load or create index
+    if index_file.exists():
+        try:
+            index = json.loads(index_file.read_text())
+        except:
+            index = {"reports": [], "tasks": {}, "projects": {}}
+    else:
+        index = {"reports": [], "tasks": {}, "projects": {}}
+    
+    # Check if project already exists
+    for pid, proj in index.get("projects", {}).items():
+        if proj.get("name", "").lower() == name.lower():
+            return f"Project '{name}' already exists (ID: {pid}). Use a different name or work with the existing project."
+    
+    # Generate project ID
+    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+    
+    index["projects"][project_id] = {
+        "id": project_id,
+        "name": name,
+        "description": description,
+        "color": color,
+        "created_at": datetime.now().isoformat(),
+        "tasks": []
+    }
+    
+    # Save index
+    index_file.write_text(json.dumps(index, indent=2))
+    
+    return f"✅ Project '{name}' created successfully (ID: {project_id}).\n\nYou can now:\n1. Run security tasks - they will be tracked automatically\n2. Use add_task_to_project() to associate tasks with this project\n3. View the project in the Reports > Projects section of the UI"
+
+
+@tool
+def list_projects() -> str:
+    """List all available projects.
+    
+    Returns: List of projects with their IDs, names, and task counts.
+    """
+    import json
+    from pathlib import Path
+    
+    reports_dir = Path("data/reports")
+    index_file = reports_dir / "reports_index.json"
+    
+    if not index_file.exists():
+        return "No projects found. Use create_project() to create one."
+    
+    try:
+        index = json.loads(index_file.read_text())
+    except:
+        return "No projects found. Use create_project() to create one."
+    
+    projects = index.get("projects", {})
+    if not projects:
+        return "No projects found. Use create_project() to create one."
+    
+    result = "📁 **Available Projects:**\n\n"
+    for pid, proj in projects.items():
+        task_count = len(proj.get("tasks", []))
+        result += f"- **{proj.get('name')}** (ID: {pid})\n"
+        if proj.get("description"):
+            result += f"  Description: {proj.get('description')}\n"
+        result += f"  Tasks: {task_count}\n\n"
+    
+    return result
+
+
+@tool
+def add_task_to_project(project_name: str, task_prompt: str, task_label: str = "general") -> str:
+    """Associate the current task with a project.
+    
+    This links the current security assessment or task to a project for organization.
+    Reports generated from this task will appear under the project.
+    
+    Args:
+        project_name: Name or partial name of the project to add the task to
+        task_prompt: Brief description of what this task is doing (e.g., "Nmap scan of 192.168.1.0/24")
+        task_label: Task type - one of: pentest_web, pentest_api, pentest_network, pentest_osint, scanning, recon, discovery, general
+        
+    Returns: Confirmation or error message.
+    """
+    import json
+    import uuid
+    from pathlib import Path
+    from datetime import datetime
+    
+    reports_dir = Path("data/reports")
+    index_file = reports_dir / "reports_index.json"
+    
+    if not index_file.exists():
+        return f"No projects found. Create a project first with create_project()."
+    
+    try:
+        index = json.loads(index_file.read_text())
+    except:
+        return "Error reading projects index."
+    
+    # Find the project
+    project_id = None
+    project_name_found = None
+    for pid, proj in index.get("projects", {}).items():
+        if project_name.lower() in proj.get("name", "").lower():
+            project_id = pid
+            project_name_found = proj.get("name")
+            break
+    
+    if not project_id:
+        available = ", ".join([p.get("name") for p in index.get("projects", {}).values()])
+        return f"Project '{project_name}' not found. Available projects: {available or 'None'}"
+    
+    # Create task entry
+    task_id = f"task_{uuid.uuid4().hex[:8]}"
+    
+    if task_id not in index.get("tasks", {}):
+        index.setdefault("tasks", {})[task_id] = {
+            "prompt": task_prompt,
+            "label": task_label,
+            "created_at": datetime.now().isoformat(),
+            "project_id": project_id,
+            "reports": []
+        }
+    
+    # Add task to project
+    if task_id not in index["projects"][project_id].get("tasks", []):
+        index["projects"][project_id].setdefault("tasks", []).append(task_id)
+    
+    # Save index
+    index_file.write_text(json.dumps(index, indent=2))
+    
+    return f"✅ Task added to project '{project_name_found}'.\n\nTask ID: {task_id}\nDescription: {task_prompt}\n\nReports generated during this task will be associated with the project."
