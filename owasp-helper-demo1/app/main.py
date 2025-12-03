@@ -4995,6 +4995,7 @@ body.light-theme {
 }
 body.light-theme .message { color: var(--text-primary); }
 body.light-theme .msg-agent { background: #e2e8f0; color: #1e293b; }
+body.light-theme .msg-assistant { background: #e2e8f0; color: #1e293b; border-left-color: var(--secondary); }
 body.light-theme .msg-user { background: var(--primary); color: white; }
 body.light-theme .msg-system { background: rgba(99, 102, 241, 0.15); color: #1e293b; }
 body.light-theme input, body.light-theme textarea { color: #1e293b; background: #f1f5f9; border-color: #cbd5e1; }
@@ -6692,6 +6693,39 @@ h1 {
   margin-left: 0.5rem;
   background: rgba(255,255,255,0.02);
   border-width: 1px;
+}
+
+/* Unassigned tasks drop area */
+.unassigned-tasks-area {
+  min-height: 60px;
+  padding: 0.5rem;
+  border-radius: 8px;
+  transition: background 0.2s, border-color 0.2s;
+}
+.unassigned-tasks-area.drag-over {
+  background: rgba(245, 158, 11, 0.1);
+  border: 2px dashed var(--warning);
+}
+.no-tasks-placeholder {
+  text-align: center;
+  color: var(--gray-500);
+  font-size: 0.85rem;
+  padding: 1rem;
+  border: 1px dashed var(--gray-600);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+}
+
+/* Dragging states */
+.report-task-group.dragging, .report-item.dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
+.report-item[draggable="true"] {
+  cursor: grab;
+}
+.report-item[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 /* Create Project Form */
@@ -10002,6 +10036,20 @@ main {
   border-bottom-left-radius: 4px;
   border-left: 3px solid var(--primary);
 }
+.msg-assistant {
+  background: rgba(255,255,255,0.05);
+  color: var(--gray-200);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+  border-left: 3px solid var(--secondary);
+}
+.msg-assistant pre, .msg-assistant code {
+  background: var(--darker);
+}
+.msg-assistant .code-block {
+  background: var(--darker);
+  border: 1px solid rgba(255,255,255,0.1);
+}
 .message-timestamp {
   font-size: 0.7rem;
   color: var(--gray-500);
@@ -10037,6 +10085,33 @@ main {
 .msg-agent img:hover {
   transform: scale(1.02);
 }
+
+/* Enhanced Markdown Styles for Chat Messages */
+.md-h1 { font-size: 1.5rem; font-weight: 700; margin: 1rem 0 0.5rem 0; color: var(--primary-light); border-bottom: 1px solid var(--gray-700); padding-bottom: 0.3rem; }
+.md-h2 { font-size: 1.25rem; font-weight: 600; margin: 0.8rem 0 0.4rem 0; color: var(--gray-100); }
+.md-h3 { font-size: 1.1rem; font-weight: 600; margin: 0.6rem 0 0.3rem 0; color: var(--gray-200); }
+.md-ul, .md-ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.md-ul { list-style-type: disc; }
+.md-ol { list-style-type: decimal; }
+.md-li, .md-oli { margin: 0.25rem 0; line-height: 1.5; }
+.md-hr { border: none; border-top: 1px solid var(--gray-600); margin: 1rem 0; }
+.md-link { color: var(--secondary); text-decoration: none; border-bottom: 1px dotted var(--secondary); }
+.md-link:hover { color: var(--primary-light); border-bottom-color: var(--primary-light); }
+.code-block { background: var(--darker); padding: 1rem; border-radius: 8px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; margin: 0.75rem 0; border: 1px solid rgba(255,255,255,0.1); }
+.code-block code { background: transparent; padding: 0; color: var(--gray-200); }
+.inline-code { background: rgba(99, 102, 241, 0.15); color: var(--primary-light); padding: 0.15rem 0.4rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
+.emoji-check { color: #22c55e; font-size: 1.1em; }
+.emoji-x { color: #ef4444; font-size: 1.1em; }
+
+/* Light theme markdown */
+body.light-theme .md-h1 { color: var(--primary); border-bottom-color: var(--gray-300); }
+body.light-theme .md-h2 { color: #1e293b; }
+body.light-theme .md-h3 { color: #334155; }
+body.light-theme .code-block { background: #f1f5f9; border-color: var(--gray-300); }
+body.light-theme .code-block code { color: #1e293b; }
+body.light-theme .inline-code { background: rgba(99, 102, 241, 0.1); color: var(--primary); }
+body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--primary); }
+
 /* Image modal for full-size view */
 .image-modal {
   display: none;
@@ -14061,8 +14136,16 @@ function renderGroupedReportsList(data) {
     });
   }
   
-  // Render unassigned tasks section
-  html += `<div class="reports-section-header" style="margin-top: 1rem;"><span>📋 Tasks</span></div>`;
+  // Render unassigned tasks section (with drop zone)
+  html += `
+    <div class="reports-section-header" style="margin-top: 1rem;">
+      <span>📋 Unassigned Tasks</span>
+    </div>
+    <div id="unassigned-tasks-area" class="unassigned-tasks-area"
+         ondragover="event.preventDefault(); this.classList.add('drag-over');"
+         ondragleave="this.classList.remove('drag-over');"
+         ondrop="dropTaskOnUnassigned(event)">
+  `;
   
   const taskIcons = {
     'pentest_web': '🌐',
@@ -14099,28 +14182,32 @@ function renderGroupedReportsList(data) {
             <span class="report-task-toggle">▶</span>
             <span class="report-task-icon">${icon}</span>
             <span class="report-task-prompt">${escapeHtml(promptPreview)}</span>
-            <span class="report-task-count">${reportCount} report${reportCount !== 1 ? 's' : ''}</span>
+            <span class="report-task-count">${reportCount} result${reportCount !== 1 ? 's' : ''}</span>
           </div>
           <div class="report-task-reports" id="task-reports-${taskId}" style="display: none;">
-            ${(taskData.reports || []).map(report => renderReportItem(report)).join('')}
+            ${(taskData.reports || []).map(report => renderReportItem(report, taskId)).join('')}
           </div>
         </div>
       `;
     });
+  } else {
+    html += `<div class="no-tasks-placeholder">Drag tasks here to unassign from projects</div>`;
   }
   
-  // Render ungrouped reports
+  html += `</div>`; // Close unassigned-tasks-area
+  
+  // Render ungrouped reports (orphan reports not associated with any task)
   if (ungroupedCount > 0) {
     html += `
       <div class="report-task-group ungrouped-reports">
         <div class="report-task-header" onclick="toggleReportTaskGroup('ungrouped')">
           <span class="report-task-toggle">▶</span>
           <span class="report-task-icon">📁</span>
-          <span class="report-task-prompt">Ungrouped Reports</span>
-          <span class="report-task-count">${ungroupedCount} report${ungroupedCount !== 1 ? 's' : ''}</span>
+          <span class="report-task-prompt">Orphan Results (no task)</span>
+          <span class="report-task-count">${ungroupedCount} result${ungroupedCount !== 1 ? 's' : ''}</span>
         </div>
         <div class="report-task-reports" id="task-reports-ungrouped" style="display: none;">
-          ${data.ungrouped.map(report => renderReportItem(report)).join('')}
+          ${data.ungrouped.map(report => renderReportItem(report, null)).join('')}
         </div>
       </div>
     `;
@@ -14154,10 +14241,10 @@ function renderDraggableTask(taskId, taskData, allTasks) {
         <span class="report-task-toggle">▶</span>
         <span class="report-task-icon">${icon}</span>
         <span class="report-task-prompt">${escapeHtml(promptPreview)}</span>
-        <span class="report-task-count">${reportCount}</span>
+        <span class="report-task-count">${reportCount} result${reportCount !== 1 ? 's' : ''}</span>
       </div>
       <div class="report-task-reports" id="task-reports-${taskId}" style="display: none;">
-        ${(taskData.reports || []).map(report => renderReportItem(report)).join('')}
+        ${(taskData.reports || []).map(report => renderReportItem(report, taskId)).join('')}
       </div>
     </div>
   `;
@@ -14165,32 +14252,110 @@ function renderDraggableTask(taskId, taskData, allTasks) {
 
 // Drag and drop functions
 function dragTask(event, taskId) {
-  event.dataTransfer.setData('text/plain', taskId);
+  event.stopPropagation();
+  event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'task', taskId: taskId }));
   event.dataTransfer.effectAllowed = 'move';
+  event.target.closest('.report-task-group')?.classList.add('dragging');
+}
+
+function dragReport(event, reportPath, taskId) {
+  event.stopPropagation();
+  event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'report', reportPath: reportPath, taskId: taskId }));
+  event.dataTransfer.effectAllowed = 'move';
+  event.target.closest('.report-item')?.classList.add('dragging');
 }
 
 async function dropTaskOnProject(event, projectId) {
   event.preventDefault();
+  event.stopPropagation();
   event.target.closest('.report-project-group')?.classList.remove('drag-over');
+  document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
   
-  const taskId = event.dataTransfer.getData('text/plain');
-  if (!taskId) return;
+  const dataStr = event.dataTransfer.getData('text/plain');
+  if (!dataStr) return;
   
   try {
-    const response = await fetch('/api/projects/' + projectId + '/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId })
-    });
+    const data = JSON.parse(dataStr);
     
-    if (response.ok) {
-      loadReportsDirectory();
-    } else {
-      alert('Failed to add task to project');
+    if (data.type === 'task') {
+      // Moving a task to project
+      const taskId = data.taskId;
+      
+      const response = await fetch('/api/projects/' + projectId + '/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId })
+      });
+      
+      if (response.ok) {
+        loadReportsDirectory();
+      } else {
+        const errData = await response.json();
+        alert('Failed to add task to project: ' + (errData.error || 'Unknown error'));
+      }
+    } else if (data.type === 'report') {
+      // Moving a report - would need to reassign to task first
+      alert('To move a report, drag its parent task to the project.');
     }
   } catch (err) {
-    console.error('Error adding task to project:', err);
-    alert('Failed to add task to project');
+    // Fallback for old format (just taskId string)
+    const taskId = dataStr;
+    if (!taskId || taskId.startsWith('{')) return;
+    
+    try {
+      const response = await fetch('/api/projects/' + projectId + '/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId })
+      });
+      
+      if (response.ok) {
+        loadReportsDirectory();
+      } else {
+        alert('Failed to add task to project');
+      }
+    } catch (e) {
+      console.error('Error adding task to project:', e);
+      alert('Failed to add task to project');
+    }
+  }
+}
+
+// Drop on "Unassigned" area to remove from project
+async function dropTaskOnUnassigned(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  document.getElementById('unassigned-tasks-area')?.classList.remove('drag-over');
+  document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+  
+  const dataStr = event.dataTransfer.getData('text/plain');
+  if (!dataStr) return;
+  
+  try {
+    const data = JSON.parse(dataStr);
+    if (data.type !== 'task') return;
+    
+    const taskId = data.taskId;
+    
+    // Find which project the task is in and remove it
+    if (reportsGroupedData && reportsGroupedData.projects) {
+      for (const [projectId, project] of Object.entries(reportsGroupedData.projects)) {
+        if (project.tasks && project.tasks.includes(taskId)) {
+          const response = await fetch('/api/projects/' + projectId + '/tasks/' + taskId, {
+            method: 'DELETE'
+          });
+          
+          if (response.ok) {
+            loadReportsDirectory();
+          } else {
+            alert('Failed to remove task from project');
+          }
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error removing task from project:', err);
   }
 }
 
@@ -14385,13 +14550,15 @@ async function deleteProject(projectId) {
   }
 }
 
-function renderReportItem(report) {
+function renderReportItem(report, taskId = null) {
   const icon = getReportIcon(report.type);
   const size = formatFileSize(report.size);
   const date = new Date(report.modified).toLocaleDateString();
+  const effectiveTaskId = taskId || report.task_id || '';
   
   return `
-    <div class="report-item" data-type="${report.type}" data-name="${report.name.toLowerCase()}" data-task-id="${report.task_id || ''}">
+    <div class="report-item" data-type="${report.type}" data-name="${report.name.toLowerCase()}" data-task-id="${effectiveTaskId}"
+         draggable="true" ondragstart="dragReport(event, '${escapeHtml(report.path)}', '${effectiveTaskId}')">
       <div class="report-icon">${icon}</div>
       <div class="report-info">
         <div class="report-name">${escapeHtml(report.name)}</div>
@@ -17767,14 +17934,67 @@ document.getElementById('image-modal').addEventListener('click', () => {
 });
 
 function formatContent(content) {
-  // Basic markdown-like formatting
-  return String(content)
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/```(\\w+)?\\n([\\s\\S]*?)```/g, '<pre><code>$2</code></pre>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
-    .replace(/\\n/g, '<br>');
+  // Enhanced markdown formatting with proper MD/HTML support
+  let text = String(content);
+  
+  // Escape HTML characters for safety (except in code blocks)
+  const codeBlocks = [];
+  text = text.replace(/```([\w]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+    codeBlocks.push(`<pre class="code-block ${lang}"><code>${escapeHtml(code.trim())}</code></pre>`);
+    return placeholder;
+  });
+  
+  // Inline code
+  text = text.replace(/`([^`]+)`/g, (match, code) => `<code class="inline-code">${escapeHtml(code)}</code>`);
+  
+  // Headers (## and ### etc)
+  text = text.replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>');
+  text = text.replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>');
+  text = text.replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>');
+  
+  // Bold and italic
+  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  
+  // Strikethrough
+  text = text.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  
+  // Unordered lists
+  text = text.replace(/^[\s]*[-*] (.+)$/gm, '<li class="md-li">$1</li>');
+  text = text.replace(/(<li class="md-li">.*<\/li>\n?)+/g, '<ul class="md-ul">$&</ul>');
+  
+  // Ordered lists
+  text = text.replace(/^[\s]*\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
+  text = text.replace(/(<li class="md-oli">.*<\/li>\n?)+/g, '<ol class="md-ol">$&</ol>');
+  
+  // Horizontal rule
+  text = text.replace(/^---$/gm, '<hr class="md-hr">');
+  
+  // Links
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="md-link">$1</a>');
+  
+  // Emoji checkboxes
+  text = text.replace(/✅/g, '<span class="emoji-check">✅</span>');
+  text = text.replace(/❌/g, '<span class="emoji-x">❌</span>');
+  
+  // Restore code blocks
+  codeBlocks.forEach((block, i) => {
+    text = text.replace(`__CODE_BLOCK_${i}__`, block);
+  });
+  
+  // Newlines to breaks (except within tags)
+  text = text.replace(/\n/g, '<br>');
+  
+  // Clean up excessive breaks after block elements
+  text = text.replace(/(<\/h[1-3]>)<br>/g, '$1');
+  text = text.replace(/(<\/ul>)<br>/g, '$1');
+  text = text.replace(/(<\/ol>)<br>/g, '$1');
+  text = text.replace(/(<\/pre>)<br>/g, '$1');
+  text = text.replace(/(<hr[^>]*>)<br>/g, '$1');
+  
+  return text;
 }
 
 function previewReport(btn, type) {
@@ -19195,16 +19415,49 @@ async def ws_endpoint(ws: WebSocket):
                     else:
                         history_msgs = []
                     
-                    # Add custom context if defined
-                    system_prompt = """You are an OWASP security assistant in Chat mode. You provide:
-- Quick security advice and explanations
-- OWASP guidance and best practices
-- General cybersecurity knowledge
-- Code review suggestions
+                    # Enhanced system prompt with project/note management capabilities
+                    system_prompt = """You are an OWASP security assistant in Chat mode with management capabilities.
 
-In Chat mode, you respond conversationally without running security tools.
-For active scanning, testing, or penetration testing, suggest the user switch to Agent mode.
-Be concise, helpful, and security-focused."""
+## Your Capabilities:
+- Security advice, OWASP guidance, and best practices
+- Code review and vulnerability explanations
+- Penetration testing methodology guidance
+- **Project Management**: Create, delete, rename projects
+- **Note Management**: Create, edit, delete, rename notes and folders
+
+## Action Commands:
+When the user wants to manage projects or notes, respond with BOTH a confirmation message AND the action command.
+Use these action commands in your response (they will be automatically processed):
+
+### Project Actions:
+- `[ACTION:CREATE_PROJECT:name:description:color]` - Create new project (color is optional hex like #22c55e)
+- `[ACTION:DELETE_PROJECT:name]` - Delete a project
+- `[ACTION:RENAME_PROJECT:old_name:new_name]` - Rename a project
+
+### Note Actions:
+- `[ACTION:CREATE_NOTE:name:content:folder]` - Create new note (folder is optional)
+- `[ACTION:UPDATE_NOTE:name:content]` - Update note content
+- `[ACTION:CREATE_FOLDER:name]` - Create note folder
+- `[ACTION:DELETE_NOTE:name]` - Delete a note
+- `[ACTION:DELETE_FOLDER:name]` - Delete a folder
+
+## Response Guidelines:
+1. Format responses with proper Markdown (headers, lists, code blocks)
+2. Be concise but thorough
+3. For active scanning/testing, suggest switching to Agent mode
+4. When executing actions, confirm what you did with a clear message
+
+## Examples:
+User: "Create a project called Test123"
+Response: "✅ Created project **Test123**!
+
+[ACTION:CREATE_PROJECT:Test123:New security assessment project:#22c55e]"
+
+User: "Create a note about XSS"
+Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
+
+[ACTION:CREATE_NOTE:XSS:# Cross-Site Scripting (XSS)\\n\\nXSS is a web security vulnerability...]"
+"""
                     
                     if custom_context and custom_context.strip():
                         system_prompt += f"\n\nAdditional user context:\n{custom_context}"
@@ -19241,10 +19494,162 @@ Be concise, helpful, and security-focused."""
                     
                     response_text = completion.choices[0].message.content
                     
+                    # Process action commands in response
+                    action_results = []
+                    import re
+                    action_pattern = r'\[ACTION:(CREATE_PROJECT|DELETE_PROJECT|RENAME_PROJECT|CREATE_NOTE|UPDATE_NOTE|CREATE_FOLDER|DELETE_NOTE|DELETE_FOLDER):([^\]]+)\]'
+                    actions = re.findall(action_pattern, response_text)
+                    
+                    for action_type, action_params in actions:
+                        parts = action_params.split(':')
+                        try:
+                            if action_type == "CREATE_PROJECT":
+                                name = parts[0] if len(parts) > 0 else "New Project"
+                                desc = parts[1] if len(parts) > 1 else ""
+                                color = parts[2] if len(parts) > 2 else "#22c55e"
+                                # Create project via API
+                                index = load_reports_index()
+                                project_id = f"project_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                                index.setdefault("projects", {})[project_id] = {
+                                    "name": name,
+                                    "description": desc,
+                                    "color": color,
+                                    "created_at": datetime.now().isoformat(),
+                                    "tasks": []
+                                }
+                                save_reports_index(index)
+                                action_results.append(f"✅ Project '{name}' created")
+                                
+                            elif action_type == "DELETE_PROJECT":
+                                name = parts[0]
+                                index = load_reports_index()
+                                for pid, proj in list(index.get("projects", {}).items()):
+                                    if proj.get("name", "").lower() == name.lower():
+                                        del index["projects"][pid]
+                                        save_reports_index(index)
+                                        action_results.append(f"✅ Project '{name}' deleted")
+                                        break
+                                        
+                            elif action_type == "RENAME_PROJECT":
+                                old_name = parts[0] if len(parts) > 0 else ""
+                                new_name = parts[1] if len(parts) > 1 else ""
+                                index = load_reports_index()
+                                for pid, proj in index.get("projects", {}).items():
+                                    if proj.get("name", "").lower() == old_name.lower():
+                                        proj["name"] = new_name
+                                        save_reports_index(index)
+                                        action_results.append(f"✅ Project renamed to '{new_name}'")
+                                        break
+                                        
+                            elif action_type == "CREATE_NOTE":
+                                name = parts[0] if len(parts) > 0 else "New Note"
+                                content = parts[1].replace('\\n', '\n') if len(parts) > 1 else ""
+                                folder = parts[2] if len(parts) > 2 else None
+                                # Create note
+                                notes_dir = Path("data/notes")
+                                notes_dir.mkdir(parents=True, exist_ok=True)
+                                note_id = f"note_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                                note_path = notes_dir / f"{note_id}.json"
+                                note_data = {
+                                    "id": note_id,
+                                    "name": name,
+                                    "content": content,
+                                    "folder": folder,
+                                    "created_at": datetime.now().isoformat(),
+                                    "updated_at": datetime.now().isoformat()
+                                }
+                                note_path.write_text(json.dumps(note_data, indent=2), encoding='utf-8')
+                                # Update index
+                                index_path = notes_dir / "index.json"
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                else:
+                                    idx = {"notes": [], "folders": []}
+                                idx["notes"].append({"id": note_id, "name": name, "folder": folder})
+                                index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                action_results.append(f"✅ Note '{name}' created")
+                                
+                            elif action_type == "UPDATE_NOTE":
+                                name = parts[0] if len(parts) > 0 else ""
+                                content = parts[1].replace('\\n', '\n') if len(parts) > 1 else ""
+                                notes_dir = Path("data/notes")
+                                index_path = notes_dir / "index.json"
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                    for note_info in idx.get("notes", []):
+                                        if note_info.get("name", "").lower() == name.lower():
+                                            note_path = notes_dir / f"{note_info['id']}.json"
+                                            if note_path.exists():
+                                                note_data = json.loads(note_path.read_text(encoding='utf-8'))
+                                                note_data["content"] = content
+                                                note_data["updated_at"] = datetime.now().isoformat()
+                                                note_path.write_text(json.dumps(note_data, indent=2), encoding='utf-8')
+                                                action_results.append(f"✅ Note '{name}' updated")
+                                            break
+                                            
+                            elif action_type == "CREATE_FOLDER":
+                                name = parts[0] if len(parts) > 0 else "New Folder"
+                                notes_dir = Path("data/notes")
+                                notes_dir.mkdir(parents=True, exist_ok=True)
+                                index_path = notes_dir / "index.json"
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                else:
+                                    idx = {"notes": [], "folders": []}
+                                folder_id = f"folder_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                                idx.setdefault("folders", []).append({"id": folder_id, "name": name})
+                                index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                action_results.append(f"✅ Folder '{name}' created")
+                                
+                            elif action_type == "DELETE_NOTE":
+                                name = parts[0] if len(parts) > 0 else ""
+                                notes_dir = Path("data/notes")
+                                index_path = notes_dir / "index.json"
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                    for i, note_info in enumerate(idx.get("notes", [])):
+                                        if note_info.get("name", "").lower() == name.lower():
+                                            note_path = notes_dir / f"{note_info['id']}.json"
+                                            if note_path.exists():
+                                                note_path.unlink()
+                                            idx["notes"].pop(i)
+                                            index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                            action_results.append(f"✅ Note '{name}' deleted")
+                                            break
+                                            
+                            elif action_type == "DELETE_FOLDER":
+                                name = parts[0] if len(parts) > 0 else ""
+                                notes_dir = Path("data/notes")
+                                index_path = notes_dir / "index.json"
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                    for i, folder_info in enumerate(idx.get("folders", [])):
+                                        if folder_info.get("name", "").lower() == name.lower():
+                                            idx["folders"].pop(i)
+                                            index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                            action_results.append(f"✅ Folder '{name}' deleted")
+                                            break
+                                            
+                        except Exception as e:
+                            action_results.append(f"⚠️ Action failed: {str(e)}")
+                    
+                    # Remove action commands from response for display
+                    display_response = re.sub(action_pattern, '', response_text).strip()
+                    
+                    # Append action results if any
+                    if action_results:
+                        # Send action notification
+                        await ws.send_text(json.dumps({
+                            "type": "system",
+                            "content": " | ".join(action_results),
+                            "chat_id": chat_id,
+                            "task_id": task_id
+                        }))
+                    
                     # Send the response
                     await ws.send_text(json.dumps({
                         "type": "assistant",
-                        "content": response_text,
+                        "content": display_response,
                         "chat_id": chat_id,
                         "task_id": task_id
                     }))
@@ -19259,7 +19664,7 @@ Be concise, helpful, and security-focused."""
                     })
                     chats_store[chat_id]["messages"].append({
                         "type": "assistant",
-                        "content": response_text,
+                        "content": display_response,  # Store cleaned response without action commands
                         "timestamp": time.time()
                     })
                     
