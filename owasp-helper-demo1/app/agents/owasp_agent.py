@@ -143,6 +143,14 @@ from app.tools.report_tools import (
     update_executive_summary,
     update_conclusion,
 )
+# VectorDB-based semantic memory tools
+from app.tools.memory_tools import (
+    save_to_memory,
+    search_memory,
+    clear_memory,
+    get_memory_status,
+    initialize_memory,
+)
 from app.tools.telegram_tool import (
     telegram_connect,
     telegram_set_chat,
@@ -424,6 +432,14 @@ def build_owasp_agent() -> CodeAgent:
         list_current_findings,
         update_executive_summary,
         update_conclusion,
+    ])
+    
+    # VectorDB-based semantic memory tools
+    tools.extend([
+        save_to_memory,
+        search_memory,
+        clear_memory,
+        get_memory_status,
     ])
     
     # Telegram integration tools

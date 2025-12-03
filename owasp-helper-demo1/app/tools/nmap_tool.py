@@ -11,6 +11,12 @@ try:
 except ImportError:
     save_task_output_as_report = None
 
+# Import the helper to save to vector memory
+try:
+    from .memory_tools import auto_save_scan_result
+except ImportError:
+    auto_save_scan_result = None
+
 @tool
 def nmap_scan(target: str, ports: str | None = None, flags: str | None = "-sV -T4") -> str:
     """Run a simple nmap scan (requires nmap installed on the system).
@@ -43,6 +49,13 @@ def nmap_scan(target: str, ports: str | None = None, flags: str | None = "-sV -T
                 save_task_output_as_report(output, "nmap", target, "txt")
             except Exception:
                 pass  # Don't fail the scan if report saving fails
+        
+        # Auto-save to vector memory for semantic search
+        if auto_save_scan_result and output:
+            try:
+                auto_save_scan_result("nmap", target, output, "port_scan")
+            except Exception:
+                pass  # Don't fail the scan if memory saving fails
         
         return output
     except Exception as e:  # pragma: no cover

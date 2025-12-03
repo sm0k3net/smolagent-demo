@@ -11,6 +11,14 @@ from app.tools.report_tools import (
     is_report_mode_enabled, get_report_data, add_recon_data,
     track_tool_usage, get_session_tools, set_current_task_id
 )
+# VectorDB-based semantic memory
+from app.tools.memory_tools import (
+    initialize_memory as init_vectordb_memory,
+    get_memory_stats,
+    search_relevant_context,
+    auto_save_conversation,
+    VECTORDB_AVAILABLE
+)
 from app.task_persistence import (
     get_task_persistence, TaskState, TaskStep, TaskStatus,
     build_resume_prompt
@@ -1764,6 +1772,15 @@ async def startup():
             task_persistence = get_task_persistence()
             task_persistence.start_auto_save()
             print(f"[TaskPersistence] Initialized. Resumable tasks: {len(task_persistence.get_resumable_tasks())}")
+            # Initialize VectorDB memory (if available)
+            if VECTORDB_AVAILABLE:
+                try:
+                    memory_result = init_vectordb_memory()
+                    print(f"[VectorDB] Memory initialized: {memory_result.get('status', 'unknown')}")
+                except Exception as e:
+                    print(f"[VectorDB] Memory initialization failed: {e}")
+            else:
+                print("[VectorDB] Not available - install with: pip install vectordb2")
             # Build agent
             agent = build_owasp_agent()
 
@@ -3113,6 +3130,54 @@ def load_reports_index():
 def save_reports_index(index_data):
     """Save the reports index file."""
     REPORTS_INDEX_FILE.write_text(json.dumps(index_data, indent=2), encoding='utf-8')
+
+# ============== VECTOR MEMORY ENDPOINTS ==============
+
+@app.get("/api/memory/status")
+async def get_memory_status_api():
+    """Get VectorDB memory status."""
+    if not VECTORDB_AVAILABLE:
+        return JSONResponse({
+            "available": False,
+            "error": "VectorDB not installed. Run: pip install vectordb2"
+        })
+    
+    stats = get_memory_stats()
+    return JSONResponse({
+        "available": True,
+        **stats
+    })
+
+@app.post("/api/memory/search")
+async def search_memory_api(data: dict):
+    """Search memory for relevant content."""
+    if not VECTORDB_AVAILABLE:
+        return JSONResponse({
+            "error": "VectorDB not available"
+        }, status_code=503)
+    
+    query = data.get("query", "")
+    top_n = data.get("top_n", 5)
+    
+    if not query:
+        return JSONResponse({"error": "Query is required"}, status_code=400)
+    
+    results = search_relevant_context(query, top_n=top_n)
+    return JSONResponse({
+        "query": query,
+        "results": results
+    })
+
+@app.post("/api/memory/initialize")
+async def initialize_memory_api():
+    """Initialize or reinitialize VectorDB memory."""
+    if not VECTORDB_AVAILABLE:
+        return JSONResponse({
+            "error": "VectorDB not installed. Run: pip install vectordb2"
+        }, status_code=503)
+    
+    result = init_vectordb_memory(force_reload=True)
+    return JSONResponse(result)
 
 # ============== PROJECTS ENDPOINTS ==============
 
