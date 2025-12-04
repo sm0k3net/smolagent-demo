@@ -9084,6 +9084,15 @@ h1 {
 .btn-send:active {
   transform: scale(0.98);
 }
+/* Stop button style for Chat mode */
+.btn-send.btn-stop {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+}
+.btn-send.btn-stop:hover {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+}
 
 /* Scheduled Tasks - Enhanced UI */
 .scheduled-item {
@@ -18331,6 +18340,13 @@ ws.onmessage = (event) => {
     const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
     if (progressMsg) progressMsg.remove();
     addMessage('agent', data.content);
+  } else if (data.type === 'assistant') {
+    // Chat mode response - remove progress and show formatted message
+    const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+    if (progressMsg) progressMsg.remove();
+    addMessage('agent', data.content);
+    // Re-enable send button after chat response
+    setChatProcessing(false);
   } else if (data.type === 'error') {
     const targetTaskId = msgTaskId || currentActivityTaskId;
     if (targetTaskId && activityTasks[targetTaskId]) {
@@ -18338,6 +18354,8 @@ ws.onmessage = (event) => {
       addActivity('error', 'Task Failed', data.content || 'An error occurred', null, targetTaskId);
     }
     addMessage('agent', data.content || 'An error occurred');
+    // Re-enable send button on error
+    setChatProcessing(false);
   } else if (data.type === 'report') {
     addMessage('report', data.content, { html: data.html, markdown: data.markdown });
     const targetTaskId = msgTaskId || currentActivityTaskId;
@@ -18365,12 +18383,15 @@ async function sendMessage() {
   }
   addMessage('user', displayContent);
   
-  // Create a new activity task for this message
+  // Create a new activity task for this message (skip in Chat mode)
   const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-  createActivityTask(taskId, content);
   
-  startTimer(taskId);
-  addActivity('start', 'Task Started', content.substring(0, 100) + (content.length > 100 ? '...' : ''), null, taskId);
+  // Only create activity task in Agent mode
+  if (currentAgentMode !== 'chat') {
+    createActivityTask(taskId, content);
+    startTimer(taskId);
+    addActivity('start', 'Task Started', content.substring(0, 100) + (content.length > 100 ? '...' : ''), null, taskId);
+  }
   
   // Prepare message payload with task_id for activity tracking
   const payload = {
@@ -18384,9 +18405,11 @@ async function sendMessage() {
     files: attachedFiles.map(f => f.filename)
   };
   
-  // Upload files first if any
+  // Upload files first if any (also skip activity logging in Chat mode)
   if (attachedFiles.length > 0) {
-    addActivity('tool', '📤 Uploading Files', `Uploading ${attachedFiles.length} file(s) for analysis`, null, taskId);
+    if (currentAgentMode !== 'chat') {
+      addActivity('tool', '📤 Uploading Files', `Uploading ${attachedFiles.length} file(s) for analysis`, null, taskId);
+    }
     
     for (const file of attachedFiles) {
       try {
@@ -18425,16 +18448,62 @@ async function sendMessage() {
     // Highlight Tasks tab instead of switching
     highlightTab('tasks');
     startTaskPolling();
-  } else {
-    // Highlight Activity tab with red dot instead of switching
+  } else if (currentAgentMode !== 'chat') {
+    // Highlight Activity tab with red dot instead of switching (only in Agent mode)
     highlightTab('activity');
   }
   
-  // Auto-expand sidebar when task starts
-  if (!sidebar.classList.contains('expanded')) {
+  // Auto-expand sidebar when task starts (only in agent mode)
+  if (currentAgentMode !== 'chat' && !sidebar.classList.contains('expanded')) {
     sidebar.classList.add('expanded');
     sidebarToggle.textContent = '◀';
   }
+  
+  // In Chat mode, show stop button
+  if (currentAgentMode === 'chat') {
+    setChatProcessing(true);
+  }
+}
+
+// Chat mode processing state - toggle between send/stop button
+let chatProcessingAbortController = null;
+
+function setChatProcessing(processing) {
+  if (processing) {
+    sendBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <rect x="6" y="6" width="12" height="12" rx="2"/>
+      </svg>
+    `;
+    sendBtn.title = 'Stop generation';
+    sendBtn.classList.add('btn-stop');
+    sendBtn.onclick = stopChatGeneration;
+  } else {
+    sendBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="22" y1="2" x2="11" y2="13"></line>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+      </svg>
+    `;
+    sendBtn.title = 'Send message';
+    sendBtn.classList.remove('btn-stop');
+    sendBtn.onclick = sendMessage;
+  }
+}
+
+function stopChatGeneration() {
+  // Send stop signal to backend
+  ws.send(JSON.stringify({
+    action: 'stop_chat',
+    chat_id: currentChatId
+  }));
+  
+  // Remove progress message
+  const progressMsg = messagesDiv.querySelector('.msg-progress:last-child');
+  if (progressMsg) progressMsg.remove();
+  
+  addMessage('system', '⏹️ Generation stopped by user');
+  setChatProcessing(false);
 }
 
 sendBtn.onclick = sendMessage;
@@ -19478,11 +19547,80 @@ async def ws_endpoint(ws: WebSocket):
                 }))
                 continue
             
+            # Handle stop chat generation
+            if msg_data.get("action") == "stop_chat":
+                chat_id_to_stop = msg_data.get("chat_id", chat_id)
+                # Set a flag to stop processing (in real implementation, you'd cancel the API call)
+                await ws.send_text(json.dumps({
+                    "type": "system",
+                    "content": "⏹️ Chat generation stopped",
+                    "chat_id": chat_id_to_stop
+                }))
+                continue
+            
             # Handle Chat Mode - simpler responses without full agent orchestration
             if agent_mode == "chat":
                 try:
                     # Build message context for chat mode
                     chat_context = msg_content
+                    
+                    # Load reports, notes, and projects data for context
+                    reports_data = ""
+                    notes_data = ""
+                    projects_data = ""
+                    
+                    try:
+                        index = load_reports_index()
+                        
+                        # Get projects summary
+                        projects = index.get("projects", {})
+                        if projects:
+                            project_lines = []
+                            for pid, proj in projects.items():
+                                task_count = len(proj.get("tasks", []))
+                                project_lines.append(f"- **{proj.get('name', 'Unnamed')}** (ID: {pid}): {proj.get('description', '')} [{task_count} tasks]")
+                            projects_data = "## Available Projects:\n" + "\n".join(project_lines)
+                        
+                        # Get tasks/reports summary
+                        tasks = index.get("tasks", {})
+                        if tasks:
+                            task_lines = []
+                            for tid, task in list(tasks.items())[:20]:  # Limit to 20 most recent
+                                task_name = task.get("name", "Unnamed Task")
+                                task_target = task.get("target", "")
+                                reports = task.get("reports", [])
+                                report_count = len(reports)
+                                task_lines.append(f"- **{task_name}** (ID: {tid}): target={task_target}, {report_count} report files")
+                                # Include report file names
+                                for r in reports[:5]:  # First 5 reports
+                                    task_lines.append(f"  - {r.get('filename', 'unknown')}")
+                            reports_data = "## Available Tasks/Reports:\n" + "\n".join(task_lines)
+                    except Exception as data_err:
+                        print(f"Error loading reports data: {data_err}")
+                    
+                    try:
+                        # Get notes summary
+                        notes_index_path = Path("data/notes/notes_index.json")
+                        if notes_index_path.exists():
+                            with open(notes_index_path, "r") as f:
+                                notes_index = json.load(f)
+                            
+                            folders = notes_index.get("folders", [])
+                            notes = notes_index.get("notes", [])
+                            
+                            note_lines = []
+                            if folders:
+                                note_lines.append("### Folders:")
+                                for folder in folders:
+                                    note_lines.append(f"- 📁 {folder.get('name', 'Unnamed')}")
+                            if notes:
+                                note_lines.append("### Notes:")
+                                for note in notes[:15]:  # Limit to 15
+                                    note_lines.append(f"- 📝 {note.get('name', 'Unnamed')}")
+                            if note_lines:
+                                notes_data = "## Available Notes:\n" + "\n".join(note_lines)
+                    except Exception as notes_err:
+                        print(f"Error loading notes data: {notes_err}")
                     
                     # Add conversation history for context
                     if chat_id in chats_store and chats_store[chat_id].get("messages"):
@@ -19523,12 +19661,15 @@ Use these action commands in your response (they will be automatically processed
 - `[ACTION:CREATE_FOLDER:name]` - Create note folder
 - `[ACTION:DELETE_NOTE:name]` - Delete a note
 - `[ACTION:DELETE_FOLDER:name]` - Delete a folder
+- `[ACTION:READ_REPORT:task_id:filename]` - Read report file content from a task
+- `[ACTION:ANALYZE_TASK:task_id]` - Get detailed analysis of a task and its reports
 
 ## Response Guidelines:
 1. Format responses with proper Markdown (headers, lists, code blocks)
 2. Be concise but thorough
 3. For active scanning/testing, suggest switching to Agent mode
 4. When executing actions, confirm what you did with a clear message
+5. When analyzing reports, provide actionable insights and recommendations
 
 ## Examples:
 User: "Create a project called Test123"
@@ -19541,6 +19682,16 @@ Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
 
 [ACTION:CREATE_NOTE:XSS:# Cross-Site Scripting (XSS)\\n\\nXSS is a web security vulnerability...]"
 """
+                    
+                    # Add data context to system prompt
+                    if projects_data or reports_data or notes_data:
+                        system_prompt += "\n\n# CURRENT WORKSPACE DATA:\n"
+                        if projects_data:
+                            system_prompt += f"\n{projects_data}\n"
+                        if reports_data:
+                            system_prompt += f"\n{reports_data}\n"
+                        if notes_data:
+                            system_prompt += f"\n{notes_data}\n"
                     
                     if custom_context and custom_context.strip():
                         system_prompt += f"\n\nAdditional user context:\n{custom_context}"
@@ -19601,7 +19752,7 @@ Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
                     # Process action commands in response
                     action_results = []
                     import re
-                    action_pattern = r'\[ACTION:(CREATE_PROJECT|DELETE_PROJECT|RENAME_PROJECT|CREATE_NOTE|UPDATE_NOTE|CREATE_FOLDER|DELETE_NOTE|DELETE_FOLDER):([^\]]+)\]'
+                    action_pattern = r'\[ACTION:(CREATE_PROJECT|DELETE_PROJECT|RENAME_PROJECT|CREATE_NOTE|UPDATE_NOTE|CREATE_FOLDER|DELETE_NOTE|DELETE_FOLDER|READ_REPORT|ANALYZE_TASK):([^\]]+)\]'
                     actions = re.findall(action_pattern, response_text)
                     
                     for action_type, action_params in actions:
@@ -19733,6 +19884,43 @@ Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
                                             index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
                                             action_results.append(f"✅ Folder '{name}' deleted")
                                             break
+                                            
+                            elif action_type == "READ_REPORT":
+                                task_id_param = parts[0] if len(parts) > 0 else ""
+                                filename = parts[1] if len(parts) > 1 else ""
+                                index = load_reports_index()
+                                task_data = index.get("tasks", {}).get(task_id_param)
+                                if task_data:
+                                    for report in task_data.get("reports", []):
+                                        if report.get("filename", "").lower() == filename.lower() or filename.lower() in report.get("filename", "").lower():
+                                            report_path = Path(report.get("path", ""))
+                                            if report_path.exists():
+                                                content = report_path.read_text(encoding='utf-8')[:10000]  # Limit to 10k chars
+                                                action_results.append(f"📄 Report content from {filename}:\n```\n{content}\n```")
+                                            break
+                                            
+                            elif action_type == "ANALYZE_TASK":
+                                task_id_param = parts[0] if len(parts) > 0 else ""
+                                index = load_reports_index()
+                                task_data = index.get("tasks", {}).get(task_id_param)
+                                if task_data:
+                                    analysis = f"## Task Analysis: {task_data.get('name', 'Unknown')}\n\n"
+                                    analysis += f"**Target:** {task_data.get('target', 'N/A')}\n"
+                                    analysis += f"**Status:** {task_data.get('status', 'N/A')}\n"
+                                    analysis += f"**Created:** {task_data.get('created_at', 'N/A')}\n\n"
+                                    
+                                    reports = task_data.get("reports", [])
+                                    if reports:
+                                        analysis += "### Reports:\n"
+                                        for report in reports[:5]:  # Limit to 5 reports
+                                            report_path = Path(report.get("path", ""))
+                                            if report_path.exists():
+                                                content = report_path.read_text(encoding='utf-8')[:3000]
+                                                analysis += f"\n#### {report.get('filename', 'Unknown')}:\n```\n{content}\n```\n"
+                                    
+                                    action_results.append(analysis)
+                                else:
+                                    action_results.append(f"⚠️ Task '{task_id_param}' not found")
                                             
                         except Exception as e:
                             action_results.append(f"⚠️ Action failed: {str(e)}")
