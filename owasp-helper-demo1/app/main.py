@@ -3824,6 +3824,14 @@ async def create_note_folder(data: dict):
     
     name = data.get("name", "New Folder")
     
+    # Check for duplicate folder name at root level
+    for existing_folder in notes_index.get("folders", []):
+        if existing_folder.get("name", "").lower() == name.lower():
+            return JSONResponse(
+                {"error": f"Folder '{name}' already exists"},
+                status_code=400
+            )
+    
     folder_id = str(notes_index.get("next_id", 1))
     notes_index["next_id"] = int(folder_id) + 1
     
@@ -19625,20 +19633,29 @@ async def ws_endpoint(ws: WebSocket):
                         notes_index_path = Path("data/notes/index.json")
                         if notes_index_path.exists():
                             with open(notes_index_path, "r") as f:
-                                notes_index = json.load(f)
+                                notes_idx = json.load(f)
                             
-                            folders = notes_index.get("folders", [])
-                            notes = notes_index.get("notes", [])
+                            folders = notes_idx.get("folders", [])
+                            files = notes_idx.get("files", [])
                             
                             note_lines = []
+                            
+                            # List folders with their contents
                             if folders:
                                 note_lines.append("### Folders:")
                                 for folder in folders:
-                                    note_lines.append(f"- 📁 {folder.get('name', 'Unnamed')}")
-                            if notes:
-                                note_lines.append("### Notes:")
-                                for note in notes[:15]:  # Limit to 15
-                                    note_lines.append(f"- 📝 {note.get('name', 'Unnamed')}")
+                                    note_lines.append(f"- 📁 **{folder.get('name', 'Unnamed')}** (ID: {folder.get('id', 'unknown')})")
+                                    # Show children in folder
+                                    for child in folder.get("children", [])[:5]:
+                                        if child.get("type") == "file":
+                                            note_lines.append(f"  - 📝 {child.get('name', 'Unnamed')}")
+                            
+                            # List root-level notes
+                            if files:
+                                note_lines.append("### Root Notes:")
+                                for note in files[:15]:  # Limit to 15
+                                    note_lines.append(f"- 📝 **{note.get('name', 'Unnamed')}** (ID: {note.get('id', 'unknown')})")
+                            
                             if note_lines:
                                 notes_data = "## Available Notes:\n" + "\n".join(note_lines)
                     except Exception as notes_err:
@@ -19906,39 +19923,83 @@ Response: (Look at the data, find the actual task_id, then use it)
                             elif action_type == "CREATE_NOTE":
                                 name = parts[0] if len(parts) > 0 else "New Note"
                                 content = parts[1].replace('\\n', '\n') if len(parts) > 1 else ""
-                                folder = parts[2] if len(parts) > 2 else None
-                                # Create note
+                                folder_name = parts[2] if len(parts) > 2 else None
+                                # Create note using correct structure
                                 notes_dir = Path("data/notes")
                                 notes_dir.mkdir(parents=True, exist_ok=True)
-                                note_id = f"note_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                                index_path = notes_dir / "index.json"
+                                
+                                # Load or create index with correct structure
+                                if index_path.exists():
+                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                else:
+                                    idx = {"files": [], "folders": [], "next_id": 1}
+                                
+                                # Generate proper note ID
+                                note_id = str(idx.get("next_id", 1))
+                                idx["next_id"] = int(note_id) + 1
+                                
+                                # Find folder ID if folder name provided
+                                folder_id = None
+                                if folder_name:
+                                    for folder in idx.get("folders", []):
+                                        if folder.get("name", "").lower() == folder_name.lower():
+                                            folder_id = folder.get("id")
+                                            break
+                                
+                                # Create note file
                                 note_path = notes_dir / f"{note_id}.json"
                                 note_data = {
                                     "id": note_id,
                                     "name": name,
                                     "content": content,
-                                    "folder": folder,
+                                    "attachments": [],
                                     "created_at": datetime.now().isoformat(),
                                     "updated_at": datetime.now().isoformat()
                                 }
+                                if folder_id:
+                                    note_data["folder_id"] = folder_id
                                 note_path.write_text(json.dumps(note_data, indent=2), encoding='utf-8')
-                                # Update index
-                                index_path = notes_dir / "index.json"
-                                if index_path.exists():
-                                    idx = json.loads(index_path.read_text(encoding='utf-8'))
+                                
+                                # Add to index
+                                note_entry = {"id": note_id, "name": name, "type": "file"}
+                                
+                                if folder_id:
+                                    # Add to folder's children
+                                    def add_to_folder_children(folders, target_id, entry):
+                                        for folder in folders:
+                                            if folder.get("id") == target_id:
+                                                folder.setdefault("children", []).append(entry)
+                                                return True
+                                            if "children" in folder:
+                                                if add_to_folder_children([c for c in folder["children"] if c.get("type") == "folder"], target_id, entry):
+                                                    return True
+                                        return False
+                                    
+                                    if not add_to_folder_children(idx.get("folders", []), folder_id, note_entry):
+                                        idx.setdefault("files", []).append(note_entry)
                                 else:
-                                    idx = {"notes": [], "folders": []}
-                                idx["notes"].append({"id": note_id, "name": name, "folder": folder})
+                                    idx.setdefault("files", []).append(note_entry)
+                                
                                 index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
-                                action_results.append(f"✅ Note '{name}' created")
+                                
+                                # Reload the global notes_index from file
+                                notes_index.clear()
+                                notes_index.update(idx)
+                                
+                                action_results.append(f"✅ Note '{name}' created (ID: {note_id})")
                                 
                             elif action_type == "UPDATE_NOTE":
                                 name = parts[0] if len(parts) > 0 else ""
                                 content = parts[1].replace('\\n', '\n') if len(parts) > 1 else ""
                                 notes_dir = Path("data/notes")
                                 index_path = notes_dir / "index.json"
+                                note_found = False
                                 if index_path.exists():
                                     idx = json.loads(index_path.read_text(encoding='utf-8'))
-                                    for note_info in idx.get("notes", []):
+                                    
+                                    # Search in files array
+                                    for note_info in idx.get("files", []):
                                         if note_info.get("name", "").lower() == name.lower():
                                             note_path = notes_dir / f"{note_info['id']}.json"
                                             if note_path.exists():
@@ -19947,37 +20008,119 @@ Response: (Look at the data, find the actual task_id, then use it)
                                                 note_data["updated_at"] = datetime.now().isoformat()
                                                 note_path.write_text(json.dumps(note_data, indent=2), encoding='utf-8')
                                                 action_results.append(f"✅ Note '{name}' updated")
+                                                note_found = True
                                             break
+                                    
+                                    # Also search in folder children if not found
+                                    if not note_found:
+                                        def find_in_folders(folders):
+                                            for folder in folders:
+                                                for child in folder.get("children", []):
+                                                    if child.get("type") == "file" and child.get("name", "").lower() == name.lower():
+                                                        return child.get("id")
+                                                    if child.get("type") == "folder":
+                                                        result = find_in_folders([child])
+                                                        if result:
+                                                            return result
+                                            return None
+                                        
+                                        found_id = find_in_folders(idx.get("folders", []))
+                                        if found_id:
+                                            note_path = notes_dir / f"{found_id}.json"
+                                            if note_path.exists():
+                                                note_data = json.loads(note_path.read_text(encoding='utf-8'))
+                                                note_data["content"] = content
+                                                note_data["updated_at"] = datetime.now().isoformat()
+                                                note_path.write_text(json.dumps(note_data, indent=2), encoding='utf-8')
+                                                action_results.append(f"✅ Note '{name}' updated")
+                                                note_found = True
+                                    
+                                    if not note_found:
+                                        action_results.append(f"⚠️ Note '{name}' not found")
                                             
                             elif action_type == "CREATE_FOLDER":
                                 name = parts[0] if len(parts) > 0 else "New Folder"
                                 notes_dir = Path("data/notes")
                                 notes_dir.mkdir(parents=True, exist_ok=True)
                                 index_path = notes_dir / "index.json"
+                                
+                                # Load or create index with correct structure
                                 if index_path.exists():
                                     idx = json.loads(index_path.read_text(encoding='utf-8'))
                                 else:
-                                    idx = {"notes": [], "folders": []}
-                                folder_id = f"folder_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-                                idx.setdefault("folders", []).append({"id": folder_id, "name": name})
-                                index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
-                                action_results.append(f"✅ Folder '{name}' created")
+                                    idx = {"files": [], "folders": [], "next_id": 1}
+                                
+                                # Check if folder already exists (prevent duplicates)
+                                for existing_folder in idx.get("folders", []):
+                                    if existing_folder.get("name", "").lower() == name.lower():
+                                        action_results.append(f"⚠️ Folder '{name}' already exists")
+                                        break
+                                else:
+                                    # Create folder with correct structure
+                                    folder_id = f"folder_{uuid.uuid4().hex[:8]}"
+                                    folder_entry = {
+                                        "id": folder_id,
+                                        "name": name,
+                                        "type": "folder",
+                                        "children": [],
+                                        "created_at": datetime.now().isoformat()
+                                    }
+                                    idx.setdefault("folders", []).append(folder_entry)
+                                    index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                    
+                                    # Reload the global notes_index from file
+                                    notes_index.clear()
+                                    notes_index.update(idx)
+                                    
+                                    action_results.append(f"✅ Folder '{name}' created (ID: {folder_id})")
                                 
                             elif action_type == "DELETE_NOTE":
                                 name = parts[0] if len(parts) > 0 else ""
                                 notes_dir = Path("data/notes")
                                 index_path = notes_dir / "index.json"
+                                note_deleted = False
                                 if index_path.exists():
                                     idx = json.loads(index_path.read_text(encoding='utf-8'))
-                                    for i, note_info in enumerate(idx.get("notes", [])):
+                                    
+                                    # Search in files array
+                                    for i, note_info in enumerate(idx.get("files", [])):
                                         if note_info.get("name", "").lower() == name.lower():
                                             note_path = notes_dir / f"{note_info['id']}.json"
                                             if note_path.exists():
                                                 note_path.unlink()
-                                            idx["notes"].pop(i)
+                                            idx["files"].pop(i)
                                             index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                            notes_index.clear()
+                                            notes_index.update(idx)
                                             action_results.append(f"✅ Note '{name}' deleted")
+                                            note_deleted = True
                                             break
+                                    
+                                    # Also search in folder children
+                                    if not note_deleted:
+                                        def delete_from_folders(folders):
+                                            for folder in folders:
+                                                for i, child in enumerate(folder.get("children", [])):
+                                                    if child.get("type") == "file" and child.get("name", "").lower() == name.lower():
+                                                        note_path = notes_dir / f"{child['id']}.json"
+                                                        if note_path.exists():
+                                                            note_path.unlink()
+                                                        folder["children"].pop(i)
+                                                        return True
+                                                    if child.get("type") == "folder":
+                                                        if delete_from_folders([child]):
+                                                            return True
+                                            return False
+                                        
+                                        if delete_from_folders(idx.get("folders", [])):
+                                            index_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
+                                            notes_index.clear()
+                                            notes_index.update(idx)
+                                            action_results.append(f"✅ Note '{name}' deleted")
+                                            note_deleted = True
+                                    
+                                    if not note_deleted:
+                                        action_results.append(f"⚠️ Note '{name}' not found")
                                             
                             elif action_type == "DELETE_FOLDER":
                                 name = parts[0] if len(parts) > 0 else ""
