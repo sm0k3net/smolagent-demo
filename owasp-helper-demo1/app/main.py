@@ -19572,25 +19572,47 @@ async def ws_endpoint(ws: WebSocket):
                     try:
                         index = load_reports_index()
                         
-                        # Get projects summary
+                        # Get projects summary with their tasks
                         projects = index.get("projects", {})
+                        tasks = index.get("tasks", {})
+                        
                         if projects:
                             project_lines = []
                             for pid, proj in projects.items():
-                                task_count = len(proj.get("tasks", []))
-                                project_lines.append(f"- **{proj.get('name', 'Unnamed')}** (ID: {pid}): {proj.get('description', '')} [{task_count} tasks]")
+                                proj_name = proj.get('name', 'Unnamed')
+                                proj_tasks = proj.get("tasks", [])
+                                task_count = len(proj_tasks)
+                                project_lines.append(f"### Project: **{proj_name}** (ID: {pid})")
+                                project_lines.append(f"  - Description: {proj.get('description', 'No description')}")
+                                project_lines.append(f"  - Tasks in project: {task_count}")
+                                
+                                # List tasks in this project
+                                for task_id in proj_tasks[:10]:  # Limit to 10 per project
+                                    task_data = tasks.get(task_id, {})
+                                    if task_data:
+                                        task_name = task_data.get("name", "Unnamed")
+                                        reports = task_data.get("reports", [])
+                                        project_lines.append(f"    - Task: **{task_name}** (ID: {task_id}) - {len(reports)} reports")
+                                        for r in reports[:3]:
+                                            project_lines.append(f"      - 📄 {r.get('filename', 'unknown')}")
+                                
                             projects_data = "## Available Projects:\n" + "\n".join(project_lines)
                         
-                        # Get tasks/reports summary
-                        tasks = index.get("tasks", {})
+                        # Get all tasks/reports summary (including unassigned)
                         if tasks:
+                            # Find tasks not in any project
+                            assigned_tasks = set()
+                            for proj in projects.values():
+                                assigned_tasks.update(proj.get("tasks", []))
+                            
                             task_lines = []
                             for tid, task in list(tasks.items())[:20]:  # Limit to 20 most recent
                                 task_name = task.get("name", "Unnamed Task")
                                 task_target = task.get("target", "")
                                 reports = task.get("reports", [])
                                 report_count = len(reports)
-                                task_lines.append(f"- **{task_name}** (ID: {tid}): target={task_target}, {report_count} report files")
+                                in_project = "✓ in project" if tid in assigned_tasks else "unassigned"
+                                task_lines.append(f"- **{task_name}** (ID: {tid}): target={task_target}, {report_count} reports [{in_project}]")
                                 # Include report file names
                                 for r in reports[:5]:  # First 5 reports
                                     task_lines.append(f"  - {r.get('filename', 'unknown')}")
@@ -19599,8 +19621,8 @@ async def ws_endpoint(ws: WebSocket):
                         print(f"Error loading reports data: {data_err}")
                     
                     try:
-                        # Get notes summary
-                        notes_index_path = Path("data/notes/notes_index.json")
+                        # Get notes summary - use correct path: data/notes/index.json
+                        notes_index_path = Path("data/notes/index.json")
                         if notes_index_path.exists():
                             with open(notes_index_path, "r") as f:
                                 notes_index = json.load(f)
@@ -19637,61 +19659,71 @@ async def ws_endpoint(ws: WebSocket):
                         history_msgs = []
                     
                     # Enhanced system prompt with project/note management capabilities
-                    system_prompt = """You are an OWASP security assistant in Chat mode with management capabilities.
+                    system_prompt = """You are an OWASP security assistant in Chat mode with FULL ACCESS to the user's workspace data.
+
+## IMPORTANT: You have access to all projects, tasks, reports, and notes listed at the end of this prompt under "CURRENT WORKSPACE DATA". 
+## Use this data to answer user questions. Do NOT tell the user you cannot access their data - you CAN and MUST use it.
 
 ## Your Capabilities:
-- Security advice, OWASP guidance, and best practices
-- Code review and vulnerability explanations
-- Penetration testing methodology guidance
+- **VIEW & ANALYZE**: You can see all projects, tasks, reports, and notes listed below
+- **Security advice**: OWASP guidance, vulnerability explanations, best practices
+- **Report Analysis**: Analyze scan results and provide recommendations
 - **Project Management**: Create, delete, rename projects
 - **Note Management**: Create, edit, delete, rename notes and folders
 
 ## Action Commands:
-When the user wants to manage projects or notes, respond with BOTH a confirmation message AND the action command.
-Use these action commands in your response (they will be automatically processed):
+When the user wants to manage projects/notes OR read report content, include the action command in your response.
+These commands are processed automatically by the system:
+
+### Reading Data:
+- `[ACTION:READ_REPORT:task_id:filename]` - Read full report file content
+- `[ACTION:ANALYZE_TASK:task_id]` - Get detailed task analysis with all reports
 
 ### Project Actions:
-- `[ACTION:CREATE_PROJECT:name:description:color]` - Create new project (color is optional hex like #22c55e)
+- `[ACTION:CREATE_PROJECT:name:description:color]` - Create new project
 - `[ACTION:DELETE_PROJECT:name]` - Delete a project
 - `[ACTION:RENAME_PROJECT:old_name:new_name]` - Rename a project
 
 ### Note Actions:
-- `[ACTION:CREATE_NOTE:name:content:folder]` - Create new note (folder is optional)
+- `[ACTION:CREATE_NOTE:name:content:folder]` - Create new note
 - `[ACTION:UPDATE_NOTE:name:content]` - Update note content
 - `[ACTION:CREATE_FOLDER:name]` - Create note folder
 - `[ACTION:DELETE_NOTE:name]` - Delete a note
 - `[ACTION:DELETE_FOLDER:name]` - Delete a folder
-- `[ACTION:READ_REPORT:task_id:filename]` - Read report file content from a task
-- `[ACTION:ANALYZE_TASK:task_id]` - Get detailed analysis of a task and its reports
 
 ## Response Guidelines:
-1. Format responses with proper Markdown (headers, lists, code blocks)
-2. Be concise but thorough
-3. For active scanning/testing, suggest switching to Agent mode
-4. When executing actions, confirm what you did with a clear message
-5. When analyzing reports, provide actionable insights and recommendations
+1. When user asks about projects/tasks/reports, use the data provided below
+2. For scanning/testing, suggest switching to Agent mode
+3. Format responses with proper Markdown
+4. When reading reports, use the action commands to get full content
 
 ## Examples:
-User: "Create a project called Test123"
-Response: "✅ Created project **Test123**!
+User: "What projects do I have?"
+Response: Look at the CURRENT WORKSPACE DATA section and list them.
 
-[ACTION:CREATE_PROJECT:Test123:New security assessment project:#22c55e]"
+User: "Analyze the report from task X"
+Response: "Let me analyze that report for you.
 
-User: "Create a note about XSS"
-Response: "✅ Created note **XSS** with an overview of Cross-Site Scripting!
-
-[ACTION:CREATE_NOTE:XSS:# Cross-Site Scripting (XSS)\\n\\nXSS is a web security vulnerability...]"
+[ACTION:ANALYZE_TASK:task_id_here]"
 """
                     
-                    # Add data context to system prompt
+                    # Add data context to system prompt - this is critical for the agent to see user's data
                     if projects_data or reports_data or notes_data:
-                        system_prompt += "\n\n# CURRENT WORKSPACE DATA:\n"
+                        system_prompt += "\n\n# ═══════════════════════════════════════════════════════════════"
+                        system_prompt += "\n# CURRENT WORKSPACE DATA (YOU HAVE ACCESS TO ALL OF THIS):"
+                        system_prompt += "\n# ═══════════════════════════════════════════════════════════════\n"
                         if projects_data:
                             system_prompt += f"\n{projects_data}\n"
                         if reports_data:
                             system_prompt += f"\n{reports_data}\n"
                         if notes_data:
                             system_prompt += f"\n{notes_data}\n"
+                        system_prompt += "\n# ═══════════════════════════════════════════════════════════════\n"
+                    else:
+                        system_prompt += "\n\n# CURRENT WORKSPACE DATA: No projects, tasks, or notes found yet.\n"
+                    
+                    # Debug: Print what data was loaded
+                    print(f"[Chat Mode] Data loaded - Projects: {bool(projects_data)}, Reports: {bool(reports_data)}, Notes: {bool(notes_data)}")
                     
                     if custom_context and custom_context.strip():
                         system_prompt += f"\n\nAdditional user context:\n{custom_context}"
