@@ -19644,40 +19644,50 @@ async def ws_endpoint(ws: WebSocket):
                     except Exception as notes_err:
                         print(f"Error loading notes data: {notes_err}")
                     
-                    # Add conversation history for context
+                    # Add conversation history for context - limit to last 3 exchanges to prevent re-answering
+                    history_msgs = []
                     if chat_id in chats_store and chats_store[chat_id].get("messages"):
                         messages = chats_store[chat_id]["messages"]
                         conversation = [m for m in messages if m.get("type") in ("user", "assistant")]
-                        recent = conversation[-10:] if len(conversation) > 10 else conversation
+                        # Only include last 3 exchanges (6 messages) for context, not more
+                        recent = conversation[-6:] if len(conversation) > 6 else conversation
                         if recent:
-                            history_msgs = []
                             for m in recent:
                                 role = "user" if m.get("type") == "user" else "assistant"
-                                content = m.get("content", "")[:1500]
+                                # Truncate long messages more aggressively
+                                content = m.get("content", "")[:500]
                                 history_msgs.append({"role": role, "content": content})
-                    else:
-                        history_msgs = []
                     
                     # Enhanced system prompt with project/note management capabilities
                     system_prompt = """You are an OWASP security assistant in Chat mode with FULL ACCESS to the user's workspace data.
 
+## CRITICAL INSTRUCTION: 
+- Only answer the user's CURRENT/LATEST question. Do NOT re-answer previous questions from conversation history.
+- The conversation history is for context only - focus on the NEW question.
+
 ## IMPORTANT: You have access to all projects, tasks, reports, and notes listed at the end of this prompt under "CURRENT WORKSPACE DATA". 
 ## Use this data to answer user questions. Do NOT tell the user you cannot access their data - you CAN and MUST use it.
+## When referencing tasks, use the ACTUAL task IDs shown in the data (e.g., task_1234567890_abc123), not placeholders.
 
 ## Your Capabilities:
 - **VIEW & ANALYZE**: You can see all projects, tasks, reports, and notes listed below
+- **MOVE TASKS**: You can move tasks between projects
 - **Security advice**: OWASP guidance, vulnerability explanations, best practices
 - **Report Analysis**: Analyze scan results and provide recommendations
-- **Project Management**: Create, delete, rename projects
+- **Project Management**: Create, delete, rename projects, move tasks
 - **Note Management**: Create, edit, delete, rename notes and folders
 
 ## Action Commands:
-When the user wants to manage projects/notes OR read report content, include the action command in your response.
+When the user wants to manage data, include the action command in your response.
 These commands are processed automatically by the system:
 
 ### Reading Data:
-- `[ACTION:READ_REPORT:task_id:filename]` - Read full report file content
+- `[ACTION:READ_REPORT:task_id:filename]` - Read full report file content (use actual task_id from data)
 - `[ACTION:ANALYZE_TASK:task_id]` - Get detailed task analysis with all reports
+
+### Task Actions:
+- `[ACTION:MOVE_TASK:task_id:target_project_name]` - Move a task to another project
+- `[ACTION:MOVE_ALL_TASKS:source_project_name:target_project_name]` - Move ALL tasks from one project to another
 
 ### Project Actions:
 - `[ACTION:CREATE_PROJECT:name:description:color]` - Create new project
@@ -19692,19 +19702,23 @@ These commands are processed automatically by the system:
 - `[ACTION:DELETE_FOLDER:name]` - Delete a folder
 
 ## Response Guidelines:
-1. When user asks about projects/tasks/reports, use the data provided below
-2. For scanning/testing, suggest switching to Agent mode
-3. Format responses with proper Markdown
-4. When reading reports, use the action commands to get full content
+1. ONLY answer the current question - don't repeat answers to old questions
+2. When user asks about projects/tasks/reports, use the ACTUAL data provided below
+3. Use REAL task IDs from the workspace data, not placeholder text like "task_id_here"
+4. For scanning/testing, suggest switching to Agent mode
+5. Format responses with proper Markdown
 
 ## Examples:
-User: "What projects do I have?"
-Response: Look at the CURRENT WORKSPACE DATA section and list them.
+User: "Move all tasks from ProjectA to ProjectB"
+Response: "✅ Moving all tasks from ProjectA to ProjectB.
 
-User: "Analyze the report from task X"
-Response: "Let me analyze that report for you.
+[ACTION:MOVE_ALL_TASKS:ProjectA:ProjectB]"
 
-[ACTION:ANALYZE_TASK:task_id_here]"
+User: "Analyze the nmap scan from project test555"
+Response: (Look at the data, find the actual task_id, then use it)
+"Let me analyze the nmap scan results.
+
+[ACTION:ANALYZE_TASK:task_1234567890_abc123]"
 """
                     
                     # Add data context to system prompt - this is critical for the agent to see user's data
@@ -19784,13 +19798,74 @@ Response: "Let me analyze that report for you.
                     # Process action commands in response
                     action_results = []
                     import re
-                    action_pattern = r'\[ACTION:(CREATE_PROJECT|DELETE_PROJECT|RENAME_PROJECT|CREATE_NOTE|UPDATE_NOTE|CREATE_FOLDER|DELETE_NOTE|DELETE_FOLDER|READ_REPORT|ANALYZE_TASK):([^\]]+)\]'
+                    action_pattern = r'\[ACTION:(CREATE_PROJECT|DELETE_PROJECT|RENAME_PROJECT|CREATE_NOTE|UPDATE_NOTE|CREATE_FOLDER|DELETE_NOTE|DELETE_FOLDER|READ_REPORT|ANALYZE_TASK|MOVE_TASK|MOVE_ALL_TASKS):([^\]]+)\]'
                     actions = re.findall(action_pattern, response_text)
                     
                     for action_type, action_params in actions:
                         parts = action_params.split(':')
                         try:
-                            if action_type == "CREATE_PROJECT":
+                            if action_type == "MOVE_TASK":
+                                task_id_to_move = parts[0] if len(parts) > 0 else ""
+                                target_project_name = parts[1] if len(parts) > 1 else ""
+                                index = load_reports_index()
+                                
+                                # Find target project
+                                target_project_id = None
+                                for pid, proj in index.get("projects", {}).items():
+                                    if proj.get("name", "").lower() == target_project_name.lower():
+                                        target_project_id = pid
+                                        break
+                                
+                                if target_project_id and task_id_to_move in index.get("tasks", {}):
+                                    # Remove from all projects first
+                                    for pid, proj in index.get("projects", {}).items():
+                                        if task_id_to_move in proj.get("tasks", []):
+                                            proj["tasks"].remove(task_id_to_move)
+                                    
+                                    # Add to target project
+                                    index["projects"][target_project_id].setdefault("tasks", []).append(task_id_to_move)
+                                    save_reports_index(index)
+                                    action_results.append(f"✅ Moved task to '{target_project_name}'")
+                                else:
+                                    action_results.append(f"⚠️ Could not find task or project")
+                                    
+                            elif action_type == "MOVE_ALL_TASKS":
+                                source_project_name = parts[0] if len(parts) > 0 else ""
+                                target_project_name = parts[1] if len(parts) > 1 else ""
+                                index = load_reports_index()
+                                
+                                # Find source and target projects
+                                source_project_id = None
+                                target_project_id = None
+                                for pid, proj in index.get("projects", {}).items():
+                                    if proj.get("name", "").lower() == source_project_name.lower():
+                                        source_project_id = pid
+                                    if proj.get("name", "").lower() == target_project_name.lower():
+                                        target_project_id = pid
+                                
+                                if source_project_id and target_project_id:
+                                    source_tasks = index["projects"][source_project_id].get("tasks", [])
+                                    task_count = len(source_tasks)
+                                    
+                                    # Move all tasks
+                                    target_tasks = index["projects"][target_project_id].setdefault("tasks", [])
+                                    for tid in source_tasks:
+                                        if tid not in target_tasks:
+                                            target_tasks.append(tid)
+                                    
+                                    # Clear source project tasks
+                                    index["projects"][source_project_id]["tasks"] = []
+                                    save_reports_index(index)
+                                    action_results.append(f"✅ Moved {task_count} tasks from '{source_project_name}' to '{target_project_name}'")
+                                else:
+                                    missing = []
+                                    if not source_project_id:
+                                        missing.append(f"source '{source_project_name}'")
+                                    if not target_project_id:
+                                        missing.append(f"target '{target_project_name}'")
+                                    action_results.append(f"⚠️ Could not find project(s): {', '.join(missing)}")
+                                    
+                            elif action_type == "CREATE_PROJECT":
                                 name = parts[0] if len(parts) > 0 else "New Project"
                                 desc = parts[1] if len(parts) > 1 else ""
                                 color = parts[2] if len(parts) > 2 else "#22c55e"
