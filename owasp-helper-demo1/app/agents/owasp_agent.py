@@ -100,6 +100,16 @@ from app.tools.pentest_tools import (
     install_system_tool,
     install_cloudflared,
     check_and_install_dependencies,
+    # Advanced bug bounty tools
+    arjun_scan,
+    paramspider_scan,
+    jwt_analyze,
+    jwt_forge,
+    graphql_introspection,
+    race_condition_test,
+    ssrf_payloads,
+    xss_payloads,
+    idor_payloads,
 )
 from app.tools.report_tools import (
     enable_report_mode,
@@ -378,6 +388,19 @@ def build_owasp_agent() -> CodeAgent:
         hydra_http_form_brute,
         nmap_with_brute,
         check_proxy_status,
+    ])
+    
+    # Advanced bug bounty tools
+    tools.extend([
+        arjun_scan,
+        paramspider_scan,
+        jwt_analyze,
+        jwt_forge,
+        graphql_introspection,
+        race_condition_test,
+        ssrf_payloads,
+        xss_payloads,
+        idor_payloads,
     ])
     
     # Installation tools
