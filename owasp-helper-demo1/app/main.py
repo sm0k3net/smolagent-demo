@@ -1771,7 +1771,35 @@ async def startup():
             # Initialize task persistence (loads interrupted tasks)
             task_persistence = get_task_persistence()
             task_persistence.start_auto_save()
-            print(f"[TaskPersistence] Initialized. Resumable tasks: {len(task_persistence.get_resumable_tasks())}")
+            resumable_tasks = task_persistence.get_resumable_tasks()
+            print(f"[TaskPersistence] Initialized. Resumable tasks: {len(resumable_tasks)}")
+            
+            # Populate activity_state_store from persisted tasks so clients can restore them
+            for task in resumable_tasks:
+                # Convert steps to activity log format
+                logs = []
+                for step in task.steps:
+                    step_type = step.step_type  # 'thought', 'tool', 'observation', etc.
+                    if step_type == "thought" and step.content:
+                        logs.append({"type": "thought", "title": "Thinking...", "content": step.content[:500]})
+                    elif step_type == "tool" and step.tool_name:
+                        logs.append({"type": "tool", "title": f"Using {step.tool_name}", "content": str(step.tool_args or "")[:300]})
+                    elif step_type == "observation" and step.tool_result:
+                        logs.append({"type": "observation", "title": "Tool Result", "content": str(step.tool_result)[:500]})
+                
+                update_activity_state(
+                    task.task_id,
+                    prompt=task.prompt[:200] if task.prompt else "",
+                    status=task.status.value if hasattr(task.status, 'value') else str(task.status),
+                    startTime=(task.started_at or task.created_at or time.time()) * 1000,
+                    stepCount=task.current_step or 0,
+                    toolCount=task.tool_count or 0,
+                    taskLabel=task.task_label or "general",
+                    targetType=task.target_type,
+                    logs=logs  # Reconstructed from steps
+                )
+            if resumable_tasks:
+                print(f"[ActivityState] Restored {len(resumable_tasks)} tasks to activity monitor")
             # Initialize VectorDB memory (if available)
             if VECTORDB_AVAILABLE:
                 try:
@@ -3588,7 +3616,9 @@ notes_index = load_notes_index()
 
 @app.get("/api/notes")
 async def get_notes():
-    """Get notes tree structure."""
+    """Get notes tree structure - always reload from file to pick up agent changes."""
+    global notes_index
+    notes_index = load_notes_index()
     return JSONResponse(notes_index)
 
 @app.post("/api/notes")
@@ -3725,7 +3755,7 @@ async def save_note_version(note_id: str, data: dict = None):
         # Create version snapshot
         version_name = (data or {}).get("name", f"Version {len(note_data['versions']) + 1}")
         version = {
-            "id": str(uuid4()),
+            "id": str(uuid.uuid4()),
             "name": version_name,
             "content": note_data.get("content", ""),
             "created_at": datetime.now().isoformat()
@@ -3782,7 +3812,7 @@ async def restore_note_version(note_id: str, version_id: str):
         
         # Save current content as a version before restoring
         current_version = {
-            "id": str(uuid4()),
+            "id": str(uuid.uuid4()),
             "name": f"Auto-save before restore",
             "content": note_data.get("content", ""),
             "created_at": datetime.now().isoformat()
@@ -6267,6 +6297,184 @@ h1 {
   padding: 0.65rem;
   font-size: 0.85rem;
   justify-content: center;
+}
+
+/* ============================================= */
+/* Toast Notifications */
+/* ============================================= */
+.toast-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1.25rem;
+  background: var(--dark);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 10000;
+  animation: toast-slide-in 0.3s ease-out;
+  max-width: 400px;
+}
+@keyframes toast-slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.toast-fade-out {
+  animation: toast-fade 0.3s ease-out forwards;
+}
+@keyframes toast-fade {
+  to { transform: translateX(100%); opacity: 0; }
+}
+.toast-icon { font-size: 1.25rem; }
+.toast-message { color: var(--light); font-size: 0.9rem; flex: 1; }
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--gray-400);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.toast-close:hover { color: var(--light); }
+.toast-success { border-left: 4px solid var(--success); }
+.toast-error { border-left: 4px solid var(--danger); }
+.toast-warning { border-left: 4px solid var(--warning); }
+.toast-info { border-left: 4px solid var(--primary); }
+
+/* ============================================= */
+/* Notes Modal - Premium Design */
+/* ============================================= */
+.notes-modal-overlay {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.75);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+  animation: modal-fade-in 0.2s ease-out;
+}
+@keyframes modal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.notes-modal {
+  background: var(--dark);
+  border-radius: 16px;
+  min-width: 380px;
+  max-width: 480px;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  animation: modal-scale-in 0.25s ease-out;
+  overflow: hidden;
+}
+@keyframes modal-scale-in {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.notes-modal-header {
+  padding: 1.25rem 1.5rem;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(22, 163, 74, 0.08) 100%);
+  border-bottom: 1px solid rgba(34, 197, 94, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.notes-modal-header-danger {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(220, 38, 38, 0.08) 100%);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+}
+.notes-modal-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+.notes-modal-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3) 0%, rgba(22, 163, 74, 0.2) 100%);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.2);
+  font-size: 1.25rem;
+}
+.notes-modal-icon-danger {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.3) 0%, rgba(220, 38, 38, 0.2) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+.notes-modal-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--light);
+  margin: 0;
+}
+.notes-modal-subtitle {
+  font-size: 0.8rem;
+  color: var(--gray-400);
+  margin-top: 4px;
+}
+.notes-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--gray-400);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s;
+}
+.notes-modal-close:hover { color: var(--light); }
+.notes-modal-body {
+  padding: 1.25rem 1.5rem;
+}
+.notes-modal-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+.notes-modal-input:hover {
+  border-color: rgba(255,255,255,0.25);
+}
+.notes-modal-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+.notes-modal-footer {
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.2);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+.notes-modal-footer .btn {
+  min-width: 100px;
+  justify-content: center;
+}
+.btn-danger {
+  background: linear-gradient(135deg, var(--danger) 0%, #dc2626 100%);
+  color: white;
+}
+.btn-danger:hover {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
 }
 
 /* Schedule Templates Section */
@@ -12674,6 +12882,138 @@ sidebarToggle.onclick = () => {
   sidebar.classList.toggle('expanded');
 };
 
+// =============================================
+// Notification and Modal Utilities
+// =============================================
+
+// Show toast notification
+function showNotification(message, type = 'info') {
+  // Remove existing notifications
+  document.querySelectorAll('.toast-notification').forEach(n => n.remove());
+  
+  const toast = document.createElement('div');
+  toast.className = `toast-notification toast-${type}`;
+  
+  const icons = {
+    success: '✅',
+    error: '❌',
+    warning: '⚠️',
+    info: 'ℹ️'
+  };
+  
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || icons.info}</span>
+    <span class="toast-message">${message}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  
+  document.body.appendChild(toast);
+  
+  // Auto-remove after 4 seconds
+  setTimeout(() => {
+    if (toast.parentElement) {
+      toast.classList.add('toast-fade-out');
+      setTimeout(() => toast.remove(), 300);
+    }
+  }, 4000);
+}
+
+// Styled prompt modal (replaces browser prompt)
+function showPromptModal(title, message, defaultValue = '', placeholder = '') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay notes-modal-overlay';
+    overlay.innerHTML = `
+      <div class="notes-modal">
+        <div class="notes-modal-header">
+          <div class="notes-modal-title-wrapper">
+            <div class="notes-modal-icon">📝</div>
+            <div>
+              <h3 class="notes-modal-title">${title}</h3>
+              <p class="notes-modal-subtitle">${message}</p>
+            </div>
+          </div>
+          <button class="notes-modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+        </div>
+        <div class="notes-modal-body">
+          <input type="text" class="notes-modal-input" value="${defaultValue}" placeholder="${placeholder || 'Enter value...'}" autofocus>
+        </div>
+        <div class="notes-modal-footer">
+          <button class="btn btn-secondary notes-modal-cancel">Cancel</button>
+          <button class="btn btn-primary notes-modal-confirm">Confirm</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    const input = overlay.querySelector('.notes-modal-input');
+    const confirmBtn = overlay.querySelector('.notes-modal-confirm');
+    const cancelBtn = overlay.querySelector('.notes-modal-cancel');
+    
+    input.focus();
+    input.select();
+    
+    const close = (value) => {
+      overlay.remove();
+      resolve(value);
+    };
+    
+    confirmBtn.onclick = () => close(input.value);
+    cancelBtn.onclick = () => close(null);
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') close(input.value);
+      if (e.key === 'Escape') close(null);
+    };
+  });
+}
+
+// Styled confirm modal (replaces browser confirm)
+function showConfirmModal(title, message, confirmText = 'Confirm', isDanger = false) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay notes-modal-overlay';
+    overlay.innerHTML = `
+      <div class="notes-modal">
+        <div class="notes-modal-header ${isDanger ? 'notes-modal-header-danger' : ''}">
+          <div class="notes-modal-title-wrapper">
+            <div class="notes-modal-icon ${isDanger ? 'notes-modal-icon-danger' : ''}">${isDanger ? '⚠️' : '❓'}</div>
+            <div>
+              <h3 class="notes-modal-title">${title}</h3>
+              <p class="notes-modal-subtitle">${message}</p>
+            </div>
+          </div>
+          <button class="notes-modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+        </div>
+        <div class="notes-modal-footer">
+          <button class="btn btn-secondary notes-modal-cancel">Cancel</button>
+          <button class="btn ${isDanger ? 'btn-danger' : 'btn-primary'} notes-modal-confirm">${confirmText}</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    const confirmBtn = overlay.querySelector('.notes-modal-confirm');
+    const cancelBtn = overlay.querySelector('.notes-modal-cancel');
+    
+    const close = (value) => {
+      overlay.remove();
+      resolve(value);
+    };
+    
+    confirmBtn.onclick = () => close(true);
+    cancelBtn.onclick = () => close(false);
+    overlay.onclick = (e) => { if (e.target === overlay) close(false); };
+    document.onkeydown = (e) => {
+      if (e.key === 'Escape') close(false);
+    };
+  });
+}
+
+// =============================================
+
 // Sidebar resize functionality
 let isResizing = false;
 let startX = 0;
@@ -14928,7 +15268,7 @@ function toggleNoteFolder(headerEl) {
 }
 
 async function renameNoteFolder(folderId, currentName) {
-  const newName = prompt('Enter new folder name:', currentName);
+  const newName = await showPromptModal('Rename Folder', 'Enter new folder name', currentName, 'Folder name');
   if (!newName || newName === currentName) return;
   
   try {
@@ -14943,14 +15283,18 @@ async function renameNoteFolder(folderId, currentName) {
     showNotification('Folder renamed successfully', 'success');
   } catch (error) {
     console.error('Error renaming folder:', error);
-    alert('Failed to rename folder: ' + error.message);
+    showNotification('Failed to rename folder: ' + error.message, 'error');
   }
 }
 
 async function deleteNoteFolder(folderId, folderName) {
-  if (!confirm(`Are you sure you want to delete folder "${folderName}" and all its contents? This action cannot be undone.`)) {
-    return;
-  }
+  const confirmed = await showConfirmModal(
+    'Delete Folder',
+    `Are you sure you want to delete folder "${folderName}" and all its contents? This action cannot be undone.`,
+    'Delete',
+    true
+  );
+  if (!confirmed) return;
   
   try {
     const response = await fetch(`/api/notes/folder/${folderId}`, {
@@ -14962,12 +15306,12 @@ async function deleteNoteFolder(folderId, folderName) {
     showNotification('Folder deleted successfully', 'success');
   } catch (error) {
     console.error('Error deleting folder:', error);
-    alert('Failed to delete folder: ' + error.message);
+    showNotification('Failed to delete folder: ' + error.message, 'error');
   }
 }
 
 async function createNewNote(folderId = null) {
-  const name = prompt('Enter note name:', 'New Note');
+  const name = await showPromptModal('Create Note', 'Enter a name for your new note', 'New Note', 'Note name');
   if (!name) return;
   
   try {
@@ -14981,16 +15325,21 @@ async function createNewNote(folderId = null) {
     const note = await response.json();
     await loadNotesTree();
     selectNote(note.id);
+    showNotification(`Note "${name}" created`, 'success');
   } catch (error) {
     console.error('Error creating note:', error);
-    alert('Failed to create note: ' + error.message);
+    showNotification('Failed to create note: ' + error.message, 'error');
   }
 }
 
 async function deleteNote(noteId, noteName) {
-  if (!confirm(`Are you sure you want to delete "${noteName}"? This action cannot be undone.`)) {
-    return;
-  }
+  const confirmed = await showConfirmModal(
+    'Delete Note',
+    `Are you sure you want to delete "${noteName}"? This action cannot be undone.`,
+    'Delete',
+    true
+  );
+  if (!confirmed) return;
   
   try {
     const response = await fetch(`/api/notes/${noteId}`, {
@@ -15012,7 +15361,7 @@ async function deleteNote(noteId, noteName) {
     showNotification('Note deleted successfully', 'success');
   } catch (error) {
     console.error('Error deleting note:', error);
-    alert('Failed to delete note: ' + error.message);
+    showNotification('Failed to delete note: ' + error.message, 'error');
   }
 }
 
@@ -15026,7 +15375,7 @@ async function saveNoteVersion() {
   // First save current content
   await saveCurrentNote();
   
-  const versionName = prompt('Enter version name (optional):', `Version ${new Date().toLocaleString()}`);
+  const versionName = await showPromptModal('Save Version', 'Enter a name for this version', `Version ${new Date().toLocaleString()}`, 'Version name');
   if (versionName === null) return; // User cancelled
   
   try {
@@ -15173,7 +15522,7 @@ async function deleteNoteVersion(versionId) {
 }
 
 async function createNewNoteFolder() {
-  const name = prompt('Enter folder name:', 'New Folder');
+  const name = await showPromptModal('Create Folder', 'Enter a name for your new folder', 'New Folder', 'Folder name');
   if (!name) return;
   
   try {
@@ -15183,11 +15532,15 @@ async function createNewNoteFolder() {
       body: JSON.stringify({ name })
     });
     
-    if (!response.ok) throw new Error('Failed to create folder');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create folder');
+    }
     await loadNotesTree();
+    showNotification(`Folder "${name}" created`, 'success');
   } catch (error) {
     console.error('Error creating folder:', error);
-    alert('Failed to create folder: ' + error.message);
+    showNotification(error.message || 'Failed to create folder', 'error');
   }
 }
 
