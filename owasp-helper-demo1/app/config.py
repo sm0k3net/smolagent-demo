@@ -114,6 +114,9 @@ class Settings(BaseModel):
     whoisxml_api_key: str | None = os.getenv("WHOISXML_API_KEY")
     hibp_api_key: str | None = os.getenv("HIBP_API_KEY")
     wpscan_api_token: str | None = os.getenv("WPSCAN_API_TOKEN")
+    
+    # Agent Configuration
+    agent_max_steps: int = 200  # Maximum steps for agent execution (50-500 recommended)
 
     class Config:
         arbitrary_types_allowed = True
@@ -168,6 +171,14 @@ def get_settings() -> Settings:
         "llm_provider": os.getenv("LLM_PROVIDER", "deepseek"),
         "selected_model": os.getenv("SELECTED_MODEL"),
     }
+    
+    # Add agent_max_steps from environment if set
+    env_max_steps = os.getenv("AGENT_MAX_STEPS")
+    if env_max_steps:
+        try:
+            settings_dict["agent_max_steps"] = int(env_max_steps)
+        except ValueError:
+            pass  # Use default if invalid
     
     # Apply runtime overrides
     settings_dict.update(_runtime_settings)

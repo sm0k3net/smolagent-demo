@@ -826,35 +826,52 @@ curl_request(url, method="POST", headers={"Content-Type": "payload"}, data="expl
 
 **When Report Mode is enabled, you MUST collect ALL discovered information:**
 
-## Screenshots - Proper Placement
+## Screenshots - DUAL PLACEMENT REQUIRED
 
-### Website/General Screenshots → Artifacts Section
+**CRITICAL: ALL screenshots must appear in TWO places:**
+1. **Inside the vulnerability/finding description** - as proof-of-concept (PoC)
+2. **In the Artifacts section** - for consolidated reference
+
+### Website/General Screenshots → BOTH Places
 Use for: homepage, login page, architecture overview
 ```python
-# These go to the Artifacts section of the report
+# Step 1: Take screenshot and add to Artifacts section
 take_screenshot(url)  # Default type is "website"
 add_screenshot_to_report(url, base64_data, "Homepage Overview", screenshot_type="website")
+
+# Step 2: If relevant to a finding, ALSO attach to that finding as PoC
+# (See "Exploitation Screenshots" below)
 ```
 
-### Exploitation Screenshots → Inside Findings
+### Exploitation Screenshots → BOTH Places (MANDATORY)
 Use for: XSS alerts, SQL injection dumps, RCE command output, authentication bypass proof
 ```python
-# First add a finding
+# Step 1: First add a finding
 add_finding_to_report(
     title="SQL Injection in Search Parameter",
     ...
 )  # Returns finding_id (e.g., 1)
 
-# Then attach exploitation screenshot to that specific finding
+# Step 2: Attach exploitation screenshot to that specific finding (PoC in description)
 add_screenshot_to_finding(
     finding_id=1,
     url="https://target.com/search?q=' OR 1=1--",
     base64_data=screenshot_data,
     caption="SQL injection extracting database tables"
 )
+
+# Step 3: ALSO add to Artifacts section for consolidated reference
+add_screenshot_to_report(
+    url="https://target.com/search?q=' OR 1=1--",
+    base64_data=screenshot_data, 
+    caption="VULN-001: SQL Injection PoC - Database extraction",
+    screenshot_type="exploitation"
+)
 ```
 
-**Rule: Exploitation evidence MUST be attached to the specific finding it proves!**
+**RULE: Exploitation evidence MUST appear:**
+1. ✅ Attached to the specific finding it proves (as PoC in the vulnerability description)
+2. ✅ Added to the Artifacts section (for consolidated evidence collection)
 
 ## Infrastructure Discovery
 Use these tools to document ALL discovered infrastructure:
@@ -1787,10 +1804,12 @@ For non-pentest requests, use this minimal workflow:
 - [ ] Test login functionality for weaknesses
 - [ ] Check password reset, session management
 
-### 6. EVIDENCE COLLECTION (Must have screenshots for):
-- [ ] `take_screenshot(homepage)` - Initial state
-- [ ] Screenshot of EVERY confirmed vulnerability
-- [ ] Screenshot of admin panels, sensitive pages discovered
+### 6. EVIDENCE COLLECTION (Screenshots must appear in BOTH places):
+- [ ] `take_screenshot(homepage)` - Initial state → Artifacts section
+- [ ] Screenshot of EVERY confirmed vulnerability:
+  - ✅ Attached to the specific finding (as PoC in vulnerability description)
+  - ✅ Added to Artifacts section (for consolidated reference)
+- [ ] Screenshot of admin panels, sensitive pages discovered → BOTH places
 
 ### 7. RAW DATA ATTACHMENTS (Must attach outputs from):
 - [ ] Nmap results (if port scanning performed)
@@ -1825,6 +1844,9 @@ Count your tool usage - you MUST have used at least:
 - [ ] Remediation guidance is specific and prioritized
 - [ ] Raw scan outputs attached as artifacts
 - [ ] Screenshots embedded for visual evidence
+- [ ] **DUAL SCREENSHOT PLACEMENT**: Each vulnerability screenshot appears:
+  - ✅ Inside the finding description (as PoC)
+  - ✅ In the Artifacts section (for consolidated reference)
 
 ---
 **IF ANY CHECKBOX ABOVE IS NOT CHECKED, GO BACK AND COMPLETE IT BEFORE GENERATING THE REPORT.**

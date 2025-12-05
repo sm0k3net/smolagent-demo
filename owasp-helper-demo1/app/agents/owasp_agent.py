@@ -503,12 +503,14 @@ def build_owasp_agent() -> CodeAgent:
     # max_print_outputs_length limits tool output size to prevent context overflow
     # DeepSeek has 128K context limit, so we limit outputs to ~20K chars per tool
     # max_steps limits iterations to prevent runaway context growth
-    # Increased to 100 to allow comprehensive pentesting coverage (OWASP WSTG has 90+ test cases)
+    # Use configurable max_steps from settings (default 200 for comprehensive pentesting)
+    from app.config import get_settings
+    settings = get_settings()
     agent = CodeAgent(
         tools=tools, 
         model=model, 
         instructions=load_prompt_text(),
         max_print_outputs_length=20000,  # Limit each tool output to prevent context explosion
-        max_steps=100,  # Increased from 30 to allow comprehensive testing coverage
+        max_steps=settings.agent_max_steps,  # Configurable via Settings->General
     )
     return agent

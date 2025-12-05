@@ -2721,6 +2721,47 @@ async def test_proxy():
             "ip": None
         })
 
+
+# ============== AGENT SETTINGS ENDPOINTS ==============
+
+@app.get("/api/settings/agent-max-steps")
+async def get_agent_max_steps():
+    """Get current agent max steps setting."""
+    from app.config import get_settings
+    settings = get_settings()
+    return JSONResponse({
+        "success": True,
+        "max_steps": settings.agent_max_steps
+    })
+
+
+@app.post("/api/settings/agent-max-steps")
+async def set_agent_max_steps(request: Request):
+    """Update agent max steps setting."""
+    from app.config import update_runtime_settings
+    
+    try:
+        data = await request.json()
+        max_steps = int(data.get("max_steps", 200))
+        
+        # Clamp to valid range
+        max_steps = max(50, min(500, max_steps))
+        
+        # Update runtime settings (clears cache so next get_settings() returns updated value)
+        update_runtime_settings(agent_max_steps=max_steps)
+        
+        return JSONResponse({
+            "success": True,
+            "message": f"Agent max steps updated to {max_steps}",
+            "max_steps": max_steps
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Failed to update setting: {str(e)}"
+        }, status_code=400)
+
+
 # ============== TOOLS MANAGEMENT ENDPOINTS ==============
 
 @app.get("/api/tools/list")
@@ -12267,6 +12308,65 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
           </div>
           
           <div class="settings-section">
+            <div class="settings-section-title">🤖 Agent Configuration</div>
+            <p style="font-size: 0.8rem; color: var(--gray-400); margin-bottom: 12px;">
+              Configure AI agent behavior and execution limits.
+            </p>
+            
+            <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 15px; border: 1px solid rgba(255,255,255,0.08);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                <div>
+                  <div style="font-size: 0.85rem; color: var(--gray-200); font-weight: 500; margin-bottom: 4px;">Maximum Agent Steps</div>
+                  <div style="font-size: 0.75rem; color: var(--gray-500);">
+                    Controls how many iterations the agent can perform. Higher values allow more thorough testing but use more tokens.
+                  </div>
+                </div>
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 15px; margin-top: 12px;">
+                <input type="range" id="agent-max-steps-slider" min="50" max="500" step="10" value="200" 
+                       style="flex: 1; height: 6px; cursor: pointer; accent-color: var(--brand-primary);"
+                       oninput="document.getElementById('agent-max-steps-value').value = this.value; document.getElementById('agent-max-steps-display').textContent = this.value;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input type="number" id="agent-max-steps-value" min="50" max="500" step="10" value="200"
+                         style="width: 70px; padding: 6px 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem; text-align: center;"
+                         oninput="let v = Math.max(50, Math.min(500, parseInt(this.value) || 200)); document.getElementById('agent-max-steps-slider').value = v; document.getElementById('agent-max-steps-display').textContent = v;">
+                  <span style="font-size: 0.75rem; color: var(--gray-500);">steps</span>
+                </div>
+              </div>
+              
+              <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button class="btn btn-primary" style="flex: 1;" onclick="saveAgentMaxSteps()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                  </svg>
+                  Save
+                </button>
+                <button class="btn" style="background: rgba(255,255,255,0.1);" onclick="resetAgentMaxSteps()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                  </svg>
+                  Reset
+                </button>
+              </div>
+              
+              <div id="agent-config-message" style="margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+            </div>
+            
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+              <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.5;">
+                <strong>Recommendations:</strong><br>
+                • <strong>50-100:</strong> Quick scans, simple tasks<br>
+                • <strong>150-200:</strong> Standard pentesting (default)<br>
+                • <strong>300-500:</strong> Comprehensive OWASP WSTG coverage
+              </p>
+            </div>
+          </div>
+          
+          <div class="settings-section">
             <div class="settings-section-title">ℹ️ About</div>
             <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5;">
               OWASP Security Agent - AI-powered security testing assistant.<br>
@@ -14382,6 +14482,7 @@ function switchSettingsSubtab(subtab) {
   } else if (subtab === 'general') {
     checkTunnelStatus();
     checkProxyStatus();
+    loadAgentMaxSteps();
   } else if (subtab === 'tools') {
     loadToolsList();
   }
@@ -16782,6 +16883,65 @@ async function testProxyConnection() {
     document.getElementById('proxy-password').value = '';
   } catch (error) {
     showProxyMessage('Test failed: ' + error.message, true);
+  }
+}
+
+// ============== AGENT CONFIGURATION ==============
+function showAgentConfigMessage(message, isError = false) {
+  const msgEl = document.getElementById('agent-config-message');
+  msgEl.textContent = message;
+  msgEl.style.display = 'block';
+  msgEl.style.background = isError ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+  msgEl.style.color = isError ? '#ef4444' : '#10b981';
+  
+  setTimeout(() => {
+    msgEl.style.display = 'none';
+  }, 5000);
+}
+
+async function saveAgentMaxSteps() {
+  const value = parseInt(document.getElementById('agent-max-steps-value').value) || 200;
+  const clampedValue = Math.max(50, Math.min(500, value));
+  
+  try {
+    const response = await fetch('/api/settings/agent-max-steps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_steps: clampedValue })
+    });
+    const data = await response.json();
+    
+    if (data.success) {
+      // Update both inputs to the clamped value
+      document.getElementById('agent-max-steps-slider').value = clampedValue;
+      document.getElementById('agent-max-steps-value').value = clampedValue;
+      showAgentConfigMessage('Agent max steps saved: ' + clampedValue);
+    } else {
+      showAgentConfigMessage(data.message || 'Failed to save setting', true);
+    }
+  } catch (error) {
+    showAgentConfigMessage('Failed to save: ' + error.message, true);
+  }
+}
+
+function resetAgentMaxSteps() {
+  const defaultValue = 200;
+  document.getElementById('agent-max-steps-slider').value = defaultValue;
+  document.getElementById('agent-max-steps-value').value = defaultValue;
+  showAgentConfigMessage('Reset to default: ' + defaultValue + ' steps');
+}
+
+async function loadAgentMaxSteps() {
+  try {
+    const response = await fetch('/api/settings/agent-max-steps');
+    const data = await response.json();
+    
+    if (data.success && data.max_steps) {
+      document.getElementById('agent-max-steps-slider').value = data.max_steps;
+      document.getElementById('agent-max-steps-value').value = data.max_steps;
+    }
+  } catch (error) {
+    console.error('Failed to load agent max steps:', error);
   }
 }
 
