@@ -504,7 +504,6 @@ def build_owasp_agent() -> CodeAgent:
     # DeepSeek has 128K context limit, so we limit outputs to ~20K chars per tool
     # max_steps limits iterations to prevent runaway context growth
     # Use configurable max_steps from settings (default 200 for comprehensive pentesting)
-    from app.config import get_settings
     settings = get_settings()
     agent = CodeAgent(
         tools=tools, 
