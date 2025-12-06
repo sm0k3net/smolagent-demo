@@ -2833,10 +2833,13 @@ Professional pentesting tools for advanced vulnerability discovery:
 Professional tools for CVE research, exploit discovery, and controlled exploitation:
 
 ### CVE Research & Exploit Discovery:
-- `vulners_search(query)` - Search Vulners.com vulnerability database
-  - Search by CVE ID, software name, or keyword
-  - Returns exploits, references, CVSS scores, and severity
-  - Example: `vulners_search("CVE-2021-44228")` or `vulners_search("Apache 2.4.49")`
+- `vulners_search_cve(cve_id)` - Search Vulners.com for CVE information
+  - Get exploit references, CVSS scores, and severity
+  - Example: `vulners_search_cve("CVE-2021-44228")`
+
+- `vulners_search_exploit(query)` - Search Vulners.com for exploits
+  - Search by software name, version, or keyword
+  - Example: `vulners_search_exploit("Apache 2.4.49 RCE")`
 
 - `nvd_lookup(cve_id)` - Query NIST National Vulnerability Database
   - Returns official CVE description, CVSS score, affected versions
@@ -2849,34 +2852,29 @@ Professional tools for CVE research, exploit discovery, and controlled exploitat
 - `searchsploit_examine(exploit_path)` - View exploit code and details
 - `searchsploit_copy(exploit_path, destination)` - Copy exploit for use
 
-### Metasploit Framework Integration:
-- `metasploit_search(query)` - Search Metasploit modules
-  - Find exploit, auxiliary, and post modules
-  - Example: `metasploit_search("log4j")` or `metasploit_search("cve:2021-44228")`
+- `exploit_db_search(query, cve, exploit_type)` - Search Exploit-DB online
+  - Example: `exploit_db_search("log4j", cve="CVE-2021-44228")`
 
-- `metasploit_run(module, options)` - Execute Metasploit module
-  - Full framework integration with proper options
-  - Example: `metasploit_run("auxiliary/scanner/http/log4shell_scanner", {"RHOSTS": "target.com"})`
-  - Supports RHOSTS, RPORT, LHOST, LPORT, and module-specific options
+### Metasploit Framework Integration:
+- `msfconsole_command(commands)` - Execute Metasploit Framework commands
+  - Run exploit, auxiliary, and post modules
+  - Example: `msfconsole_command("use auxiliary/scanner/http/log4shell_scanner; set RHOSTS target.com; run")`
 
 ### Exploit Execution:
-- `execute_python_exploit(exploit_path, target, args)` - Run Python-based exploits
-  - Execute PoCs from Exploit-DB, GitHub, or custom exploits
-  - Example: `execute_python_exploit("/tmp/50383.py", "target.com:8080", ["--check"])`
+- `run_exploit(exploit_path, target, args, interpreter)` - Run exploit scripts
+  - Execute Python, Ruby, Bash, Perl exploits
+  - Auto-detects interpreter from shebang/extension
+  - Example: `run_exploit("/tmp/50383.py", "target.com:8080", "--check")`
 
-- `execute_ruby_exploit(exploit_path, target, args)` - Run Ruby-based exploits
-  - Execute Metasploit-style Ruby exploits
+- `download_exploit(url, save_path)` - Download exploit from URL
+  - Saves to local path for execution
+  - Example: `download_exploit("https://www.exploit-db.com/download/12345", "/tmp/exploits")`
 
-- `poc_executor(exploit_code, exploit_type, args)` - Safe PoC execution
-  - Execute inline exploit code safely
-  - Supports Python, Ruby, Bash exploit types
-  - Use for quick PoC validation
-
-### Exploitation Documentation:
-- `document_exploit_attempt(cve_id, exploit_source, target, result, evidence, artifacts)` - Document exploitation
-  - Creates detailed exploitation record with all evidence
-  - Saves artifacts (screenshots, output files) automatically
-  - Returns formatted documentation for report
+### CVE Workflow Helper:
+- `cve_to_exploit_workflow(cve_id, target)` - Complete CVE analysis workflow
+  - Combines NVD lookup, searchsploit, and Vulners search
+  - Provides exploitation guidance
+  - Example: `cve_to_exploit_workflow("CVE-2021-44228", "target.com")`
 
 ## OWASP ZAP - Full Scanning Suite:
 OWASP ZAP provides comprehensive web application security scanning with spider, AJAX spider, and active scanning.
