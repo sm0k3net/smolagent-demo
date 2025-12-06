@@ -1983,6 +1983,191 @@ def add_tool_output_to_report(
     return f"✅ Tool output added to report: {filename} ({len(output_data)} bytes)"
 
 
+@tool
+def import_zap_alerts_to_findings(alerts_json: str) -> str:
+    """Import OWASP ZAP alerts directly into report findings.
+    
+    This tool takes the JSON output from zap_get_alerts() and creates a finding 
+    for EACH alert. Use this to ensure no ZAP findings are missed.
+
+    Args:
+        alerts_json: JSON string containing ZAP alerts (from zap_get_alerts result).
+    Returns: Summary of imported findings.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    try:
+        # Parse the alerts
+        if isinstance(alerts_json, str):
+            data = json.loads(alerts_json)
+        else:
+            data = alerts_json
+        
+        alerts = data.get('alerts', []) if isinstance(data, dict) else data
+        
+        if not alerts:
+            return "No alerts found to import."
+        
+        # Map ZAP risk levels to severity
+        severity_map = {
+            'Informational': 'Info',
+            'Low': 'Low',
+            'Medium': 'Medium',
+            'High': 'High',
+            'Critical': 'Critical'
+        }
+        
+        imported = 0
+        skipped = 0
+        
+        for alert in alerts:
+            try:
+                name = alert.get('name', alert.get('alert', 'Unknown Alert'))
+                risk = alert.get('risk', 'Medium')
+                severity = severity_map.get(risk, 'Medium')
+                
+                # Build references from ZAP data
+                refs = []
+                if alert.get('reference'):
+                    refs.append(alert['reference'])
+                if alert.get('cweid'):
+                    refs.append(f"CWE-{alert['cweid']}")
+                
+                finding = {
+                    "id": len(_CURRENT_REPORT_DATA["findings"]) + 1,
+                    "title": name,
+                    "severity": severity,
+                    "description": alert.get('description', 'Vulnerability detected by OWASP ZAP.'),
+                    "impact": alert.get('otherinfo', 'Security impact requires further assessment.'),
+                    "remediation": alert.get('solution', 'Implement appropriate security controls.'),
+                    "owasp_category": f"CWE-{alert.get('cweid', 'N/A')}" if alert.get('cweid') else "N/A",
+                    "cvss_score": "N/A",
+                    "cwe_id": f"CWE-{alert.get('cweid')}" if alert.get('cweid') else "N/A",
+                    "affected_component": alert.get('url', 'N/A'),
+                    "evidence": alert.get('evidence', ''),
+                    "steps_to_reproduce": f"1. Navigate to: {alert.get('url', 'target')}\n2. ZAP detected: {name}",
+                    "tool_used": "OWASP ZAP",
+                    "command_used": "",
+                    "references": "\n".join(refs)
+                }
+                
+                _CURRENT_REPORT_DATA["findings"].append(finding)
+                _CURRENT_REPORT_DATA["tools"].add("OWASP ZAP")
+                imported += 1
+                
+            except Exception as e:
+                skipped += 1
+                continue
+        
+        return f"✅ Imported {imported} ZAP alerts as findings. Skipped: {skipped}"
+        
+    except json.JSONDecodeError:
+        return "❌ Invalid JSON format. Pass the raw output from zap_get_alerts()."
+    except Exception as e:
+        return f"❌ Error importing alerts: {str(e)}"
+
+
+@tool
+def import_nikto_findings(nikto_output: str, target_url: str) -> str:
+    """Parse Nikto output and import findings into the report.
+    
+    Automatically extracts common findings like missing headers, server disclosure, etc.
+
+    Args:
+        nikto_output: Raw output from nikto_scan().
+        target_url: The target URL that was scanned.
+    Returns: Summary of imported findings.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    
+    if not _REPORT_MODE_ENABLED:
+        return "Report mode is not enabled. Use enable_report_mode() first."
+    
+    findings_added = 0
+    output_lower = nikto_output.lower()
+    
+    # Common Nikto findings to extract
+    finding_patterns = [
+        {
+            "pattern": "x-frame-options",
+            "missing_check": "missing" in output_lower or "not set" in output_lower,
+            "title": "Missing X-Frame-Options Header",
+            "severity": "Low",
+            "description": "The X-Frame-Options HTTP header is not configured, which may allow clickjacking attacks.",
+            "impact": "An attacker could embed the page in an iframe and trick users into clicking hidden elements.",
+            "remediation": "Configure the X-Frame-Options header with 'DENY' or 'SAMEORIGIN' value.",
+            "owasp": "A05:2021 Security Misconfiguration",
+            "cwe": "CWE-1021",
+            "refs": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options"
+        },
+        {
+            "pattern": "x-content-type-options",
+            "missing_check": "nosniff" not in output_lower,
+            "title": "Missing X-Content-Type-Options Header",
+            "severity": "Low",
+            "description": "The X-Content-Type-Options header is not set to 'nosniff'.",
+            "impact": "Browsers may MIME-sniff content, potentially leading to security issues.",
+            "remediation": "Add the 'X-Content-Type-Options: nosniff' header.",
+            "owasp": "A05:2021 Security Misconfiguration",
+            "cwe": "CWE-16",
+            "refs": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options"
+        },
+        {
+            "pattern": "strict-transport-security",
+            "missing_check": "hsts" not in output_lower or "missing" in output_lower,
+            "title": "Missing HTTP Strict Transport Security (HSTS)",
+            "severity": "Medium",
+            "description": "The Strict-Transport-Security header is not configured.",
+            "impact": "Users may be vulnerable to SSL stripping or downgrade attacks.",
+            "remediation": "Implement HSTS with 'Strict-Transport-Security: max-age=31536000; includeSubDomains'.",
+            "owasp": "A05:2021 Security Misconfiguration",
+            "cwe": "CWE-319",
+            "refs": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security"
+        },
+        {
+            "pattern": "server:",
+            "missing_check": True,  # Always flag if server header shows version
+            "title": "Server Version Disclosure",
+            "severity": "Info",
+            "description": "The web server discloses version information in HTTP headers.",
+            "impact": "Information disclosure assists attackers in identifying known vulnerabilities.",
+            "remediation": "Configure the web server to suppress version information.",
+            "owasp": "A05:2021 Security Misconfiguration",
+            "cwe": "CWE-200",
+            "refs": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/02-Fingerprint_Web_Server"
+        }
+    ]
+    
+    for pattern_info in finding_patterns:
+        if pattern_info["pattern"] in output_lower:
+            finding = {
+                "id": len(_CURRENT_REPORT_DATA["findings"]) + 1,
+                "title": pattern_info["title"],
+                "severity": pattern_info["severity"],
+                "description": pattern_info["description"],
+                "impact": pattern_info["impact"],
+                "remediation": pattern_info["remediation"],
+                "owasp_category": pattern_info["owasp"],
+                "cvss_score": "N/A",
+                "cwe_id": pattern_info["cwe"],
+                "affected_component": target_url,
+                "evidence": f"Detected by Nikto scan",
+                "steps_to_reproduce": f"1. Run nikto against {target_url}\n2. Observe the finding in output",
+                "tool_used": "nikto",
+                "command_used": f"nikto -h {target_url}",
+                "references": pattern_info["refs"]
+            }
+            _CURRENT_REPORT_DATA["findings"].append(finding)
+            findings_added += 1
+    
+    _CURRENT_REPORT_DATA["tools"].add("nikto")
+    
+    return f"✅ Extracted and added {findings_added} findings from Nikto output."
+
+
 def get_report_artifacts() -> list:
     """Get all artifacts for external access."""
     global _REPORT_ARTIFACTS

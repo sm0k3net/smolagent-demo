@@ -142,6 +142,9 @@ from app.tools.report_tools import (
     add_technology_stack,
     add_network_topology,
     record_tool_used,
+    # Finding import helpers
+    import_zap_alerts_to_findings,
+    import_nikto_findings,
     # Note access tools
     get_note_content,
     list_available_notes,
@@ -448,6 +451,9 @@ def build_owasp_agent() -> CodeAgent:
         generate_html_report,
         generate_markdown_report,
         generate_pdf_report,
+        # Finding import helpers
+        import_zap_alerts_to_findings,
+        import_nikto_findings,
         # Recon data collection tools
         add_recon_data,
         add_bulk_scope,
