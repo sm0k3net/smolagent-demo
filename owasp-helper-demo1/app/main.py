@@ -4302,20 +4302,37 @@ async def move_note(note_id: str, data: dict):
     target_folder_id = data.get("target_folder_id")  # None means root
     
     note_file = NOTES_DIR / f"{note_id}.json"
+    is_folder = False
+    note_data = None
     
-    if not note_file.exists():
-        return JSONResponse({"error": "Note not found"}, status_code=404)
+    # Check if it's a note file or a folder
+    if note_file.exists():
+        # It's a note file
+        try:
+            note_data = json.loads(note_file.read_text())
+            # Update parent folder in note file
+            note_data["folder_id"] = target_folder_id
+            note_data["updated_at"] = datetime.now().isoformat()
+            note_file.write_text(json.dumps(note_data, indent=2))
+        except Exception as e:
+            return JSONResponse({"error": f"Failed to update note file: {str(e)}"}, status_code=500)
+    else:
+        # Check if it's a folder in the index
+        def find_folder_in_index(items, folder_id):
+            for item in items:
+                if item.get("id") == folder_id and item.get("type") == "folder":
+                    return True
+                if item.get("type") == "folder" and "children" in item:
+                    if find_folder_in_index(item["children"], folder_id):
+                        return True
+            return False
+        
+        is_folder = find_folder_in_index(notes_index.get("folders", []), note_id)
+        if not is_folder:
+            return JSONResponse({"error": "Note or folder not found"}, status_code=404)
     
     try:
-        # Load note data
-        note_data = json.loads(note_file.read_text())
-        
-        # Update parent folder in note file
-        note_data["folder_id"] = target_folder_id
-        note_data["updated_at"] = datetime.now().isoformat()
-        note_file.write_text(json.dumps(note_data, indent=2))
-        
-        # Helper to remove note from current location in index
+        # Helper to remove item from current location in index (recursively searches all folders)
         def remove_from_index(items, nid):
             for i, item in enumerate(items):
                 if item.get("id") == nid:
@@ -4326,7 +4343,7 @@ async def move_note(note_id: str, data: dict):
                         return result
             return None
         
-        # Helper to add note to target folder
+        # Helper to add item to target folder
         def add_to_folder(folders, target_id, entry):
             for folder in folders:
                 if folder.get("id") == target_id:
@@ -4339,28 +4356,67 @@ async def move_note(note_id: str, data: dict):
                         return True
             return False
         
-        # Remove from current location (check both files and folders)
+        # Prevent moving a folder into itself or its children
+        if is_folder and target_folder_id:
+            def is_descendant(folder_id, potential_ancestor_id):
+                """Check if folder_id is a descendant of potential_ancestor_id."""
+                def find_in_children(items, pid):
+                    for item in items:
+                        if item.get("id") == pid:
+                            # Check if folder_id is in this folder's children
+                            def check_children(children, fid):
+                                for child in children:
+                                    if child.get("id") == fid:
+                                        return True
+                                    if child.get("type") == "folder" and "children" in child:
+                                        if check_children(child["children"], fid):
+                                            return True
+                                return False
+                            return check_children(item.get("children", []), folder_id)
+                        if item.get("type") == "folder" and "children" in item:
+                            result = find_in_children(item["children"], pid)
+                            if result:
+                                return result
+                    return False
+                return find_in_children(notes_index.get("folders", []), potential_ancestor_id)
+            
+            if note_id == target_folder_id or is_descendant(target_folder_id, note_id):
+                return JSONResponse({"error": "Cannot move folder into itself or its children"}, status_code=400)
+        
+        # Remove from current location - check root files first
         note_entry = remove_from_index(notes_index.get("files", []), note_id)
+        
+        # If not found in root files, check root folders
         if not note_entry:
             note_entry = remove_from_index(notes_index.get("folders", []), note_id)
         
         if not note_entry:
-            # Reconstruct entry from note data
-            note_entry = {"id": note_id, "name": note_data.get("name", "Note"), "type": "file"}
+            # Entry not found in index, which shouldn't happen but reconstruct if we have data
+            if is_folder:
+                return JSONResponse({"error": "Folder entry not found in index"}, status_code=404)
+            note_entry = {"id": note_id, "name": note_data.get("name", "Note") if note_data else "Note", "type": "file"}
         
         # Add to new location
         if target_folder_id:
             if not add_to_folder(notes_index.get("folders", []), target_folder_id, note_entry):
-                # Target folder not found, add to root
-                notes_index["files"].append(note_entry)
+                # Target folder not found, add to root based on type
+                if note_entry.get("type") == "folder":
+                    notes_index["folders"].append(note_entry)
+                else:
+                    notes_index["files"].append(note_entry)
         else:
-            # Move to root
-            notes_index["files"].append(note_entry)
+            # Move to root - add to appropriate list based on type
+            if note_entry.get("type") == "folder":
+                notes_index["folders"].append(note_entry)
+            else:
+                notes_index["files"].append(note_entry)
         
         save_notes_index(notes_index)
         
         return JSONResponse({"success": True, "note_id": note_id, "new_folder": target_folder_id})
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ============== SCHEDULED TASKS ENDPOINTS ==============
