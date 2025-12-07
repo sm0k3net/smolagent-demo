@@ -72,6 +72,12 @@ class SharedFinding:
     discovered_by: str  # Agent that found it
     discovered_at: datetime
     
+    # CRITICAL: Include actual tool info for quality reports
+    tool_used: str = ""  # Actual tool name (nikto, nuclei, sqlmap, etc.)
+    command_used: str = ""  # Actual command that was run
+    steps_to_reproduce: str = ""  # Steps to reproduce the vulnerability
+    impact: str = ""  # Business/technical impact (separate from description)
+    
     # Validation tracking
     status: FindingStatus = FindingStatus.DISCOVERED
     validated_by: Optional[str] = None
@@ -389,15 +395,41 @@ Run comprehensive automated vulnerability scans on targets.
 ## Your Responsibilities:
 1. Review recon data from shared context to understand target
 2. Run appropriate scanners based on discovered technologies
-3. Submit ALL findings using `submit_finding()`
+3. Submit ALL findings using `submit_finding()` with COMPLETE details
 4. Each finding goes to QC for validation
 5. Mark phase complete when done
 
-## Finding Submission:
-- Every scanner result = a finding
-- Include raw evidence from scanner output
-- Set status to PENDING_VALIDATION
-- Quality Control will validate each finding
+## ⚠️ CRITICAL: FINDING SUBMISSION REQUIREMENTS ⚠️
+
+For HIGH-QUALITY reports, EVERY finding MUST include:
+
+```python
+submit_finding(
+    title="Descriptive title with specific details",
+    severity="High",  # Critical, High, Medium, Low, Info
+    description="Detailed multi-sentence description explaining the vulnerability, "
+                "what it means, and how it was discovered.",
+    evidence="Raw tool output or proof-of-concept showing the vulnerability",
+    affected_component="https://target.com/specific/path/or/endpoint",
+    remediation="Specific, actionable remediation steps (2-3 sentences minimum)",
+    owasp_category="A03:2021 Injection",
+    cwe_id="CWE-89",
+    references="https://owasp.org/..., https://cwe.mitre.org/...",
+    
+    # ⚠️ REQUIRED FOR QUALITY REPORTS:
+    tool_used="nikto",  # ACTUAL tool name: nikto, nuclei, sqlmap, nmap, etc.
+    command_used="nikto -h https://target.com -o output.txt",  # EXACT command run
+    steps_to_reproduce="1. Run nikto against target\\n2. Observe finding in output\\n3. Verify manually",
+    impact="An attacker could exploit this to... (business/technical impact)",
+    cvss_score="7.5"  # If known
+)
+```
+
+## DO NOT:
+- Use generic tool names like "Vulnerability Scanner" 
+- Skip the command_used field
+- Write single-sentence descriptions
+- Forget steps_to_reproduce
 """,
 
     AgentRole.MANUAL_TESTER: """You are the MANUAL TESTER agent.
@@ -416,8 +448,17 @@ Perform manual security testing that automated scanners miss.
 ## Your Responsibilities:
 1. Review recon data and scanner findings from shared context
 2. Perform manual testing based on discovered attack surface
-3. Submit findings with detailed reproduction steps
+3. Submit findings with detailed reproduction steps using submit_finding()
 4. Focus on vulnerabilities scanners typically miss
+
+## ⚠️ CRITICAL: FINDING SUBMISSION REQUIREMENTS ⚠️
+
+For HIGH-QUALITY reports, EVERY finding MUST include:
+- tool_used: "manual", "curl", "burp", "browser_devtools", etc.
+- command_used: Exact curl command, HTTP request, or steps
+- steps_to_reproduce: Numbered list of steps (1. Navigate to... 2. Enter... 3. Observe...)
+- impact: Business/technical impact explanation
+- evidence: HTTP request/response, screenshots, etc.
 
 ## Important:
 - Check what scanners already found to avoid duplicates
@@ -444,6 +485,12 @@ Validate and exploit confirmed vulnerabilities to demonstrate impact.
 3. Document exploitation steps and evidence
 4. Update findings with exploitation proof
 5. Mark findings as EXPLOITED when successful
+
+## ⚠️ CRITICAL: ALWAYS include in exploitation findings:
+- tool_used: "sqlmap", "curl", "metasploit", etc.
+- command_used: EXACT exploit command that was run
+- steps_to_reproduce: How to replicate the exploitation
+- evidence: Proof of successful exploitation (data extracted, shell access, etc.)
 
 ## Safety Rules:
 - Only exploit VALIDATED findings
@@ -681,24 +728,41 @@ def submit_finding(
     owasp_category: str = "",
     cwe_id: str = "",
     references: str = "",
-    source_agent: str = "vulnerability_scanner"
+    source_agent: str = "vulnerability_scanner",
+    tool_used: str = "",
+    command_used: str = "",
+    steps_to_reproduce: str = "",
+    impact: str = "",
+    cvss_score: str = ""
 ) -> str:
     """Submit a finding to the shared context for Quality Control review.
     
     This is the primary way for operational agents to report vulnerabilities.
     All findings go through QC validation before being included in the report.
     
+    CRITICAL: For high-quality reports, include ALL fields:
+    - tool_used: Actual tool name (nikto, nuclei, sqlmap, nmap, etc.)
+    - command_used: Exact command that was run
+    - steps_to_reproduce: Numbered steps to reproduce
+    - impact: Business/technical impact
+    - evidence: Raw tool output or proof
+    
     Args:
         title: Short, descriptive title of the finding.
         severity: Critical, High, Medium, Low, or Info.
-        description: Detailed description of the vulnerability.
+        description: Detailed description of the vulnerability (at least 2-3 sentences).
         evidence: Raw evidence (tool output, request/response, etc.).
         affected_component: URL, endpoint, or component affected.
-        remediation: Recommended fix (optional, QC may add).
+        remediation: Recommended fix (at least 2-3 sentences).
         owasp_category: OWASP category (e.g., "A01:2021 Broken Access Control").
         cwe_id: CWE identifier (e.g., "CWE-89").
         references: Comma-separated list of reference URLs.
         source_agent: Name of the discovering agent.
+        tool_used: REQUIRED - Actual tool name (nikto, nuclei, sqlmap, nmap, etc.).
+        command_used: REQUIRED - Exact command that was executed.
+        steps_to_reproduce: Numbered steps to reproduce (e.g., "1. Navigate to URL\\n2. Enter payload").
+        impact: Business/technical impact of the vulnerability.
+        cvss_score: CVSS score if known (e.g., "7.5" or "9.8").
         
     Returns:
         Confirmation with finding ID for tracking.
@@ -708,7 +772,15 @@ def submit_finding(
     # Parse references
     ref_list = [r.strip() for r in references.split(',') if r.strip()] if references else []
     
-    # Create finding
+    # Parse CVSS score
+    cvss_float = None
+    if cvss_score:
+        try:
+            cvss_float = float(cvss_score)
+        except ValueError:
+            pass
+    
+    # Create finding with ALL fields
     finding = SharedFinding(
         id=f"FIND-{uuid.uuid4().hex[:8].upper()}",
         title=title,
@@ -723,6 +795,11 @@ def submit_finding(
         discovered_by=source_agent,
         discovered_at=datetime.now(),
         status=FindingStatus.PENDING_VALIDATION,
+        tool_used=tool_used or source_agent,  # Fallback to source_agent if not specified
+        command_used=command_used,
+        steps_to_reproduce=steps_to_reproduce,
+        impact=impact or description,  # Use description as fallback for impact
+        cvss_score=cvss_float,
     )
     
     ctx.add_finding(finding)
@@ -1014,17 +1091,24 @@ def compile_final_report() -> str:
         # Enable report mode
         enable_report_mode(ctx.project_title, ctx.target)
         
-        # Add all validated findings
+        # Add all validated findings with ALL fields for high-quality reports
         for f in validated:
             add_finding_to_report(
                 title=f.title,
                 severity=f.severity,
                 description=f.description,
-                impact=f.exploitation_proof if f.exploited else "See description",
+                # Use dedicated impact field, fallback to exploitation proof, then description
+                impact=f.impact if f.impact else (f.exploitation_proof if f.exploited else f.description),
                 remediation=f.remediation,
                 owasp_category=f.owasp_category,
                 cwe_id=f.cwe_id,
-                tool_used=f.discovered_by,
+                # CRITICAL: Use actual tool_used field, not discovered_by
+                tool_used=f.tool_used if f.tool_used else f.discovered_by,
+                command_used=f.command_used,
+                steps_to_reproduce=f.steps_to_reproduce,
+                evidence=f.evidence,
+                cvss_score=str(f.cvss_score) if f.cvss_score else "",
+                affected_component=f.affected_component,
                 references=",".join(f.references) if f.references else "",
             )
         

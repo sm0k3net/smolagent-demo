@@ -208,6 +208,25 @@ _TOOL_NAME_MAPPING = {
     "ncrack_brute": "ncrack",
     "curl_request": "curl",
     "curl_tool": "curl",
+    # Fallbacks for multi-agent system agent names (keep original if no better info)
+    "vulnerability_scanner": "Automated Scanner",
+    "manual_tester": "Manual Testing",
+    "exploitation": "Exploitation Tools",
+    "osint_recon": "OSINT Tools",
+    "quality_control": "Validation",
+    # ZAP variations
+    "zap_spider_scan": "OWASP ZAP",
+    "zap_active_scan": "OWASP ZAP",
+    "zap_get_alerts": "OWASP ZAP",
+    "zap_ajax_spider": "OWASP ZAP",
+    # SSL/TLS tools
+    "sslyze_scan": "SSLyze",
+    "testssl_scan": "testssl.sh",
+    # Additional tools
+    "xsser_scan": "XSSer",
+    "wfuzz_scan": "wfuzz",
+    "arjun_scan": "arjun",
+    "paramspider_scan": "ParamSpider",
 }
 
 
