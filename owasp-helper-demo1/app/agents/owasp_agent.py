@@ -198,6 +198,7 @@ from app.tools.report_tools import (
     # Project management tools
     create_project,
     add_task_to_project,
+    list_projects,
     # Report regeneration tools
     save_pentest_session,
     restore_pentest_session,
@@ -516,6 +517,7 @@ def build_owasp_agent() -> CodeAgent:
         # Project management tools
         create_project,
         add_task_to_project,
+        list_projects,
         # Report regeneration tools
         save_pentest_session,
         restore_pentest_session,

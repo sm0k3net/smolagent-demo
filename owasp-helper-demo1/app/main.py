@@ -3443,7 +3443,7 @@ async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
     index = load_reports_index()
     project = index.get("projects", {}).get(project_id)
     if not project:
-        return
+        return 0
     
     # Get task data
     task = index.get("tasks", {}).get(task_id, {})
@@ -3455,12 +3455,32 @@ async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
     except Exception:
         task_state = None
     
-    if not task_state and not task.get("final_result"):
-        return  # No data to parse
+    # Collect all text to parse (final_result + any associated reports)
+    texts_to_parse = []
     
-    final_result = task_state.final_result if task_state else task.get("final_result", "")
-    if not final_result:
-        return
+    if task_state and task_state.final_result:
+        texts_to_parse.append(str(task_state.final_result))
+    if task.get("final_result"):
+        texts_to_parse.append(str(task.get("final_result")))
+    
+    # Also look for reports associated with this task
+    for report in index.get("reports", []):
+        if report.get("task_id") == task_id:
+            report_path = report.get("path", "")
+            if report_path:
+                try:
+                    from pathlib import Path
+                    report_file = Path(report_path)
+                    if report_file.exists():
+                        content = report_file.read_text(encoding='utf-8', errors='ignore')
+                        texts_to_parse.append(content)
+                except Exception:
+                    pass
+    
+    if not texts_to_parse:
+        return 0  # No data to parse
+    
+    combined_text = "\n".join(texts_to_parse)
     
     # Initialize VulnDB if needed
     if "vulndb" not in project:
@@ -3470,20 +3490,46 @@ async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
     findings_added = 0
     
     # Pattern to extract findings from report-style output
-    # Look for common finding patterns
     patterns = [
-        # Pattern 1: HTML report finding markers
-        r'<h3[^>]*>(\d+)\.\s*([^<]+)</h3>\s*<p[^>]*class="[^"]*severity[^"]*"[^>]*>([^<]+)</p>',
-        # Pattern 2: Markdown-style findings
-        r'###?\s+(?:Finding\s+)?(\d+)[.:]\s*(.+?)\s*\n\*{0,2}Severity[:\s]*\*{0,2}\s*(\w+)',
-        # Pattern 3: Bullet-style findings
-        r'[-•]\s*\*{0,2}([^*\n]+)\*{0,2}\s*\((\w+)\s*severity\)',
-        # Pattern 4: OWASP-style findings
-        r'(A\d{2}(?::\d{4})?[:\s]+[^\n]+)\s*-\s*(\w+)\s*risk',
+        # Pattern 1: HTML report finding-title class
+        r'<(?:h3|div)[^>]*class="[^"]*finding-title[^"]*"[^>]*>([^<]+)</(?:h3|div)>',
+        # Pattern 2: Finding header with severity class
+        r'<div[^>]*class="[^"]*finding-header\s+(\w+)[^"]*"[^>]*>\s*<[^>]+>([^<]+)',
+        # Pattern 3: Markdown findings with emoji or bullet
+        r'(?:🟢|🟡|🟠|🔴|⚫|[-•*])\s*(?:#\d+\s*)?\[(\w+)\]\s*(.+?)(?:\n|$)',
+        # Pattern 4: Numbered findings
+        r'(?:Finding\s+)?#?\d+[.):]\s*\[?(\w+)\]?\s*[-–:]\s*(.+?)(?:\n|$)',
+        # Pattern 5: HTML title in finding
+        r'<span[^>]*class="[^"]*finding-title[^"]*"[^>]*>([^<]+)</span>',
     ]
     
+    # Also extract from structured finding blocks
+    finding_block_pattern = r'<div[^>]*class="[^"]*finding[^"]*"[^>]*>.*?<div[^>]*class="[^"]*finding-header\s+(\w+)[^"]*"[^>]*>.*?<(?:span|h3)[^>]*class="[^"]*finding-title[^"]*"[^>]*>([^<]+)</(?:span|h3)>'
+    
+    for match in re.finditer(finding_block_pattern, combined_text, re.IGNORECASE | re.DOTALL):
+        severity, title = match.groups()
+        title = title.strip()[:200]
+        severity = severity.strip().lower()
+        
+        if title.lower() not in existing_titles:
+            vuln_id = f"AUTO-{uuid.uuid4().hex[:6].upper()}"
+            vulnerability = {
+                "id": vuln_id,
+                "title": title,
+                "severity": severity if severity in ['critical', 'high', 'medium', 'low', 'info'] else 'info',
+                "description": f"Auto-extracted from task report",
+                "status": "open",
+                "source_task": task_id,
+                "auto_parsed": True,
+                "created_at": datetime.now().isoformat()
+            }
+            project["vulndb"].append(vulnerability)
+            existing_titles.add(title.lower())
+            findings_added += 1
+    
+    # Try other patterns
     for pattern in patterns:
-        matches = re.findall(pattern, final_result, re.IGNORECASE | re.MULTILINE)
+        matches = re.findall(pattern, combined_text, re.IGNORECASE | re.MULTILINE)
         for match in matches:
             if len(match) >= 2:
                 # Extract title and severity
@@ -3529,20 +3575,25 @@ async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
     
     # Also check for common security issues in text
     common_issues = {
-        r'missing\s+(?:http\s+)?security\s+header[:\s]+([^\n]+)': ('Missing Security Header', 'medium'),
-        r'(?:x-frame-options|x-content-type|x-xss-protection)\s+(?:header\s+)?(?:not\s+set|missing)': ('Missing Security Header', 'medium'),
+        r'missing\s+(?:http\s+)?(?:x-frame-options|security)\s*header': ('Missing X-Frame-Options Header', 'low'),
+        r'x-frame-options\s+(?:header\s+)?(?:not\s+set|missing|is\s+not\s+present)': ('Missing X-Frame-Options Header', 'low'),
+        r'x-content-type-options\s+(?:not\s+set|missing)': ('Missing X-Content-Type-Options Header', 'low'),
+        r'outdated\s+openssh|openssh\s+\d+\.\d+': ('Outdated OpenSSH Version', 'medium'),
+        r'outdated\s+apache|apache\s+(?:httpd\s+)?\d+\.\d+': ('Outdated Apache Version', 'medium'),
+        r'outdated\s+nginx|nginx\s+\d+\.\d+': ('Outdated Nginx Version', 'medium'),
         r'server\s+(?:version|banner)\s+(?:disclosure|exposed|visible)': ('Server Version Disclosure', 'low'),
-        r'outdated\s+(?:software|version|component)': ('Outdated Software', 'medium'),
+        r'outdated\s+(?:software|version|component)': ('Outdated Software Component', 'medium'),
         r'default\s+(?:credentials|password|admin)': ('Default Credentials', 'high'),
-        r'sql\s+injection\s+(?:found|detected|possible)': ('SQL Injection', 'critical'),
-        r'xss\s+(?:vulnerability|found|detected)': ('Cross-Site Scripting (XSS)', 'high'),
-        r'open\s+(?:port|service)[:\s]+(\d+)': ('Open Port', 'info'),
+        r'sql\s+injection': ('SQL Injection', 'critical'),
+        r'cross[- ]?site\s+scripting|xss': ('Cross-Site Scripting (XSS)', 'high'),
         r'cors\s+misconfiguration': ('CORS Misconfiguration', 'medium'),
         r'sensitive\s+data\s+exposure': ('Sensitive Data Exposure', 'high'),
+        r'directory\s+listing\s+enabled': ('Directory Listing Enabled', 'low'),
+        r'weak\s+(?:ssl|tls|cipher)': ('Weak SSL/TLS Configuration', 'medium'),
     }
     
     for pattern, (title, severity) in common_issues.items():
-        if re.search(pattern, final_result, re.IGNORECASE):
+        if re.search(pattern, combined_text, re.IGNORECASE):
             if title.lower() not in existing_titles:
                 vuln_id = f"AUTO-{uuid.uuid4().hex[:6].upper()}"
                 vulnerability = {
@@ -3562,6 +3613,8 @@ async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
     if findings_added > 0:
         save_reports_index(index)
         print(f"[INFO] Auto-parsed {findings_added} findings from task {task_id} to project {project_id}")
+    
+    return findings_added
 
 
 @app.post("/api/projects/{project_id}/vulnerabilities")
@@ -20813,7 +20866,7 @@ function createActivityTask(taskId, prompt, taskLabel = null, targetType = null)
         <div class="stat"><span>Steps:</span> <span class="stat-value" id="stat-steps-${taskId}">0</span></div>
         <div class="stat"><span>Tools:</span> <span class="stat-value" id="stat-tools-${taskId}">0</span></div>
         <div class="stat"><span>Time:</span> <span class="stat-value" id="stat-duration-${taskId}">0s</span></div>
-        <div class="stat"><span>ETA:</span> <span class="stat-value" id="stat-eta-${taskId}">-</span></div>
+        <div class="stat" id="stat-eta-container-${taskId}" style="display: none;"><span>ETA:</span> <span class="stat-value" id="stat-eta-${taskId}">~2m</span></div>
         <div class="stat"><span>Progress:</span> <span class="stat-value" id="stat-progress-${taskId}">0%</span></div>
       </div>
       <div class="activity-panel-actions">
@@ -21049,32 +21102,30 @@ function animateProgress(taskId) {
 
 function updateTaskETA(taskId) {
   const task = activityTasks[taskId];
-  if (!task || task.progressHistory.length < 2) return;
+  if (!task || task.progressHistory.length < 3) return; // Need at least 3 data points
   
   const etaEl = document.getElementById(`stat-eta-${taskId}`);
+  const etaContainer = document.getElementById(`stat-eta-container-${taskId}`);
   if (!etaEl) return;
   
   // Calculate rate of progress over recent history
   const recent = task.progressHistory.slice(-5);
-  if (recent.length < 2) {
-    etaEl.textContent = 'calculating...';
-    return;
-  }
+  if (recent.length < 3) return; // Don't show until we have enough data
   
   const firstPoint = recent[0];
   const lastPoint = recent[recent.length - 1];
   const progressDelta = lastPoint.progress - firstPoint.progress;
   const timeDelta = lastPoint.time - firstPoint.time;
   
-  if (progressDelta <= 0 || timeDelta <= 0) {
-    etaEl.textContent = 'calculating...';
-    return;
-  }
+  if (progressDelta <= 0 || timeDelta <= 0) return; // Don't show unreliable ETA
   
   // Rate: progress per millisecond
   const rate = progressDelta / timeDelta;
   const remainingProgress = 100 - task.progress;
   const estimatedMs = remainingProgress / rate;
+  
+  // Only show ETA container once we have a reasonable estimate
+  if (etaContainer) etaContainer.style.display = '';
   
   // Cap at 30 minutes for display
   if (estimatedMs > 30 * 60 * 1000) {
@@ -21082,7 +21133,7 @@ function updateTaskETA(taskId) {
   } else if (estimatedMs < 5000) {
     etaEl.textContent = '<5s';
   } else {
-    etaEl.textContent = formatDuration(estimatedMs);
+    etaEl.textContent = '~' + formatDuration(estimatedMs);
   }
 }
 
