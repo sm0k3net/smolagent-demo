@@ -120,6 +120,48 @@ from app.tools.pentest_tools import (
     download_exploit,
     cve_to_exploit_workflow,
 )
+# Multi-agent delegation tools (old system - kept for backwards compatibility)
+from app.agents.sub_agents import (
+    delegate_reconnaissance,
+    delegate_vulnerability_scan,
+    delegate_exploitation,
+    delegate_report_generation,
+    run_parallel_scans,
+    get_sub_agent_status,
+    get_sub_agent_results,
+    create_custom_sub_agent,
+)
+# New hierarchical multi-agent system with shared context
+from app.agents.multi_agent_system import (
+    # Project initialization
+    initialize_pentest_project,
+    get_project_status,
+    # Shared context access
+    submit_recon_data,
+    submit_finding,
+    get_recon_data,
+    get_pending_findings,
+    validate_finding,
+    mark_finding_exploited,
+    mark_phase_complete,
+    get_validated_findings_for_report,
+    save_tool_output,
+    add_qc_note,
+    get_agent_activity_log,
+    # Report compilation
+    compile_final_report,
+    review_final_report,
+    approve_final_report,
+    # Agent dispatchers
+    dispatch_recon_agent,
+    dispatch_vuln_scanner_agent,
+    dispatch_manual_tester_agent,
+    dispatch_exploitation_agent,
+    dispatch_qc_agent_review,
+    dispatch_reporting_agent,
+    dispatch_qc_final_review,
+    run_full_pentest_orchestration,
+)
 from app.tools.report_tools import (
     enable_report_mode,
     disable_report_mode,
@@ -530,6 +572,56 @@ def build_owasp_agent() -> CodeAgent:
         zap_get_urls_with_params,
         zap_full_scan,
         zap_generate_report,
+    ])
+    
+    # Multi-agent delegation tools - for complex task distribution (legacy system)
+    tools.extend([
+        delegate_reconnaissance,
+        delegate_vulnerability_scan,
+        delegate_exploitation,
+        delegate_report_generation,
+        run_parallel_scans,
+        get_sub_agent_status,
+        get_sub_agent_results,
+        create_custom_sub_agent,
+    ])
+    
+    # NEW: Hierarchical Multi-Agent System with shared context
+    # This is the recommended approach for comprehensive pentesting
+    tools.extend([
+        # Project lifecycle
+        initialize_pentest_project,
+        get_project_status,
+        # Shared context - recon data
+        submit_recon_data,
+        get_recon_data,
+        # Shared context - findings
+        submit_finding,
+        get_pending_findings,
+        validate_finding,
+        mark_finding_exploited,
+        get_validated_findings_for_report,
+        # Phase management
+        mark_phase_complete,
+        # Tool output storage
+        save_tool_output,
+        # QC notes
+        add_qc_note,
+        get_agent_activity_log,
+        # Report compilation
+        compile_final_report,
+        review_final_report,
+        approve_final_report,
+        # Sub-agent dispatchers (for delegating specific phases)
+        dispatch_recon_agent,
+        dispatch_vuln_scanner_agent,
+        dispatch_manual_tester_agent,
+        dispatch_exploitation_agent,
+        dispatch_qc_agent_review,
+        dispatch_reporting_agent,
+        dispatch_qc_final_review,
+        # Full orchestration (runs complete pentest with all sub-agents)
+        run_full_pentest_orchestration,
     ])
     
     # Add DefectDojo tools only if configured
