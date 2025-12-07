@@ -3432,6 +3432,138 @@ async def get_project_vulnerabilities(project_id: str):
     return JSONResponse({"vulnerabilities": vulndb, "count": len(vulndb)})
 
 
+async def auto_parse_task_findings_to_vulndb(project_id: str, task_id: str):
+    """Auto-parse findings from task result to project VulnDB.
+    
+    This function analyzes the task's final_result and tool outputs
+    to extract vulnerabilities and add them to the project's VulnDB.
+    """
+    import re
+    
+    index = load_reports_index()
+    project = index.get("projects", {}).get(project_id)
+    if not project:
+        return
+    
+    # Get task data
+    task = index.get("tasks", {}).get(task_id, {})
+    
+    # Load full task state from persistence
+    try:
+        persistence = get_task_persistence()
+        task_state = persistence.load_task(task_id)
+    except Exception:
+        task_state = None
+    
+    if not task_state and not task.get("final_result"):
+        return  # No data to parse
+    
+    final_result = task_state.final_result if task_state else task.get("final_result", "")
+    if not final_result:
+        return
+    
+    # Initialize VulnDB if needed
+    if "vulndb" not in project:
+        project["vulndb"] = []
+    
+    existing_titles = {v.get("title", "").lower() for v in project["vulndb"]}
+    findings_added = 0
+    
+    # Pattern to extract findings from report-style output
+    # Look for common finding patterns
+    patterns = [
+        # Pattern 1: HTML report finding markers
+        r'<h3[^>]*>(\d+)\.\s*([^<]+)</h3>\s*<p[^>]*class="[^"]*severity[^"]*"[^>]*>([^<]+)</p>',
+        # Pattern 2: Markdown-style findings
+        r'###?\s+(?:Finding\s+)?(\d+)[.:]\s*(.+?)\s*\n\*{0,2}Severity[:\s]*\*{0,2}\s*(\w+)',
+        # Pattern 3: Bullet-style findings
+        r'[-•]\s*\*{0,2}([^*\n]+)\*{0,2}\s*\((\w+)\s*severity\)',
+        # Pattern 4: OWASP-style findings
+        r'(A\d{2}(?::\d{4})?[:\s]+[^\n]+)\s*-\s*(\w+)\s*risk',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, final_result, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            if len(match) >= 2:
+                # Extract title and severity
+                if len(match) == 3:
+                    _, title, severity = match
+                elif len(match) == 2:
+                    title, severity = match
+                else:
+                    continue
+                
+                title = title.strip()[:200]  # Cap title length
+                severity = severity.strip().lower()
+                
+                # Normalize severity
+                severity_map = {
+                    'critical': 'critical', 'crit': 'critical', 'p1': 'critical',
+                    'high': 'high', 'hi': 'high', 'p2': 'high',
+                    'medium': 'medium', 'med': 'medium', 'moderate': 'medium', 'p3': 'medium',
+                    'low': 'low', 'lo': 'low', 'minor': 'low', 'p4': 'low',
+                    'info': 'info', 'informational': 'info', 'note': 'info', 'p5': 'info'
+                }
+                severity = severity_map.get(severity, 'info')
+                
+                # Skip if already exists
+                if title.lower() in existing_titles:
+                    continue
+                
+                # Add to VulnDB
+                vuln_id = f"AUTO-{uuid.uuid4().hex[:6].upper()}"
+                vulnerability = {
+                    "id": vuln_id,
+                    "title": title,
+                    "severity": severity,
+                    "description": f"Auto-extracted from task: {task.get('prompt', task_id)[:100]}",
+                    "status": "open",
+                    "source_task": task_id,
+                    "auto_parsed": True,
+                    "created_at": datetime.now().isoformat()
+                }
+                project["vulndb"].append(vulnerability)
+                existing_titles.add(title.lower())
+                findings_added += 1
+    
+    # Also check for common security issues in text
+    common_issues = {
+        r'missing\s+(?:http\s+)?security\s+header[:\s]+([^\n]+)': ('Missing Security Header', 'medium'),
+        r'(?:x-frame-options|x-content-type|x-xss-protection)\s+(?:header\s+)?(?:not\s+set|missing)': ('Missing Security Header', 'medium'),
+        r'server\s+(?:version|banner)\s+(?:disclosure|exposed|visible)': ('Server Version Disclosure', 'low'),
+        r'outdated\s+(?:software|version|component)': ('Outdated Software', 'medium'),
+        r'default\s+(?:credentials|password|admin)': ('Default Credentials', 'high'),
+        r'sql\s+injection\s+(?:found|detected|possible)': ('SQL Injection', 'critical'),
+        r'xss\s+(?:vulnerability|found|detected)': ('Cross-Site Scripting (XSS)', 'high'),
+        r'open\s+(?:port|service)[:\s]+(\d+)': ('Open Port', 'info'),
+        r'cors\s+misconfiguration': ('CORS Misconfiguration', 'medium'),
+        r'sensitive\s+data\s+exposure': ('Sensitive Data Exposure', 'high'),
+    }
+    
+    for pattern, (title, severity) in common_issues.items():
+        if re.search(pattern, final_result, re.IGNORECASE):
+            if title.lower() not in existing_titles:
+                vuln_id = f"AUTO-{uuid.uuid4().hex[:6].upper()}"
+                vulnerability = {
+                    "id": vuln_id,
+                    "title": title,
+                    "severity": severity,
+                    "description": f"Auto-detected pattern in task result",
+                    "status": "open",
+                    "source_task": task_id,
+                    "auto_parsed": True,
+                    "created_at": datetime.now().isoformat()
+                }
+                project["vulndb"].append(vulnerability)
+                existing_titles.add(title.lower())
+                findings_added += 1
+    
+    if findings_added > 0:
+        save_reports_index(index)
+        print(f"[INFO] Auto-parsed {findings_added} findings from task {task_id} to project {project_id}")
+
+
 @app.post("/api/projects/{project_id}/vulnerabilities")
 async def add_project_vulnerability(project_id: str, data: dict):
     """Add a vulnerability to the project's VulnDB."""
@@ -4142,9 +4274,49 @@ async def update_task(task_id: str, data: dict):
     save_reports_index(index)
     return JSONResponse({"success": True, "task": task})
 
+
+@app.get("/api/tasks/{task_id}/details")
+async def get_task_details(task_id: str):
+    """Get detailed task info including reports and findings count."""
+    index = load_reports_index()
+    
+    if task_id not in index.get("tasks", {}):
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    task = index["tasks"][task_id]
+    
+    # Get reports for this task
+    reports = []
+    for report_path in task.get("reports", []):
+        try:
+            path = Path(report_path)
+            if path.exists():
+                reports.append({
+                    "path": report_path,
+                    "name": path.name,
+                    "size": path.stat().st_size,
+                    "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+                })
+        except Exception:
+            pass
+    
+    # Try to get findings count from task data
+    findings_count = task.get("findings_count", 0)
+    
+    return JSONResponse({
+        "task_id": task_id,
+        "prompt": task.get("prompt", ""),
+        "label": task.get("label", "general"),
+        "created_at": task.get("created_at"),
+        "reports": reports,
+        "findings_count": findings_count,
+        "project_id": task.get("project_id")
+    })
+
+
 @app.post("/api/projects/{project_id}/tasks")
 async def add_task_to_project(project_id: str, data: dict):
-    """Add a task to a project."""
+    """Add a task to a project and auto-parse findings to VulnDB."""
     task_id = data.get("task_id")
     if not task_id:
         return JSONResponse({"error": "task_id required"}, status_code=400)
@@ -4173,7 +4345,52 @@ async def add_task_to_project(project_id: str, data: dict):
             report["project_id"] = project_id
     
     save_reports_index(index)
+    
+    # Auto-parse findings from task to VulnDB
+    try:
+        await auto_parse_task_findings_to_vulndb(project_id, task_id)
+    except Exception as e:
+        print(f"[ERROR] Failed to auto-parse findings: {e}")
+    
     return JSONResponse({"success": True})
+
+
+@app.post("/api/projects/{project_id}/parse-findings")
+async def parse_project_findings(project_id: str):
+    """Manually trigger parsing of findings from all project tasks to VulnDB."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    task_ids = project.get("tasks", [])
+    
+    if not task_ids:
+        return JSONResponse({"findings_added": 0, "message": "No tasks in project"})
+    
+    # Count findings before parsing
+    initial_count = len(project.get("vulndb", []))
+    
+    # Parse findings from each task
+    for task_id in task_ids:
+        try:
+            await auto_parse_task_findings_to_vulndb(project_id, task_id)
+        except Exception as e:
+            print(f"[ERROR] Failed to parse findings from task {task_id}: {e}")
+    
+    # Reload index to get updated count
+    index = load_reports_index()
+    project = index["projects"].get(project_id, {})
+    final_count = len(project.get("vulndb", []))
+    
+    findings_added = final_count - initial_count
+    return JSONResponse({
+        "success": True,
+        "findings_added": findings_added,
+        "total_vulnerabilities": final_count
+    })
+
 
 @app.delete("/api/projects/{project_id}/tasks/{task_id}")
 async def remove_task_from_project(project_id: str, task_id: str):
@@ -8005,31 +8222,111 @@ h1 {
   align-items: center;
   gap: 0.5rem;
 }
+.dashboard-total-count {
+  font-size: 0.85rem;
+  color: var(--gray-400);
+  font-weight: 500;
+}
+.stats-chart-container {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+.stats-chart {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .stats-row {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 0.75rem;
+  flex: 1;
 }
 .stat-box {
   text-align: center;
-  padding: 0.75rem;
+  padding: 0.75rem 0.5rem;
   background: rgba(0,0,0,0.2);
   border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: all 0.2s ease;
+}
+.stat-box:hover {
+  background: rgba(0,0,0,0.3);
+  transform: translateY(-2px);
 }
 .stat-box .value {
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   font-weight: 700;
 }
 .stat-box .label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--gray-400);
   margin-top: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
+.stat-box.critical { border-left: 3px solid var(--critical); }
+.stat-box.high { border-left: 3px solid #f97316; }
+.stat-box.medium { border-left: 3px solid var(--warning); }
+.stat-box.low { border-left: 3px solid var(--success); }
+.stat-box.info { border-left: 3px solid #3b82f6; }
 .stat-box.critical .value { color: var(--critical); }
 .stat-box.high .value { color: var(--high, #f97316); }
 .stat-box.medium .value { color: var(--warning); }
 .stat-box.low .value { color: var(--success); }
 .stat-box.info .value { color: var(--info, #3b82f6); }
+
+/* Project Info Editable Styles */
+.project-desc-text {
+  color: var(--gray-300);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+}
+.project-meta-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--gray-500);
+}
+.meta-item svg {
+  color: var(--gray-600);
+}
+
+/* Quick Action Buttons */
+.btn-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--gray-300);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-action:hover {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}
+.btn-action svg {
+  opacity: 0.7;
+}
+.btn-action:hover svg {
+  opacity: 1;
+}
 
 /* VulnDB Tree Styles */
 .vulndb-tree {
@@ -8179,20 +8476,110 @@ h1 {
 .vuln-form-input, .vuln-form-select, .vuln-form-textarea {
   width: 100%;
   padding: 0.6rem 0.8rem;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: var(--gray-900);
+  border: 1px solid rgba(255,255,255,0.15);
   border-radius: 8px;
   color: var(--light);
   font-size: 0.85rem;
   font-family: inherit;
+  transition: all 0.2s ease;
 }
 .vuln-form-input:focus, .vuln-form-select:focus, .vuln-form-textarea:focus {
   outline: none;
-  border-color: rgba(34, 197, 94, 0.5);
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+.vuln-form-input::placeholder, .vuln-form-textarea::placeholder {
+  color: var(--gray-500);
 }
 .vuln-form-textarea {
   min-height: 80px;
   resize: vertical;
+}
+/* Fix dropdown colors - critical fix for visibility */
+.vuln-form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1.5em 1.5em;
+  padding-right: 2.5rem;
+  cursor: pointer;
+}
+.vuln-form-select option {
+  background: #1a1a2e;
+  color: #ffffff;
+  padding: 0.5rem;
+}
+.vuln-form-select option:hover,
+.vuln-form-select option:checked {
+  background: #22c55e;
+  color: #ffffff;
+}
+/* Evidence section with image upload */
+.evidence-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.evidence-upload-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 2px dashed rgba(255,255,255,0.15);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.evidence-upload-area:hover {
+  border-color: var(--success);
+  background: rgba(34, 197, 94, 0.05);
+}
+.evidence-upload-area svg {
+  color: var(--gray-400);
+}
+.evidence-upload-area span {
+  color: var(--gray-400);
+  font-size: 0.8rem;
+}
+.evidence-images-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.evidence-image-item {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.evidence-image-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.evidence-image-item .remove-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  background: rgba(239, 68, 68, 0.9);
+  border: none;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
 }
 .vuln-modal-footer {
   display: flex;
@@ -13843,14 +14230,32 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
               <circle cx="12" cy="12" r="10"></circle>
               <path d="M12 8v4M12 16h.01"></path>
             </svg>
-            Submit Vulnerability
+            Add Finding
+          </button>
+          <button class="btn-secondary" onclick="exportVulnsToNotes()" title="Export to Notes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <path d="M14 2v6h6"></path>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            To Notes
           </button>
           <button class="btn-secondary" onclick="regenerateProjectReport()" title="Regenerate Report">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
             </svg>
-            Regenerate Report
+            Regenerate
+          </button>
+          <button class="btn-secondary" onclick="parseProjectFindings()" title="Auto-parse findings from all tasks">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <line x1="11" y1="8" x2="11" y2="14"></line>
+              <line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg>
+            Parse
           </button>
           <button class="btn-secondary" onclick="exportProjectZip()" title="Export ZIP">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
@@ -13858,32 +14263,56 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            Export Data
+            Export
           </button>
           <button class="task-modal-close" onclick="closeProjectDashboard()">&times;</button>
         </div>
       </div>
       <div class="project-dashboard-body">
         <div class="dashboard-main">
-          <!-- Statistics Card -->
+          <!-- Statistics Card with Chart -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">📊 Findings Summary</span>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <line x1="18" y1="20" x2="18" y2="10"></line>
+                  <line x1="12" y1="20" x2="12" y2="4"></line>
+                  <line x1="6" y1="20" x2="6" y2="14"></line>
+                </svg>
+                Findings Overview
+              </span>
+              <span class="dashboard-total-count" id="dashboard-total-count">0 Total</span>
             </div>
-            <div class="stats-row" id="dashboard-stats">
-              <div class="stat-box critical"><div class="value">0</div><div class="label">Critical</div></div>
-              <div class="stat-box high"><div class="value">0</div><div class="label">High</div></div>
-              <div class="stat-box medium"><div class="value">0</div><div class="label">Medium</div></div>
-              <div class="stat-box low"><div class="value">0</div><div class="label">Low</div></div>
-              <div class="stat-box info"><div class="value">0</div><div class="label">Info</div></div>
+            <div class="stats-chart-container">
+              <div class="stats-chart" id="dashboard-chart">
+                <canvas id="severity-chart" width="120" height="120"></canvas>
+              </div>
+              <div class="stats-row" id="dashboard-stats">
+                <div class="stat-box critical"><div class="value">0</div><div class="label">Critical</div></div>
+                <div class="stat-box high"><div class="value">0</div><div class="label">High</div></div>
+                <div class="stat-box medium"><div class="value">0</div><div class="label">Medium</div></div>
+                <div class="stat-box low"><div class="value">0</div><div class="label">Low</div></div>
+                <div class="stat-box info"><div class="value">0</div><div class="label">Info</div></div>
+              </div>
             </div>
           </div>
           
           <!-- VulnDB Card -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">🐛 Vulnerability Database</span>
-              <button class="btn-sm btn-primary" onclick="submitVulnerabilityModal()">+ Add</button>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+                Vulnerability Database
+              </span>
+              <button class="btn-sm btn-primary" onclick="submitVulnerabilityModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Add
+              </button>
             </div>
             <div class="vulndb-tree" id="vulndb-tree">
               <div class="vulndb-empty">No vulnerabilities recorded yet</div>
@@ -13893,7 +14322,13 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
           <!-- Tasks Tree Card -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">📋 Tasks</span>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <path d="M9 11l3 3L22 4"></path>
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                </svg>
+                Tasks
+              </span>
             </div>
             <div class="tasks-tree" id="dashboard-tasks-tree">
               <div class="vulndb-empty">No tasks in this project</div>
@@ -13902,23 +14337,70 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
         </div>
         
         <div class="dashboard-sidebar">
-          <!-- Project Info -->
+          <!-- Project Info (Editable) -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">ℹ️ Project Info</span>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="16" x2="12" y2="12"></line>
+                  <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                Project Info
+              </span>
+              <button class="vulndb-action-btn" onclick="toggleProjectInfoEdit()" title="Edit" id="project-info-edit-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
             </div>
             <div id="dashboard-project-info">
-              <p style="color: var(--gray-400); font-size: 0.85rem;" id="dashboard-project-desc">No description</p>
-              <p style="color: var(--gray-500); font-size: 0.75rem; margin-top: 0.5rem;">
-                Created: <span id="dashboard-project-created">-</span>
-              </p>
+              <div id="project-info-display">
+                <p class="project-desc-text" id="dashboard-project-desc">No description</p>
+                <div class="project-meta-info">
+                  <div class="meta-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                      <line x1="16" y1="2" x2="16" y2="6"></line>
+                      <line x1="8" y1="2" x2="8" y2="6"></line>
+                      <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span id="dashboard-project-created">-</span>
+                  </div>
+                </div>
+              </div>
+              <div id="project-info-edit" style="display: none;">
+                <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
+                  <label style="font-size: 0.75rem;">Project Name</label>
+                  <input type="text" class="vuln-form-input" id="edit-project-name" style="padding: 0.4rem 0.6rem; font-size: 0.85rem;">
+                </div>
+                <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
+                  <label style="font-size: 0.75rem;">Description</label>
+                  <textarea class="vuln-form-textarea" id="edit-project-desc" rows="2" style="min-height: 60px; font-size: 0.85rem;"></textarea>
+                </div>
+                <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
+                  <label style="font-size: 0.75rem;">Color</label>
+                  <input type="color" id="edit-project-color" style="width: 100%; height: 30px; border: none; cursor: pointer;">
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                  <button class="btn-secondary btn-sm" onclick="cancelProjectInfoEdit()" style="flex: 1;">Cancel</button>
+                  <button class="btn-primary btn-sm" onclick="saveProjectInfo()" style="flex: 1;">Save</button>
+                </div>
+              </div>
             </div>
           </div>
           
           <!-- Latest Report -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">📄 Latest Report</span>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                </svg>
+                Latest Report
+              </span>
             </div>
             <div id="dashboard-latest-report">
               <p class="vulndb-empty" style="padding: 1rem;">No reports generated yet</p>
@@ -13928,14 +14410,37 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
           <!-- Quick Actions -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
-              <span class="dashboard-card-title">⚡ Quick Actions</span>
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                Quick Actions
+              </span>
             </div>
             <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-              <button class="btn-secondary btn-sm" onclick="regenerateProjectReport()" style="width: 100%; justify-content: center;">
-                🔄 Regenerate Report
+              <button class="btn-action btn-sm" onclick="regenerateProjectReport()" style="width: 100%;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+                Regenerate Report
               </button>
-              <button class="btn-secondary btn-sm" onclick="exportProjectZip()" style="width: 100%; justify-content: center;">
-                📦 Export as ZIP
+              <button class="btn-action btn-sm" onclick="exportProjectZip()" style="width: 100%;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Export as ZIP
+              </button>
+              <button class="btn-action btn-sm" onclick="exportVulnsToNotes()" style="width: 100%;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <path d="M14 2v6h6"></path>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                </svg>
+                Export to Notes
               </button>
             </div>
           </div>
@@ -14028,7 +14533,19 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
         
         <div class="vuln-form-group">
           <label>Evidence / Proof of Concept</label>
-          <textarea class="vuln-form-textarea" id="vuln-evidence" rows="3" placeholder="Screenshots description, payloads, requests/responses..."></textarea>
+          <div class="evidence-section">
+            <textarea class="vuln-form-textarea" id="vuln-evidence" rows="3" placeholder="Screenshots description, payloads, requests/responses..."></textarea>
+            <div class="evidence-upload-area" onclick="document.getElementById('evidence-image-input').click()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+              <span>Click to attach images (PNG, JPG)</span>
+              <input type="file" id="evidence-image-input" accept="image/*" multiple style="display: none;" onchange="handleEvidenceImages(this)">
+            </div>
+            <div class="evidence-images-preview" id="evidence-images-preview"></div>
+          </div>
         </div>
         
         <div class="vuln-form-group">
@@ -14052,8 +14569,21 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
         </div>
       </div>
       <div class="vuln-modal-footer">
-        <button class="btn-secondary" onclick="closeVulnModal()">Cancel</button>
-        <button class="btn-primary" onclick="saveVulnerability()">Save Vulnerability</button>
+        <button class="btn-secondary" onclick="closeVulnModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+          Cancel
+        </button>
+        <button class="btn-primary" onclick="saveVulnerability()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save Vulnerability
+        </button>
       </div>
     </div>
   </div>
@@ -16612,8 +17142,16 @@ function renderProjectDashboard(data) {
   document.getElementById('dashboard-project-desc').textContent = project.description || 'No description';
   document.getElementById('dashboard-project-created').textContent = project.created_at ? new Date(project.created_at).toLocaleDateString() : '-';
   
+  // Reset edit form
+  document.getElementById('project-info-display').style.display = 'block';
+  document.getElementById('project-info-edit').style.display = 'none';
+  
   // Statistics
   const stats = data.statistics;
+  const total = stats.severity_counts.critical + stats.severity_counts.high + 
+                stats.severity_counts.medium + stats.severity_counts.low + stats.severity_counts.info;
+  document.getElementById('dashboard-total-count').textContent = total + ' Total';
+  
   const statsHtml = `
     <div class="stat-box critical"><div class="value">${stats.severity_counts.critical}</div><div class="label">Critical</div></div>
     <div class="stat-box high"><div class="value">${stats.severity_counts.high}</div><div class="label">High</div></div>
@@ -16622,6 +17160,9 @@ function renderProjectDashboard(data) {
     <div class="stat-box info"><div class="value">${stats.severity_counts.info}</div><div class="label">Info</div></div>
   `;
   document.getElementById('dashboard-stats').innerHTML = statsHtml;
+  
+  // Draw severity chart
+  drawSeverityChart(stats.severity_counts);
   
   // VulnDB Tree
   renderVulnDBTree(data.vulndb || []);
@@ -16777,6 +17318,121 @@ function submitVulnerabilityModal() {
 
 function closeVulnModal() {
   document.getElementById('vuln-modal').classList.remove('active');
+  // Clear evidence images
+  evidenceImages = [];
+  document.getElementById('evidence-images-preview').innerHTML = '';
+}
+
+// ============== EVIDENCE IMAGE HANDLING ==============
+
+let evidenceImages = [];
+
+function handleEvidenceImages(input) {
+  const files = input.files;
+  const previewContainer = document.getElementById('evidence-images-preview');
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (!file.type.match('image.*')) continue;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const imageData = e.target.result;
+      evidenceImages.push({ name: file.name, data: imageData });
+      
+      const imgIndex = evidenceImages.length - 1;
+      const imgDiv = document.createElement('div');
+      imgDiv.className = 'evidence-image-item';
+      imgDiv.innerHTML = `
+        <img src="${imageData}" alt="${file.name}">
+        <button class="remove-btn" onclick="removeEvidenceImage(${imgIndex})">&times;</button>
+      `;
+      previewContainer.appendChild(imgDiv);
+    };
+    reader.readAsDataURL(file);
+  }
+  
+  // Clear input for next selection
+  input.value = '';
+}
+
+function removeEvidenceImage(index) {
+  evidenceImages.splice(index, 1);
+  renderEvidenceImagesPreviews();
+}
+
+function renderEvidenceImagesPreviews() {
+  const previewContainer = document.getElementById('evidence-images-preview');
+  previewContainer.innerHTML = '';
+  evidenceImages.forEach((img, index) => {
+    const imgDiv = document.createElement('div');
+    imgDiv.className = 'evidence-image-item';
+    imgDiv.innerHTML = `
+      <img src="${img.data}" alt="${img.name}">
+      <button class="remove-btn" onclick="removeEvidenceImage(${index})">&times;</button>
+    `;
+    previewContainer.appendChild(imgDiv);
+  });
+}
+
+// ============== TASK REPORTS EXPANSION ==============
+
+function toggleTaskReports(taskId) {
+  const task = currentDashboardData?.tasks?.find(t => t.id === taskId);
+  if (!task) return;
+  
+  const container = document.getElementById('dashboard-tasks-tree');
+  const existingDetails = container.querySelector('.task-details-' + taskId);
+  
+  if (existingDetails) {
+    // Toggle collapse
+    existingDetails.remove();
+    return;
+  }
+  
+  // Fetch and show task details
+  fetch('/api/tasks/' + taskId + '/details')
+    .then(response => {
+      if (!response.ok) throw new Error('Failed to load task details');
+      return response.json();
+    })
+    .then(data => {
+      const taskItem = container.querySelector(`[onclick*="toggleTaskReports('${taskId}')"]`);
+      if (!taskItem) return;
+      
+      const detailsDiv = document.createElement('div');
+      detailsDiv.className = 'task-details task-details-' + taskId;
+      detailsDiv.style.cssText = 'margin-left: 1.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.02); border-radius: 6px; border-left: 2px solid var(--success);';
+      
+      let html = '<div style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 0.5rem;">Task Reports & Findings</div>';
+      
+      if (data.reports && data.reports.length > 0) {
+        html += '<div style="margin-bottom: 0.5rem;">';
+        data.reports.forEach(report => {
+          html += `
+            <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0;">
+              <span style="font-size: 0.8rem;">📄</span>
+              <span style="font-size: 0.8rem; flex: 1; cursor: pointer; color: var(--success);" onclick="viewReport('${escapeHtml(report.path)}')">${escapeHtml(report.name)}</span>
+            </div>
+          `;
+        });
+        html += '</div>';
+      } else {
+        html += '<div style="font-size: 0.8rem; color: var(--gray-500);">No reports generated</div>';
+      }
+      
+      // Show findings count if available
+      if (data.findings_count !== undefined) {
+        html += `<div style="font-size: 0.8rem; color: var(--gray-400); margin-top: 0.5rem;">Findings: ${data.findings_count}</div>`;
+      }
+      
+      detailsDiv.innerHTML = html;
+      taskItem.insertAdjacentElement('afterend', detailsDiv);
+    })
+    .catch(error => {
+      console.error('Error loading task details:', error);
+      showToast('error', 'Failed to load task details');
+    });
 }
 
 function viewVulnerability(vulnId) {
@@ -16948,6 +17604,41 @@ async function regenerateProjectReport() {
   }
 }
 
+// ============== PARSE FINDINGS ==============
+
+async function parseProjectFindings() {
+  if (!currentDashboardProjectId) {
+    alert('No project selected');
+    return;
+  }
+  
+  try {
+    showToast('info', 'Parsing findings from all tasks...');
+    
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/parse-findings', {
+      method: 'POST'
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Parse failed' }));
+      throw new Error(errorData.error || 'Failed to parse findings');
+    }
+    
+    const data = await response.json();
+    
+    if (data.findings_added > 0) {
+      showToast('success', `Added ${data.findings_added} new findings to VulnDB!`);
+      // Refresh the dashboard to show new vulnerabilities
+      await openProjectDashboard(currentDashboardProjectId);
+    } else {
+      showToast('info', 'No new findings found to add');
+    }
+  } catch (error) {
+    console.error('Error parsing findings:', error);
+    showToast('error', 'Failed to parse findings: ' + error.message);
+  }
+}
+
 // ============== EXPORT ZIP ==============
 
 async function exportProjectZip() {
@@ -16959,18 +17650,37 @@ async function exportProjectZip() {
   try {
     showToast('info', 'Preparing export...');
     
-    // Trigger download
+    // Use fetch to download with proper error handling
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/export');
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Export failed' }));
+      throw new Error(errorData.error || 'Failed to export project');
+    }
+    
+    // Get filename from Content-Disposition header or create one
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = 'project_export.zip';
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename=(.+)/);
+      if (match) filename = match[1];
+    }
+    
+    // Convert response to blob and trigger download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = '/api/projects/' + currentDashboardProjectId + '/export';
-    link.download = '';
+    link.href = url;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
     
-    showToast('success', 'Export started');
+    showToast('success', 'Export completed!');
   } catch (error) {
     console.error('Error exporting project:', error);
-    alert('Failed to export project');
+    showToast('error', 'Failed to export project: ' + error.message);
   }
 }
 
@@ -17019,6 +17729,205 @@ async function saveTaskEdit() {
     console.error('Error updating task:', error);
     alert('Failed to update task');
   }
+}
+
+// ============== PROJECT INFO EDITING ==============
+
+function toggleProjectInfoEdit() {
+  const display = document.getElementById('project-info-display');
+  const edit = document.getElementById('project-info-edit');
+  
+  if (edit.style.display === 'none') {
+    // Switch to edit mode
+    const project = currentDashboardData?.project;
+    if (project) {
+      document.getElementById('edit-project-name').value = project.name || '';
+      document.getElementById('edit-project-desc').value = project.description || '';
+      document.getElementById('edit-project-color').value = project.color || '#22c55e';
+    }
+    display.style.display = 'none';
+    edit.style.display = 'block';
+  } else {
+    cancelProjectInfoEdit();
+  }
+}
+
+function cancelProjectInfoEdit() {
+  document.getElementById('project-info-display').style.display = 'block';
+  document.getElementById('project-info-edit').style.display = 'none';
+}
+
+async function saveProjectInfo() {
+  if (!currentDashboardProjectId) return;
+  
+  const name = document.getElementById('edit-project-name').value.trim();
+  const description = document.getElementById('edit-project-desc').value.trim();
+  const color = document.getElementById('edit-project-color').value;
+  
+  if (!name) {
+    alert('Project name is required');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, color })
+    });
+    
+    if (!response.ok) throw new Error('Failed to update project');
+    
+    cancelProjectInfoEdit();
+    openProjectDashboard(currentDashboardProjectId);
+    loadReportsDirectory();
+    showToast('success', 'Project updated');
+  } catch (error) {
+    console.error('Error updating project:', error);
+    alert('Failed to update project');
+  }
+}
+
+// ============== EXPORT VULNS TO NOTES ==============
+
+async function exportVulnsToNotes() {
+  if (!currentDashboardProjectId || !currentDashboardData) {
+    alert('No project data available');
+    return;
+  }
+  
+  const vulndb = currentDashboardData.vulndb || [];
+  if (vulndb.length === 0) {
+    alert('No vulnerabilities to export');
+    return;
+  }
+  
+  const project = currentDashboardData.project;
+  
+  // Generate markdown content
+  let markdown = `# Security Assessment: ${project.name}\\n\\n`;
+  markdown += `**Date:** ${new Date().toLocaleDateString()}\\n`;
+  markdown += `**Total Findings:** ${vulndb.length}\\n\\n`;
+  markdown += `---\\n\\n`;
+  
+  // Sort by severity
+  const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
+  vulndb.sort((a, b) => severityOrder[a.severity?.toLowerCase() || 'info'] - severityOrder[b.severity?.toLowerCase() || 'info']);
+  
+  vulndb.forEach((vuln, index) => {
+    markdown += `## ${index + 1}. ${vuln.title}\\n\\n`;
+    markdown += `**Severity:** ${vuln.severity}\\n`;
+    if (vuln.owasp_category) markdown += `**OWASP:** ${vuln.owasp_category}\\n`;
+    if (vuln.cwe_id) markdown += `**CWE:** ${vuln.cwe_id}\\n`;
+    if (vuln.cvss_score) markdown += `**CVSS:** ${vuln.cvss_score}\\n`;
+    markdown += `\\n`;
+    
+    if (vuln.description) markdown += `### Description\\n${vuln.description}\\n\\n`;
+    if (vuln.affected_component) markdown += `**Affected Component:** ${vuln.affected_component}\\n\\n`;
+    if (vuln.impact) markdown += `### Impact\\n${vuln.impact}\\n\\n`;
+    if (vuln.evidence) markdown += `### Evidence\\n\`\`\`\\n${vuln.evidence}\\n\`\`\`\\n\\n`;
+    if (vuln.steps_to_reproduce) markdown += `### Steps to Reproduce\\n${vuln.steps_to_reproduce}\\n\\n`;
+    if (vuln.remediation) markdown += `### Remediation\\n${vuln.remediation}\\n\\n`;
+    markdown += `---\\n\\n`;
+  });
+  
+  try {
+    // Create a note
+    const noteTitle = `Security Findings - ${project.name}`;
+    const response = await fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: noteTitle,
+        content: markdown,
+        project_id: currentDashboardProjectId
+      })
+    });
+    
+    if (!response.ok) throw new Error('Failed to create note');
+    
+    showToast('success', 'Findings exported to Notes!');
+    
+    // Optionally switch to Notes tab
+    if (confirm('Findings exported! Would you like to view them in Notes?')) {
+      switchTab('notes-tab');
+      loadNotesList();
+    }
+  } catch (error) {
+    console.error('Error exporting to notes:', error);
+    showToast('error', 'Failed to export: ' + error.message);
+  }
+}
+
+// ============== SEVERITY CHART ==============
+
+function drawSeverityChart(counts) {
+  const canvas = document.getElementById('severity-chart');
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(width, height) / 2 - 10;
+  
+  // Clear canvas
+  ctx.clearRect(0, 0, width, height);
+  
+  const data = [
+    { value: counts.critical || 0, color: '#ef4444' },
+    { value: counts.high || 0, color: '#f97316' },
+    { value: counts.medium || 0, color: '#eab308' },
+    { value: counts.low || 0, color: '#22c55e' },
+    { value: counts.info || 0, color: '#3b82f6' }
+  ];
+  
+  const total = data.reduce((sum, d) => sum + d.value, 0);
+  
+  if (total === 0) {
+    // Draw empty state
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 15;
+    ctx.stroke();
+    
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No Data', centerX, centerY);
+    return;
+  }
+  
+  let startAngle = -Math.PI / 2;
+  
+  data.forEach(segment => {
+    if (segment.value === 0) return;
+    
+    const sliceAngle = (segment.value / total) * 2 * Math.PI;
+    
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, startAngle, startAngle + sliceAngle);
+    ctx.strokeStyle = segment.color;
+    ctx.lineWidth = 15;
+    ctx.lineCap = 'butt';
+    ctx.stroke();
+    
+    startAngle += sliceAngle;
+  });
+  
+  // Draw center text
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(total.toString(), centerX, centerY - 5);
+  
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('TOTAL', centerX, centerY + 12);
 }
 
 function renderReportItem(report, taskId = null) {
@@ -19846,6 +20755,10 @@ function createActivityTask(taskId, prompt, taskLabel = null, targetType = null)
     stepCount: 0,
     toolCount: 0,
     progress: 0,
+    lastProgress: 0,
+    targetProgress: 0,
+    progressHistory: [],  // Track progress over time for ETA
+    estimatedTotal: 30,   // Estimated total tools (dynamic)
     durationInterval: null,
     taskLabel: taskLabel || 'general',
     targetType: targetType,
@@ -19900,6 +20813,7 @@ function createActivityTask(taskId, prompt, taskLabel = null, targetType = null)
         <div class="stat"><span>Steps:</span> <span class="stat-value" id="stat-steps-${taskId}">0</span></div>
         <div class="stat"><span>Tools:</span> <span class="stat-value" id="stat-tools-${taskId}">0</span></div>
         <div class="stat"><span>Time:</span> <span class="stat-value" id="stat-duration-${taskId}">0s</span></div>
+        <div class="stat"><span>ETA:</span> <span class="stat-value" id="stat-eta-${taskId}">-</span></div>
         <div class="stat"><span>Progress:</span> <span class="stat-value" id="stat-progress-${taskId}">0%</span></div>
       </div>
       <div class="activity-panel-actions">
@@ -20081,7 +20995,44 @@ function updateTaskProgress(taskId, progress) {
   const task = activityTasks[taskId];
   if (!task) return;
   
-  task.progress = Math.min(100, Math.max(0, progress));
+  // Smooth progress updates (never go backwards, smooth transitions)
+  const newProgress = Math.min(95, Math.max(task.progress, progress));
+  task.targetProgress = newProgress;
+  
+  // Animate to target progress smoothly
+  if (!task.progressAnimating) {
+    task.progressAnimating = true;
+    animateProgress(taskId);
+  }
+  
+  // Track progress history for ETA calculation
+  task.progressHistory.push({
+    progress: newProgress,
+    time: Date.now()
+  });
+  
+  // Keep only last 10 data points
+  if (task.progressHistory.length > 10) {
+    task.progressHistory.shift();
+  }
+  
+  // Calculate and update ETA
+  updateTaskETA(taskId);
+}
+
+function animateProgress(taskId) {
+  const task = activityTasks[taskId];
+  if (!task) return;
+  
+  const diff = task.targetProgress - task.progress;
+  if (Math.abs(diff) < 0.5) {
+    task.progress = task.targetProgress;
+    task.progressAnimating = false;
+  } else {
+    // Smooth easing
+    task.progress += diff * 0.15;
+    requestAnimationFrame(() => animateProgress(taskId));
+  }
   
   // Update progress bar in tab
   const progressBar = document.getElementById(`tab-progress-${taskId}`);
@@ -20093,6 +21044,45 @@ function updateTaskProgress(taskId, progress) {
   const progressStat = document.getElementById(`stat-progress-${taskId}`);
   if (progressStat) {
     progressStat.textContent = `${Math.round(task.progress)}%`;
+  }
+}
+
+function updateTaskETA(taskId) {
+  const task = activityTasks[taskId];
+  if (!task || task.progressHistory.length < 2) return;
+  
+  const etaEl = document.getElementById(`stat-eta-${taskId}`);
+  if (!etaEl) return;
+  
+  // Calculate rate of progress over recent history
+  const recent = task.progressHistory.slice(-5);
+  if (recent.length < 2) {
+    etaEl.textContent = 'calculating...';
+    return;
+  }
+  
+  const firstPoint = recent[0];
+  const lastPoint = recent[recent.length - 1];
+  const progressDelta = lastPoint.progress - firstPoint.progress;
+  const timeDelta = lastPoint.time - firstPoint.time;
+  
+  if (progressDelta <= 0 || timeDelta <= 0) {
+    etaEl.textContent = 'calculating...';
+    return;
+  }
+  
+  // Rate: progress per millisecond
+  const rate = progressDelta / timeDelta;
+  const remainingProgress = 100 - task.progress;
+  const estimatedMs = remainingProgress / rate;
+  
+  // Cap at 30 minutes for display
+  if (estimatedMs > 30 * 60 * 1000) {
+    etaEl.textContent = '>30m';
+  } else if (estimatedMs < 5000) {
+    etaEl.textContent = '<5s';
+  } else {
+    etaEl.textContent = formatDuration(estimatedMs);
   }
 }
 
@@ -20756,15 +21746,42 @@ ws.onmessage = (event) => {
     
     // Update task-specific stats if provided
     if (targetTaskId && activityTasks[targetTaskId]) {
+      const task = activityTasks[targetTaskId];
+      
       if (typeof data.tool_count === 'number' || typeof data.step_count === 'number') {
         updateTaskStats(targetTaskId, data.step_count || 0, data.tool_count || 0);
       }
       
-      // Auto-update progress based on tool/step counts (rough estimate)
-      // Typical pentest task: ~10-50 tools, so scale accordingly
+      // Smart progress estimation based on task phase and tool patterns
       if (data.tool_count) {
-        const estimatedProgress = Math.min(90, Math.floor(data.tool_count * 5));
-        updateTaskProgress(targetTaskId, estimatedProgress);
+        // Dynamically estimate total tools based on task type
+        const labelEstimates = {
+          'pentest': 40,      // Full pentest: lots of tools
+          'scanning': 25,     // Scanning: moderate
+          'recon': 30,        // Recon: moderate-high
+          'discovery': 20,    // Discovery: fewer tools
+          'general': 25       // Default
+        };
+        
+        const estimatedTotal = labelEstimates[task.taskLabel] || 25;
+        
+        // Adjust estimate dynamically as we get more data
+        if (data.tool_count > task.estimatedTotal * 0.7) {
+          // Task is running longer than expected, extend estimate
+          task.estimatedTotal = Math.ceil(data.tool_count * 1.4);
+        } else {
+          task.estimatedTotal = estimatedTotal;
+        }
+        
+        // Calculate progress: logarithmic scale for better UX (fast start, slow end)
+        // This makes early progress feel faster and slows down near end
+        const rawProgress = (data.tool_count / task.estimatedTotal) * 100;
+        const logProgress = Math.min(95, Math.log10(rawProgress + 1) / Math.log10(101) * 100);
+        
+        // Blend raw and log for balanced feel
+        const blendedProgress = Math.min(95, (rawProgress * 0.6 + logProgress * 0.4));
+        
+        updateTaskProgress(targetTaskId, blendedProgress);
       }
     }
     
@@ -23063,6 +24080,15 @@ The report should be comprehensive and professional, suitable for executive stak
                             # Check for observations/results
                             if hasattr(event, 'observations') and event.observations:
                                 obs = str(event.observations)[:200]
+                                full_obs = str(event.observations)
+                                
+                                # Auto-capture tool output to artifacts if report mode enabled
+                                try:
+                                    from app.tools.report_tools import auto_capture_tool_output
+                                    duration_ms = (time.time() - step_start_time) * 1000
+                                    auto_capture_tool_output(last_tool_name, last_tool_args, full_obs, duration_ms)
+                                except Exception:
+                                    pass  # Don't fail on capture errors
                                 
                                 # Save tool result step to persistence
                                 task_persistence.add_step(request_task_id, TaskStep(

@@ -285,6 +285,89 @@ def normalize_command_text(command: str, tool_name: str = None) -> str:
     return command
 
 
+# Tools that should have their output auto-captured to artifacts
+_AUTO_CAPTURE_TOOLS = {
+    # Scanning tools
+    'nmap', 'nikto', 'wpscan', 'sqlmap', 'gobuster', 'dirb', 'dirbuster', 
+    'nuclei', 'subfinder', 'amass', 'masscan', 'rustscan', 'feroxbuster',
+    # OSINT tools
+    'virustotal_domain_report', 'virustotal_ip_report', 'virustotal_url_report',
+    'virustotal_file_report', 'shodan_host', 'shodan_search', 'hunter_domain',
+    'whois_lookup', 'dns_lookup', 'subdomain_enum', 'wayback_urls',
+    # Web tools
+    'curl', 'http_request', 'browse_page', 'get_page_source', 'analyze_page',
+    # ZAP tools
+    'zap_spider', 'zap_active_scan', 'zap_passive_scan', 'zap_get_alerts',
+    'zap_ajax_spider', 'zap_scan_progress',
+    # Pentest tools
+    'run_nikto', 'run_gobuster', 'run_sqlmap', 'run_wpscan', 'run_nuclei',
+    'run_feroxbuster', 'check_ssl_certificate', 'check_security_headers',
+}
+
+
+def auto_capture_tool_output(tool_name: str, tool_args: dict, output: str, duration_ms: float = 0):
+    """Automatically capture tool output to artifacts if report mode is enabled.
+    
+    This should be called from the agent execution loop after each tool completes.
+    
+    Args:
+        tool_name: Name of the tool that was executed
+        tool_args: Arguments passed to the tool
+        output: Output returned by the tool
+        duration_ms: Execution time in milliseconds
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS, _SESSION_TOOLS_USED
+    
+    # Always track tool usage
+    normalized_name = normalize_tool_name(tool_name)
+    _SESSION_TOOLS_USED.add(normalized_name)
+    if _REPORT_MODE_ENABLED and _CURRENT_REPORT_DATA:
+        _CURRENT_REPORT_DATA["tools"].add(normalized_name)
+    
+    # Only auto-capture if report mode is enabled and output is substantial
+    if not _REPORT_MODE_ENABLED:
+        return
+    
+    # Check if this tool should be auto-captured
+    if tool_name.lower() not in _AUTO_CAPTURE_TOOLS and normalized_name.lower() not in _AUTO_CAPTURE_TOOLS:
+        return
+    
+    # Skip if output is too short or is an error message
+    if not output or len(str(output)) < 100:
+        return
+    if "error" in str(output).lower()[:50] and len(str(output)) < 500:
+        return
+    
+    # Generate artifact
+    target = ""
+    if isinstance(tool_args, dict):
+        for key in ['url', 'target', 'domain', 'ip_address', 'host', 'query']:
+            if key in tool_args:
+                target = str(tool_args[key])[:100]
+                break
+    
+    artifact = {
+        "type": "tool_output",
+        "tool_name": normalized_name,
+        "filename": f"{normalized_name}_{datetime.now().strftime('%H%M%S')}.txt",
+        "format": "text",
+        "data": str(output)[:50000],  # Cap at 50KB
+        "description": f"Auto-captured output from {normalized_name}" + (f" targeting {target}" if target else ""),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "auto_captured": True,
+        "duration_ms": duration_ms
+    }
+    
+    # Check for duplicates (same tool + similar content)
+    for existing in _REPORT_ARTIFACTS:
+        if existing.get("tool_name") == normalized_name:
+            # Same tool - check if content is similar (first 500 chars)
+            if existing.get("data", "")[:500] == str(output)[:500]:
+                return  # Skip duplicate
+    
+    _REPORT_ARTIFACTS.append(artifact)
+
+
 def track_tool_usage(tool_name: str):
     """Track tool usage for the session (called by other tools)."""
     global _SESSION_TOOLS_USED, _CURRENT_REPORT_DATA
