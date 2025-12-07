@@ -1459,6 +1459,9 @@ def add_finding_to_report(
     if not _REPORT_MODE_ENABLED:
         return "Report mode is not enabled. Use enable_report_mode() first."
     
+    import uuid
+    from datetime import datetime
+    
     finding = {
         "id": len(_CURRENT_REPORT_DATA["findings"]) + 1,
         "title": title,
@@ -1487,7 +1490,93 @@ def add_finding_to_report(
             if t:
                 _CURRENT_REPORT_DATA["tools"].add(t)
     
+    # Auto-sync to project VulnDB if a project is associated with current task
+    try:
+        _sync_finding_to_project_vulndb(finding)
+    except Exception as e:
+        # Non-critical - don't fail if VulnDB sync fails
+        print(f"[report_tools] VulnDB sync warning: {e}")
+    
     return f"✅ Finding #{finding['id']} added: [{severity}] {title}"
+
+
+def _sync_finding_to_project_vulndb(finding: dict):
+    """Sync a finding to the associated project's VulnDB."""
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    import uuid
+    
+    # Load reports index to find current project
+    reports_index_file = Path("data/reports/reports_index.json")
+    if not reports_index_file.exists():
+        return
+    
+    try:
+        index = json.loads(reports_index_file.read_text(encoding='utf-8'))
+    except:
+        return
+    
+    # Find current task/project from report data
+    current_target = _CURRENT_REPORT_DATA.get("target", "")
+    current_title = _CURRENT_REPORT_DATA.get("title", "")
+    
+    # Try to find a project that matches (by looking at tasks)
+    project_id = None
+    for pid, project in index.get("projects", {}).items():
+        # Check if project name or any task prompt contains target
+        if current_target and current_target in project.get("name", ""):
+            project_id = pid
+            break
+        for task_id in project.get("tasks", []):
+            task = index.get("tasks", {}).get(task_id, {})
+            if current_target and current_target in task.get("prompt", ""):
+                project_id = pid
+                break
+        if project_id:
+            break
+    
+    if not project_id:
+        return  # No project found
+    
+    project = index["projects"][project_id]
+    if "vulndb" not in project:
+        project["vulndb"] = []
+    
+    # Check for duplicates (by title and affected_component)
+    for existing in project["vulndb"]:
+        if (existing.get("title") == finding.get("title") and 
+            existing.get("affected_component") == finding.get("affected_component")):
+            return  # Already exists
+    
+    # Create VulnDB entry
+    vuln_id = f"VULN-{uuid.uuid4().hex[:8].upper()}"
+    vuln_entry = {
+        "id": vuln_id,
+        "title": finding.get("title", ""),
+        "severity": finding.get("severity", "info").lower(),
+        "description": finding.get("description", ""),
+        "impact": finding.get("impact", ""),
+        "remediation": finding.get("remediation", ""),
+        "owasp_category": finding.get("owasp_category", ""),
+        "cvss_score": finding.get("cvss_score", ""),
+        "cwe_id": finding.get("cwe_id", ""),
+        "affected_component": finding.get("affected_component", ""),
+        "evidence": finding.get("evidence", ""),
+        "steps_to_reproduce": finding.get("steps_to_reproduce", ""),
+        "tool_used": finding.get("tool_used", ""),
+        "command_used": finding.get("command_used", ""),
+        "references": finding.get("references", ""),
+        "screenshots": finding.get("screenshots", []),
+        "source": "agent",
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    
+    project["vulndb"].append(vuln_entry)
+    
+    # Save back
+    reports_index_file.write_text(json.dumps(index, indent=2), encoding='utf-8')
 
 
 @tool

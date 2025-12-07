@@ -3324,6 +3324,824 @@ async def delete_project(project_id: str):
     save_reports_index(index)
     return JSONResponse({"success": True})
 
+
+# ============== PROJECT DASHBOARD & VULNDB ENDPOINTS ==============
+
+@app.get("/api/projects/{project_id}/dashboard")
+async def get_project_dashboard(project_id: str):
+    """Get comprehensive project dashboard data including tasks, findings, and statistics."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    task_ids = project.get("tasks", [])
+    tasks_data = index.get("tasks", {})
+    
+    # Collect all reports and findings for this project
+    all_reports = []
+    all_findings = []
+    tool_outputs = []
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    
+    # Get vulnerabilities from project vulndb
+    vulndb = project.get("vulndb", [])
+    for vuln in vulndb:
+        sev = vuln.get("severity", "info").lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+    
+    # Collect task data
+    tasks_list = []
+    for task_id in task_ids:
+        task = tasks_data.get(task_id, {})
+        task_reports = []
+        
+        # Find all reports for this task
+        for report_entry in index.get("reports", []):
+            if report_entry.get("task_id") == task_id:
+                report_path = Path(report_entry.get("path", ""))
+                if report_path.exists():
+                    try:
+                        stat = report_path.stat()
+                        task_reports.append({
+                            "name": report_path.name,
+                            "path": str(report_path),
+                            "type": report_path.suffix.lower().lstrip('.'),
+                            "size": stat.st_size,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                    except:
+                        pass
+        
+        tasks_list.append({
+            "id": task_id,
+            "prompt": task.get("prompt", "Unknown task"),
+            "label": task.get("label", "general"),
+            "created_at": task.get("created_at"),
+            "report_count": len(task_reports),
+            "reports": task_reports
+        })
+    
+    # Build dashboard response
+    dashboard = {
+        "project": {
+            "id": project_id,
+            "name": project.get("name"),
+            "description": project.get("description"),
+            "color": project.get("color"),
+            "created_at": project.get("created_at")
+        },
+        "statistics": {
+            "total_tasks": len(tasks_list),
+            "total_reports": sum(t["report_count"] for t in tasks_list),
+            "total_vulnerabilities": len(vulndb),
+            "severity_counts": severity_counts
+        },
+        "tasks": tasks_list,
+        "vulndb": vulndb,
+        "latest_report": None
+    }
+    
+    # Find latest HTML report
+    for task in tasks_list:
+        for report in task.get("reports", []):
+            if report.get("type") == "html":
+                if dashboard["latest_report"] is None or report.get("modified", "") > dashboard["latest_report"].get("modified", ""):
+                    dashboard["latest_report"] = report
+    
+    return JSONResponse(dashboard)
+
+
+@app.get("/api/projects/{project_id}/vulnerabilities")
+async def get_project_vulnerabilities(project_id: str):
+    """Get all vulnerabilities (VulnDB) for a project."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    vulndb = project.get("vulndb", [])
+    
+    # Sort by severity priority
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    vulndb.sort(key=lambda v: severity_order.get(v.get("severity", "info").lower(), 5))
+    
+    return JSONResponse({"vulnerabilities": vulndb, "count": len(vulndb)})
+
+
+@app.post("/api/projects/{project_id}/vulnerabilities")
+async def add_project_vulnerability(project_id: str, data: dict):
+    """Add a vulnerability to the project's VulnDB."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    # Validate required fields
+    required_fields = ["title", "severity", "description"]
+    for field in required_fields:
+        if not data.get(field):
+            return JSONResponse({"error": f"Field '{field}' is required"}, status_code=400)
+    
+    project = index["projects"][project_id]
+    if "vulndb" not in project:
+        project["vulndb"] = []
+    
+    # Generate vulnerability ID
+    vuln_id = f"VULN-{uuid.uuid4().hex[:8].upper()}"
+    
+    vulnerability = {
+        "id": vuln_id,
+        "title": data.get("title"),
+        "severity": data.get("severity", "info").lower(),
+        "description": data.get("description"),
+        "impact": data.get("impact", ""),
+        "remediation": data.get("remediation", ""),
+        "owasp_category": data.get("owasp_category", ""),
+        "cvss_score": data.get("cvss_score", ""),
+        "cwe_id": data.get("cwe_id", ""),
+        "affected_component": data.get("affected_component", ""),
+        "evidence": data.get("evidence", ""),
+        "steps_to_reproduce": data.get("steps_to_reproduce", ""),
+        "tool_used": data.get("tool_used", ""),
+        "command_used": data.get("command_used", ""),
+        "references": data.get("references", ""),
+        "screenshots": data.get("screenshots", []),
+        "source": data.get("source", "manual"),  # 'manual' or 'agent'
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    
+    project["vulndb"].append(vulnerability)
+    save_reports_index(index)
+    
+    return JSONResponse({"success": True, "vulnerability": vulnerability})
+
+
+@app.get("/api/projects/{project_id}/vulnerabilities/{vuln_id}")
+async def get_project_vulnerability(project_id: str, vuln_id: str):
+    """Get a specific vulnerability from the project's VulnDB."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    vulndb = project.get("vulndb", [])
+    
+    vuln = next((v for v in vulndb if v.get("id") == vuln_id), None)
+    if not vuln:
+        return JSONResponse({"error": "Vulnerability not found"}, status_code=404)
+    
+    return JSONResponse(vuln)
+
+
+@app.put("/api/projects/{project_id}/vulnerabilities/{vuln_id}")
+async def update_project_vulnerability(project_id: str, vuln_id: str, data: dict):
+    """Update a vulnerability in the project's VulnDB."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    vulndb = project.get("vulndb", [])
+    
+    vuln_idx = next((i for i, v in enumerate(vulndb) if v.get("id") == vuln_id), None)
+    if vuln_idx is None:
+        return JSONResponse({"error": "Vulnerability not found"}, status_code=404)
+    
+    # Update fields
+    vuln = vulndb[vuln_idx]
+    update_fields = ["title", "severity", "description", "impact", "remediation", 
+                     "owasp_category", "cvss_score", "cwe_id", "affected_component",
+                     "evidence", "steps_to_reproduce", "tool_used", "command_used",
+                     "references", "screenshots"]
+    
+    for field in update_fields:
+        if field in data:
+            vuln[field] = data[field]
+    
+    vuln["updated_at"] = datetime.now().isoformat()
+    save_reports_index(index)
+    
+    return JSONResponse({"success": True, "vulnerability": vuln})
+
+
+@app.delete("/api/projects/{project_id}/vulnerabilities/{vuln_id}")
+async def delete_project_vulnerability(project_id: str, vuln_id: str):
+    """Delete a vulnerability from the project's VulnDB."""
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    vulndb = project.get("vulndb", [])
+    
+    original_len = len(vulndb)
+    project["vulndb"] = [v for v in vulndb if v.get("id") != vuln_id]
+    
+    if len(project["vulndb"]) == original_len:
+        return JSONResponse({"error": "Vulnerability not found"}, status_code=404)
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True})
+
+
+@app.post("/api/projects/{project_id}/regenerate-report")
+async def regenerate_project_report(project_id: str, data: dict = None):
+    """Regenerate the final report from the project's VulnDB.
+    
+    This recalculates statistics, updates all sections, and generates a new HTML report.
+    """
+    from app.tools.report_tools import (
+        _build_executive_summary_html, _build_findings_html, 
+        _build_conclusion_html, _build_appendix_html,
+        _build_report_header_html
+    )
+    
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    vulndb = project.get("vulndb", [])
+    
+    if not vulndb:
+        return JSONResponse({"error": "No vulnerabilities in VulnDB to generate report"}, status_code=400)
+    
+    # Build report data from vulndb
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for vuln in vulndb:
+        sev = vuln.get("severity", "info").lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+    
+    total_findings = sum(severity_counts.values())
+    
+    # Calculate risk score
+    risk_score = (
+        severity_counts["critical"] * 40 +
+        severity_counts["high"] * 25 +
+        severity_counts["medium"] * 10 +
+        severity_counts["low"] * 3 +
+        severity_counts["info"] * 1
+    )
+    max_risk = total_findings * 40 if total_findings > 0 else 1
+    risk_percentage = min(100, int((risk_score / max_risk) * 100))
+    
+    # Determine overall risk level
+    if severity_counts["critical"] > 0:
+        risk_level = "Critical"
+        risk_color = "#ef4444"
+    elif severity_counts["high"] > 0:
+        risk_level = "High"
+        risk_color = "#f97316"
+    elif severity_counts["medium"] > 0:
+        risk_level = "Medium"
+        risk_color = "#f59e0b"
+    elif severity_counts["low"] > 0:
+        risk_level = "Low"
+        risk_color = "#22c55e"
+    else:
+        risk_level = "Informational"
+        risk_color = "#3b82f6"
+    
+    # Get scope from tasks
+    scope = []
+    for task_id in project.get("tasks", []):
+        task = index.get("tasks", {}).get(task_id, {})
+        prompt = task.get("prompt", "")
+        # Extract URLs from prompt
+        import re
+        urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', prompt)
+        scope.extend(urls)
+    scope = list(set(scope)) if scope else [project.get("name", "Target")]
+    
+    # Build findings list (convert vulndb format to report format)
+    findings = []
+    for idx, vuln in enumerate(vulndb, 1):
+        finding = {
+            "id": idx,
+            "title": vuln.get("title", "Untitled"),
+            "severity": vuln.get("severity", "info").capitalize(),
+            "description": vuln.get("description", ""),
+            "impact": vuln.get("impact", ""),
+            "remediation": vuln.get("remediation", ""),
+            "owasp_category": vuln.get("owasp_category", "N/A"),
+            "cvss_score": vuln.get("cvss_score", "N/A"),
+            "cwe_id": vuln.get("cwe_id", "N/A"),
+            "affected_component": vuln.get("affected_component", "N/A"),
+            "evidence": vuln.get("evidence", ""),
+            "steps_to_reproduce": vuln.get("steps_to_reproduce", ""),
+            "tool_used": vuln.get("tool_used", ""),
+            "command_used": vuln.get("command_used", ""),
+            "references": vuln.get("references", ""),
+            "screenshots": vuln.get("screenshots", [])
+        }
+        findings.append(finding)
+    
+    # Collect tools used
+    tools_used = set()
+    for vuln in vulndb:
+        tool = vuln.get("tool_used", "")
+        if tool:
+            for t in tool.split(","):
+                t = t.strip()
+                if t:
+                    tools_used.add(t)
+    
+    # Build report HTML
+    report_data = {
+        "title": f"{project.get('name', 'Security Assessment')} - Regenerated Report",
+        "target": scope[0] if scope else project.get("name", "Target"),
+        "scope": scope,
+        "executive_summary": data.get("executive_summary") if data else None,
+        "conclusion": data.get("conclusion") if data else None,
+        "findings": findings,
+        "tools": tools_used,
+        "recon_data": {},
+        "tool_outputs": []
+    }
+    
+    # Generate auto executive summary if not provided
+    if not report_data["executive_summary"]:
+        report_data["executive_summary"] = f"""This report presents the findings from a comprehensive security assessment of {report_data['target']}.
+
+A total of {total_findings} security findings were identified:
+- {severity_counts['critical']} Critical vulnerabilities
+- {severity_counts['high']} High severity issues  
+- {severity_counts['medium']} Medium severity issues
+- {severity_counts['low']} Low severity issues
+- {severity_counts['info']} Informational findings
+
+The overall risk level is assessed as **{risk_level}**. Immediate attention is recommended for all Critical and High severity findings.
+
+This report was regenerated from the project's Vulnerability Database on {datetime.now().strftime('%B %d, %Y at %H:%M')}."""
+    
+    # Build full HTML report
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{report_data['title']}</title>
+    <style>
+        :root {{
+            --bg-dark: #0f0f0f;
+            --bg-card: #1a1a1a;
+            --bg-hover: #252525;
+            --border-color: #2d2d2d;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --accent-green: #22c55e;
+            --accent-blue: #3b82f6;
+            --critical: #ef4444;
+            --high: #f97316;
+            --medium: #f59e0b;
+            --low: #22c55e;
+            --info: #3b82f6;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }}
+        .container {{ max-width: 1200px; margin: 0 auto; padding: 2rem; }}
+        .header {{
+            text-align: center;
+            padding: 3rem 2rem;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 16px;
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+        }}
+        .header h1 {{ font-size: 2rem; margin-bottom: 0.5rem; }}
+        .header .subtitle {{ color: var(--text-secondary); }}
+        .header .meta {{ margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary); }}
+        .risk-badge {{
+            display: inline-block;
+            padding: 0.5rem 1.5rem;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-top: 1rem;
+            background: {risk_color}22;
+            color: {risk_color};
+            border: 1px solid {risk_color}44;
+        }}
+        .section {{
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }}
+        .section h2 {{
+            font-size: 1.3rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }}
+        .stat-card {{
+            background: var(--bg-hover);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .stat-card .value {{ font-size: 2rem; font-weight: 700; }}
+        .stat-card .label {{ font-size: 0.85rem; color: var(--text-secondary); }}
+        .stat-card.critical .value {{ color: var(--critical); }}
+        .stat-card.high .value {{ color: var(--high); }}
+        .stat-card.medium .value {{ color: var(--medium); }}
+        .stat-card.low .value {{ color: var(--low); }}
+        .stat-card.info .value {{ color: var(--info); }}
+        .finding {{
+            background: var(--bg-hover);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }}
+        .finding-header {{
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+        }}
+        .finding-header:hover {{ background: rgba(255,255,255,0.02); }}
+        .severity-badge {{
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }}
+        .severity-badge.critical {{ background: var(--critical); color: white; }}
+        .severity-badge.high {{ background: var(--high); color: white; }}
+        .severity-badge.medium {{ background: var(--medium); color: black; }}
+        .severity-badge.low {{ background: var(--low); color: white; }}
+        .severity-badge.info {{ background: var(--info); color: white; }}
+        .finding-title {{ flex: 1; font-weight: 500; }}
+        .finding-body {{ padding: 1rem; display: block; }}
+        .finding-field {{ margin-bottom: 1rem; }}
+        .finding-field label {{ font-weight: 600; color: var(--text-secondary); font-size: 0.85rem; display: block; margin-bottom: 0.25rem; }}
+        .finding-field-content {{ color: var(--text-primary); }}
+        pre, code {{
+            background: rgba(0,0,0,0.3);
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.85rem;
+        }}
+        .toc {{ list-style: none; }}
+        .toc li {{ padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); }}
+        .toc a {{ color: var(--accent-blue); text-decoration: none; }}
+        .toc a:hover {{ text-decoration: underline; }}
+        .regenerated-notice {{
+            background: linear-gradient(135deg, rgba(34,197,94,0.1), rgba(59,130,246,0.1));
+            border: 1px solid rgba(34,197,94,0.3);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: var(--accent-green);
+        }}
+        .screenshot {{ max-width: 100%; border-radius: 8px; margin: 0.5rem 0; border: 1px solid var(--border-color); }}
+        @media print {{
+            body {{ background: white; color: black; }}
+            .section {{ border: 1px solid #ddd; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ {report_data['title']}</h1>
+            <p class="subtitle">Security Assessment Report</p>
+            <p class="meta">Target: {report_data['target']} | Generated: {datetime.now().strftime('%B %d, %Y')}</p>
+            <div class="risk-badge">Overall Risk: {risk_level}</div>
+        </div>
+        
+        <div class="regenerated-notice">
+            ✨ This report was regenerated from the project's Vulnerability Database. 
+            All findings, statistics, and recommendations have been automatically recalculated.
+        </div>
+
+        <div class="section">
+            <h2>📊 Findings Summary</h2>
+            <div class="stats-grid">
+                <div class="stat-card critical">
+                    <div class="value">{severity_counts['critical']}</div>
+                    <div class="label">Critical</div>
+                </div>
+                <div class="stat-card high">
+                    <div class="value">{severity_counts['high']}</div>
+                    <div class="label">High</div>
+                </div>
+                <div class="stat-card medium">
+                    <div class="value">{severity_counts['medium']}</div>
+                    <div class="label">Medium</div>
+                </div>
+                <div class="stat-card low">
+                    <div class="value">{severity_counts['low']}</div>
+                    <div class="label">Low</div>
+                </div>
+                <div class="stat-card info">
+                    <div class="value">{severity_counts['info']}</div>
+                    <div class="label">Info</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>📋 Executive Summary</h2>
+            <div style="white-space: pre-wrap;">{report_data['executive_summary']}</div>
+        </div>
+
+        <div class="section">
+            <h2>🎯 Scope</h2>
+            <ul style="list-style: none; padding: 0;">
+                {''.join(f'<li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">• {s}</li>' for s in scope)}
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>🔍 Detailed Findings</h2>
+            {''.join(_generate_finding_html(f) for f in findings)}
+        </div>
+
+        <div class="section">
+            <h2>📝 Conclusion & Recommendations</h2>
+            <p>Based on the assessment findings, the following priority actions are recommended:</p>
+            <ol style="margin: 1rem 0; padding-left: 1.5rem;">
+                {'<li style="margin: 0.5rem 0; color: var(--critical);"><strong>Immediately</strong> address all Critical severity findings</li>' if severity_counts['critical'] > 0 else ''}
+                {'<li style="margin: 0.5rem 0; color: var(--high);"><strong>Urgently</strong> remediate High severity vulnerabilities</li>' if severity_counts['high'] > 0 else ''}
+                {'<li style="margin: 0.5rem 0; color: var(--medium);">Schedule remediation for Medium severity issues</li>' if severity_counts['medium'] > 0 else ''}
+                {'<li style="margin: 0.5rem 0; color: var(--low);">Address Low severity findings as part of regular maintenance</li>' if severity_counts['low'] > 0 else ''}
+                <li style="margin: 0.5rem 0;">Review informational findings for security hardening opportunities</li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>🛠️ Tools Used</h2>
+            <p>{', '.join(sorted(tools_used)) if tools_used else 'Various security testing tools'}</p>
+        </div>
+
+        <footer style="text-align: center; padding: 2rem; color: var(--text-secondary); font-size: 0.85rem;">
+            <p>Report generated by OWASP Security Assistant</p>
+            <p>Regenerated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </footer>
+    </div>
+</body>
+</html>"""
+
+    # Save report
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in project.get("name", "report"))
+    filename = f"{safe_name}_regenerated_{timestamp}.html"
+    report_path = REPORTS_DIR / filename
+    
+    report_path.write_text(html_content, encoding='utf-8')
+    
+    # Add to reports index
+    task_id = project.get("tasks", [None])[0] if project.get("tasks") else None
+    add_report_to_index(
+        str(report_path),
+        task_id=task_id,
+        project_id=project_id
+    )
+    
+    return JSONResponse({
+        "success": True,
+        "report_path": str(report_path),
+        "filename": filename,
+        "statistics": {
+            "total_findings": total_findings,
+            "severity_counts": severity_counts,
+            "risk_level": risk_level
+        }
+    })
+
+
+def _generate_finding_html(finding: dict) -> str:
+    """Generate HTML for a single finding."""
+    severity = finding.get("severity", "info").lower()
+    
+    html = f"""
+    <div class="finding">
+        <div class="finding-header">
+            <span class="severity-badge {severity}">{finding.get('severity', 'Info')}</span>
+            <span class="finding-title">{finding.get('title', 'Untitled')}</span>
+        </div>
+        <div class="finding-body">
+            <div class="finding-field">
+                <label>Description</label>
+                <div class="finding-field-content">{finding.get('description', 'N/A')}</div>
+            </div>
+    """
+    
+    if finding.get('affected_component') and finding.get('affected_component') != 'N/A':
+        html += f"""
+            <div class="finding-field">
+                <label>Affected Component</label>
+                <div class="finding-field-content"><code>{finding.get('affected_component')}</code></div>
+            </div>
+        """
+    
+    if finding.get('impact'):
+        html += f"""
+            <div class="finding-field">
+                <label>Impact</label>
+                <div class="finding-field-content">{finding.get('impact')}</div>
+            </div>
+        """
+    
+    if finding.get('evidence'):
+        html += f"""
+            <div class="finding-field">
+                <label>Evidence</label>
+                <pre>{finding.get('evidence')}</pre>
+            </div>
+        """
+    
+    if finding.get('steps_to_reproduce'):
+        html += f"""
+            <div class="finding-field">
+                <label>Steps to Reproduce</label>
+                <div class="finding-field-content" style="white-space: pre-wrap;">{finding.get('steps_to_reproduce')}</div>
+            </div>
+        """
+    
+    if finding.get('remediation'):
+        html += f"""
+            <div class="finding-field">
+                <label>Remediation</label>
+                <div class="finding-field-content">{finding.get('remediation')}</div>
+            </div>
+        """
+    
+    # Show metadata
+    metadata = []
+    if finding.get('owasp_category') and finding.get('owasp_category') != 'N/A':
+        metadata.append(f"OWASP: {finding.get('owasp_category')}")
+    if finding.get('cvss_score') and finding.get('cvss_score') != 'N/A':
+        metadata.append(f"CVSS: {finding.get('cvss_score')}")
+    if finding.get('cwe_id') and finding.get('cwe_id') != 'N/A':
+        metadata.append(f"CWE: {finding.get('cwe_id')}")
+    if finding.get('tool_used'):
+        metadata.append(f"Tool: {finding.get('tool_used')}")
+    
+    if metadata:
+        html += f"""
+            <div class="finding-field" style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                {''.join(f'<span style="background: rgba(255,255,255,0.05); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">{m}</span>' for m in metadata)}
+            </div>
+        """
+    
+    # Screenshots
+    if finding.get('screenshots'):
+        html += '<div class="finding-field"><label>Screenshots</label>'
+        for ss in finding.get('screenshots', []):
+            if isinstance(ss, dict):
+                html += f'<img src="{ss.get("data", ss.get("path", ""))}" alt="{ss.get("caption", "Screenshot")}" class="screenshot">'
+            else:
+                html += f'<img src="{ss}" alt="Screenshot" class="screenshot">'
+        html += '</div>'
+    
+    html += """
+        </div>
+    </div>
+    """
+    
+    return html
+
+
+@app.get("/api/projects/{project_id}/export")
+async def export_project_zip(project_id: str):
+    """Export project data as a ZIP archive."""
+    import zipfile
+    import io
+    from fastapi.responses import StreamingResponse
+    
+    index = load_reports_index()
+    
+    if project_id not in index.get("projects", {}):
+        return JSONResponse({"error": "Project not found"}, status_code=404)
+    
+    project = index["projects"][project_id]
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Add project metadata
+        project_meta = {
+            "id": project_id,
+            "name": project.get("name"),
+            "description": project.get("description"),
+            "color": project.get("color"),
+            "created_at": project.get("created_at"),
+            "exported_at": datetime.now().isoformat()
+        }
+        zf.writestr("project.json", json.dumps(project_meta, indent=2))
+        
+        # Add VulnDB
+        vulndb = project.get("vulndb", [])
+        zf.writestr("vulndb.json", json.dumps(vulndb, indent=2))
+        
+        # Add tasks info
+        task_ids = project.get("tasks", [])
+        tasks_data = {}
+        for task_id in task_ids:
+            if task_id in index.get("tasks", {}):
+                tasks_data[task_id] = index["tasks"][task_id]
+        zf.writestr("tasks.json", json.dumps(tasks_data, indent=2))
+        
+        # Add reports
+        for task_id in task_ids:
+            task = index.get("tasks", {}).get(task_id, {})
+            for report_path in task.get("reports", []):
+                try:
+                    path = Path(report_path)
+                    if path.exists():
+                        # Store in reports/ subfolder
+                        zf.write(path, f"reports/{path.name}")
+                except Exception as e:
+                    print(f"Error adding report to ZIP: {e}")
+        
+        # Add a README
+        readme = f"""# Project Export: {project.get('name', 'Unknown')}
+
+Exported on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Contents
+
+- `project.json` - Project metadata
+- `vulndb.json` - Vulnerability database ({len(vulndb)} findings)
+- `tasks.json` - Associated tasks ({len(task_ids)} tasks)
+- `reports/` - Generated reports
+
+## Statistics
+
+- Total Vulnerabilities: {len(vulndb)}
+- Critical: {sum(1 for v in vulndb if v.get('severity', '').lower() == 'critical')}
+- High: {sum(1 for v in vulndb if v.get('severity', '').lower() == 'high')}
+- Medium: {sum(1 for v in vulndb if v.get('severity', '').lower() == 'medium')}
+- Low: {sum(1 for v in vulndb if v.get('severity', '').lower() == 'low')}
+- Info: {sum(1 for v in vulndb if v.get('severity', '').lower() == 'info')}
+"""
+        zf.writestr("README.md", readme)
+    
+    zip_buffer.seek(0)
+    
+    # Generate filename
+    safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in project.get("name", "project"))
+    filename = f"{safe_name}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.put("/api/tasks/{task_id}")
+async def update_task(task_id: str, data: dict):
+    """Update task metadata (prompt, label)."""
+    index = load_reports_index()
+    
+    if task_id not in index.get("tasks", {}):
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    
+    task = index["tasks"][task_id]
+    
+    if "prompt" in data:
+        task["prompt"] = data["prompt"]
+    if "label" in data:
+        task["label"] = data["label"]
+    
+    save_reports_index(index)
+    return JSONResponse({"success": True, "task": task})
+
 @app.post("/api/projects/{project_id}/tasks")
 async def add_task_to_project(project_id: str, data: dict):
     """Add a task to a project."""
@@ -7041,10 +7859,14 @@ h1 {
 .report-project-actions {
   display: flex;
   gap: 0.4rem;
-  opacity: 0;
+  opacity: 0.6;
   transition: opacity 0.2s ease;
 }
 .report-project-header:hover .report-project-actions {
+  opacity: 1;
+}
+.report-project-actions .report-action-btn:first-child {
+  /* Dashboard button always slightly visible */
   opacity: 1;
 }
 .report-project-tasks {
@@ -7092,6 +7914,332 @@ h1 {
   border: 1px dashed var(--gray-600);
   border-radius: 8px;
   background: rgba(255,255,255,0.02);
+}
+
+/* Project Dashboard Styles */
+.project-dashboard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  backdrop-filter: blur(8px);
+}
+.project-dashboard-container {
+  width: 100%;
+  max-width: 1200px;
+  max-height: 90vh;
+  background: var(--dark);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.project-dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.project-dashboard-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+.project-dashboard-title .project-color {
+  width: 6px;
+  height: 32px;
+  border-radius: 3px;
+}
+.project-dashboard-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.project-dashboard-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 1.5rem;
+}
+.dashboard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.dashboard-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.dashboard-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 1rem;
+}
+.dashboard-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.dashboard-card-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.75rem;
+}
+.stat-box {
+  text-align: center;
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+}
+.stat-box .value {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.stat-box .label {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  margin-top: 0.25rem;
+}
+.stat-box.critical .value { color: var(--critical); }
+.stat-box.high .value { color: var(--high, #f97316); }
+.stat-box.medium .value { color: var(--warning); }
+.stat-box.low .value { color: var(--success); }
+.stat-box.info .value { color: var(--info, #3b82f6); }
+
+/* VulnDB Tree Styles */
+.vulndb-tree {
+  max-height: 400px;
+  overflow-y: auto;
+}
+.vulndb-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.vulndb-item:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.1);
+}
+.vulndb-severity {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  min-width: 55px;
+  text-align: center;
+}
+.vulndb-severity.critical { background: var(--critical); color: white; }
+.vulndb-severity.high { background: #f97316; color: white; }
+.vulndb-severity.medium { background: var(--warning); color: black; }
+.vulndb-severity.low { background: var(--success); color: white; }
+.vulndb-severity.info { background: #3b82f6; color: white; }
+.vulndb-title {
+  flex: 1;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vulndb-actions {
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.vulndb-item:hover .vulndb-actions {
+  opacity: 1;
+}
+.vulndb-action-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: none;
+  border-radius: 4px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.vulndb-action-btn:hover {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--success);
+}
+.vulndb-action-btn.delete:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--critical);
+}
+.vulndb-empty {
+  text-align: center;
+  color: var(--gray-500);
+  padding: 2rem;
+  font-size: 0.9rem;
+}
+
+/* Vulnerability Modal Styles */
+.vuln-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.9);
+  z-index: 9500;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.vuln-modal.active {
+  display: flex;
+}
+.vuln-modal-container {
+  width: 100%;
+  max-width: 700px;
+  max-height: 90vh;
+  background: var(--dark);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.vuln-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.vuln-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.vuln-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+.vuln-form-group {
+  margin-bottom: 1rem;
+}
+.vuln-form-group label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  margin-bottom: 0.4rem;
+  font-weight: 500;
+}
+.vuln-form-group label .required {
+  color: var(--critical);
+}
+.vuln-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.vuln-form-input, .vuln-form-select, .vuln-form-textarea {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.vuln-form-input:focus, .vuln-form-select:focus, .vuln-form-textarea:focus {
+  outline: none;
+  border-color: rgba(34, 197, 94, 0.5);
+}
+.vuln-form-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.vuln-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Tasks Tree Styles */
+.tasks-tree {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.task-tree-item {
+  padding: 0.6rem 0.75rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.task-tree-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+.task-tree-item .task-name {
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-tree-item .task-meta {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  display: flex;
+  gap: 0.75rem;
+}
+.task-tree-item .task-edit-btn {
+  float: right;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.task-tree-item:hover .task-edit-btn {
+  opacity: 1;
 }
 
 /* Dragging states */
@@ -12681,6 +13829,272 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
     </div>
   </div>
   
+  <!-- Project Dashboard Modal -->
+  <div class="project-dashboard" id="project-dashboard" style="display: none;">
+    <div class="project-dashboard-container">
+      <div class="project-dashboard-header">
+        <div class="project-dashboard-title">
+          <span class="project-color" id="dashboard-project-color"></span>
+          <span id="dashboard-project-name">Project Dashboard</span>
+        </div>
+        <div class="project-dashboard-actions">
+          <button class="btn-secondary" onclick="submitVulnerabilityModal()" title="Submit Vulnerability">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M12 8v4M12 16h.01"></path>
+            </svg>
+            Submit Vulnerability
+          </button>
+          <button class="btn-secondary" onclick="regenerateProjectReport()" title="Regenerate Report">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            Regenerate Report
+          </button>
+          <button class="btn-secondary" onclick="exportProjectZip()" title="Export ZIP">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Export Data
+          </button>
+          <button class="task-modal-close" onclick="closeProjectDashboard()">&times;</button>
+        </div>
+      </div>
+      <div class="project-dashboard-body">
+        <div class="dashboard-main">
+          <!-- Statistics Card -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">📊 Findings Summary</span>
+            </div>
+            <div class="stats-row" id="dashboard-stats">
+              <div class="stat-box critical"><div class="value">0</div><div class="label">Critical</div></div>
+              <div class="stat-box high"><div class="value">0</div><div class="label">High</div></div>
+              <div class="stat-box medium"><div class="value">0</div><div class="label">Medium</div></div>
+              <div class="stat-box low"><div class="value">0</div><div class="label">Low</div></div>
+              <div class="stat-box info"><div class="value">0</div><div class="label">Info</div></div>
+            </div>
+          </div>
+          
+          <!-- VulnDB Card -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">🐛 Vulnerability Database</span>
+              <button class="btn-sm btn-primary" onclick="submitVulnerabilityModal()">+ Add</button>
+            </div>
+            <div class="vulndb-tree" id="vulndb-tree">
+              <div class="vulndb-empty">No vulnerabilities recorded yet</div>
+            </div>
+          </div>
+          
+          <!-- Tasks Tree Card -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">📋 Tasks</span>
+            </div>
+            <div class="tasks-tree" id="dashboard-tasks-tree">
+              <div class="vulndb-empty">No tasks in this project</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="dashboard-sidebar">
+          <!-- Project Info -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">ℹ️ Project Info</span>
+            </div>
+            <div id="dashboard-project-info">
+              <p style="color: var(--gray-400); font-size: 0.85rem;" id="dashboard-project-desc">No description</p>
+              <p style="color: var(--gray-500); font-size: 0.75rem; margin-top: 0.5rem;">
+                Created: <span id="dashboard-project-created">-</span>
+              </p>
+            </div>
+          </div>
+          
+          <!-- Latest Report -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">📄 Latest Report</span>
+            </div>
+            <div id="dashboard-latest-report">
+              <p class="vulndb-empty" style="padding: 1rem;">No reports generated yet</p>
+            </div>
+          </div>
+          
+          <!-- Quick Actions -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">⚡ Quick Actions</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <button class="btn-secondary btn-sm" onclick="regenerateProjectReport()" style="width: 100%; justify-content: center;">
+                🔄 Regenerate Report
+              </button>
+              <button class="btn-secondary btn-sm" onclick="exportProjectZip()" style="width: 100%; justify-content: center;">
+                📦 Export as ZIP
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Vulnerability Modal -->
+  <div class="vuln-modal" id="vuln-modal">
+    <div class="vuln-modal-container">
+      <div class="vuln-modal-header">
+        <span class="vuln-modal-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 8v4M12 16h.01"></path>
+          </svg>
+          <span id="vuln-modal-title-text">Submit Vulnerability</span>
+        </span>
+        <button class="task-modal-close" onclick="closeVulnModal()">&times;</button>
+      </div>
+      <div class="vuln-modal-body">
+        <input type="hidden" id="vuln-edit-id">
+        
+        <div class="vuln-form-row">
+          <div class="vuln-form-group">
+            <label>Title <span class="required">*</span></label>
+            <input type="text" class="vuln-form-input" id="vuln-title" placeholder="e.g., SQL Injection in Login Form">
+          </div>
+          <div class="vuln-form-group">
+            <label>Severity <span class="required">*</span></label>
+            <select class="vuln-form-select" id="vuln-severity">
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+              <option value="info">Informational</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Description <span class="required">*</span></label>
+          <textarea class="vuln-form-textarea" id="vuln-description" rows="3" placeholder="Detailed description of the vulnerability..."></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Affected Component</label>
+          <input type="text" class="vuln-form-input" id="vuln-affected" placeholder="e.g., https://example.com/login.php">
+        </div>
+        
+        <div class="vuln-form-row">
+          <div class="vuln-form-group">
+            <label>OWASP Category</label>
+            <select class="vuln-form-select" id="vuln-owasp">
+              <option value="">Select OWASP Category</option>
+              <option value="A01:2021 Broken Access Control">A01:2021 Broken Access Control</option>
+              <option value="A02:2021 Cryptographic Failures">A02:2021 Cryptographic Failures</option>
+              <option value="A03:2021 Injection">A03:2021 Injection</option>
+              <option value="A04:2021 Insecure Design">A04:2021 Insecure Design</option>
+              <option value="A05:2021 Security Misconfiguration">A05:2021 Security Misconfiguration</option>
+              <option value="A06:2021 Vulnerable Components">A06:2021 Vulnerable Components</option>
+              <option value="A07:2021 Auth Failures">A07:2021 Auth Failures</option>
+              <option value="A08:2021 Data Integrity Failures">A08:2021 Data Integrity Failures</option>
+              <option value="A09:2021 Logging Failures">A09:2021 Logging Failures</option>
+              <option value="A10:2021 SSRF">A10:2021 SSRF</option>
+            </select>
+          </div>
+          <div class="vuln-form-group">
+            <label>CWE ID</label>
+            <input type="text" class="vuln-form-input" id="vuln-cwe" placeholder="e.g., CWE-89">
+          </div>
+        </div>
+        
+        <div class="vuln-form-row">
+          <div class="vuln-form-group">
+            <label>CVSS Score</label>
+            <input type="text" class="vuln-form-input" id="vuln-cvss" placeholder="e.g., 9.8">
+          </div>
+          <div class="vuln-form-group">
+            <label>Tool Used</label>
+            <input type="text" class="vuln-form-input" id="vuln-tool" placeholder="e.g., sqlmap, nikto, manual">
+          </div>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Impact</label>
+          <textarea class="vuln-form-textarea" id="vuln-impact" rows="2" placeholder="Business/technical impact of the vulnerability..."></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Evidence / Proof of Concept</label>
+          <textarea class="vuln-form-textarea" id="vuln-evidence" rows="3" placeholder="Screenshots description, payloads, requests/responses..."></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Steps to Reproduce</label>
+          <textarea class="vuln-form-textarea" id="vuln-steps" rows="3" placeholder="1. Go to login page&#10;2. Enter payload in username field&#10;3. Observe SQL error"></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Remediation</label>
+          <textarea class="vuln-form-textarea" id="vuln-remediation" rows="2" placeholder="Recommended fix or mitigation..."></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>References</label>
+          <textarea class="vuln-form-textarea" id="vuln-references" rows="2" placeholder="CVE IDs, URLs, documentation links (one per line)..."></textarea>
+        </div>
+        
+        <div class="vuln-form-group">
+          <label>Command Used</label>
+          <input type="text" class="vuln-form-input" id="vuln-command" placeholder="e.g., sqlmap -u 'http://target.com/page?id=1' --dbs">
+        </div>
+      </div>
+      <div class="vuln-modal-footer">
+        <button class="btn-secondary" onclick="closeVulnModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveVulnerability()">Save Vulnerability</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Task Edit Modal -->
+  <div class="vuln-modal" id="task-edit-modal">
+    <div class="vuln-modal-container" style="max-width: 500px;">
+      <div class="vuln-modal-header">
+        <span class="vuln-modal-title">✏️ Edit Task Name</span>
+        <button class="task-modal-close" onclick="closeTaskEditModal()">&times;</button>
+      </div>
+      <div class="vuln-modal-body">
+        <input type="hidden" id="task-edit-id">
+        <div class="vuln-form-group">
+          <label>Task Name / Description</label>
+          <textarea class="vuln-form-textarea" id="task-edit-prompt" rows="4" placeholder="Describe the task..."></textarea>
+          <p style="font-size: 0.75rem; color: var(--gray-500); margin-top: 0.5rem;">
+            This should briefly describe the user's request to make it easily identifiable.
+          </p>
+        </div>
+        <div class="vuln-form-group">
+          <label>Task Label/Type</label>
+          <select class="vuln-form-select" id="task-edit-label">
+            <option value="general">General</option>
+            <option value="pentest_web">Web Pentest</option>
+            <option value="pentest_api">API Pentest</option>
+            <option value="pentest_network">Network Pentest</option>
+            <option value="pentest_osint">OSINT</option>
+            <option value="scanning">Scanning</option>
+            <option value="recon">Reconnaissance</option>
+            <option value="discovery">Discovery</option>
+          </select>
+        </div>
+      </div>
+      <div class="vuln-modal-footer">
+        <button class="btn-secondary" onclick="closeTaskEditModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveTaskEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+  
   <!-- Image Modal for full-size screenshots -->
   <div class="image-modal" id="image-modal">
     <img id="image-modal-img" src="" alt="Full size screenshot">
@@ -14681,6 +16095,7 @@ function renderGroupedReportsList(data) {
         project.tasks && project.tasks.includes(tid)
       );
       const taskNames = projectTasks.map(([tid, t]) => t.prompt?.substring(0, 30) + '...');
+      const vulnCount = (project.vulndb || []).length;
       
       html += `
         <div class="report-project-group" data-project-id="${projectId}" 
@@ -14691,8 +16106,22 @@ function renderGroupedReportsList(data) {
             <span class="report-project-color" style="background: ${project.color || '#22c55e'}"></span>
             <span class="report-task-toggle">▶</span>
             <span class="report-project-name">${escapeHtml(project.name)}</span>
-            <span class="report-task-count">${projectTasks.length} task${projectTasks.length !== 1 ? 's' : ''}</span>
+            <span class="report-task-count">${projectTasks.length} task${projectTasks.length !== 1 ? 's' : ''} · ${vulnCount} vuln${vulnCount !== 1 ? 's' : ''}</span>
             <div class="report-project-actions">
+              <button class="report-action-btn" onclick="event.stopPropagation(); openProjectDashboard('${projectId}')" title="Open Dashboard" style="background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.3);">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="7" height="7"></rect>
+                  <rect x="14" y="3" width="7" height="7"></rect>
+                  <rect x="14" y="14" width="7" height="7"></rect>
+                  <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+              </button>
+              <button class="report-action-btn" onclick="event.stopPropagation(); currentDashboardProjectId='${projectId}'; submitVulnerabilityModal()" title="Submit Vulnerability">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M12 8v4M12 16h.01"></path>
+                </svg>
+              </button>
               <button class="report-action-btn" onclick="event.stopPropagation(); editProject('${projectId}')" title="Edit">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -15144,6 +16573,451 @@ async function deleteProject(projectId) {
   } catch (err) {
     console.error('Error deleting project:', err);
     alert('Failed to delete project');
+  }
+}
+
+// ============== PROJECT DASHBOARD FUNCTIONS ==============
+let currentDashboardProjectId = null;
+let currentDashboardData = null;
+
+async function openProjectDashboard(projectId) {
+  currentDashboardProjectId = projectId;
+  const dashboard = document.getElementById('project-dashboard');
+  dashboard.style.display = 'flex';
+  
+  // Show loading state
+  document.getElementById('dashboard-project-name').textContent = 'Loading...';
+  
+  try {
+    const response = await fetch('/api/projects/' + projectId + '/dashboard');
+    if (!response.ok) throw new Error('Failed to load dashboard');
+    
+    currentDashboardData = await response.json();
+    renderProjectDashboard(currentDashboardData);
+  } catch (error) {
+    console.error('Error loading dashboard:', error);
+    alert('Failed to load project dashboard');
+    closeProjectDashboard();
+  }
+}
+
+function renderProjectDashboard(data) {
+  const project = data.project;
+  
+  // Header
+  document.getElementById('dashboard-project-name').textContent = project.name;
+  document.getElementById('dashboard-project-color').style.background = project.color || '#22c55e';
+  
+  // Project Info
+  document.getElementById('dashboard-project-desc').textContent = project.description || 'No description';
+  document.getElementById('dashboard-project-created').textContent = project.created_at ? new Date(project.created_at).toLocaleDateString() : '-';
+  
+  // Statistics
+  const stats = data.statistics;
+  const statsHtml = `
+    <div class="stat-box critical"><div class="value">${stats.severity_counts.critical}</div><div class="label">Critical</div></div>
+    <div class="stat-box high"><div class="value">${stats.severity_counts.high}</div><div class="label">High</div></div>
+    <div class="stat-box medium"><div class="value">${stats.severity_counts.medium}</div><div class="label">Medium</div></div>
+    <div class="stat-box low"><div class="value">${stats.severity_counts.low}</div><div class="label">Low</div></div>
+    <div class="stat-box info"><div class="value">${stats.severity_counts.info}</div><div class="label">Info</div></div>
+  `;
+  document.getElementById('dashboard-stats').innerHTML = statsHtml;
+  
+  // VulnDB Tree
+  renderVulnDBTree(data.vulndb || []);
+  
+  // Tasks Tree
+  renderTasksTree(data.tasks || []);
+  
+  // Latest Report
+  if (data.latest_report) {
+    document.getElementById('dashboard-latest-report').innerHTML = `
+      <div class="report-item" style="margin: 0;">
+        <div class="report-icon">📄</div>
+        <div class="report-info">
+          <div class="report-name">${escapeHtml(data.latest_report.name)}</div>
+          <div class="report-meta">
+            <span>${formatFileSize(data.latest_report.size)}</span>
+            <span>${new Date(data.latest_report.modified).toLocaleDateString()}</span>
+          </div>
+        </div>
+        <button class="report-action-btn" onclick="viewReport('${escapeHtml(data.latest_report.path)}')" title="View">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
+      </div>
+    `;
+  } else {
+    document.getElementById('dashboard-latest-report').innerHTML = '<p class="vulndb-empty" style="padding: 1rem;">No reports generated yet</p>';
+  }
+}
+
+function renderVulnDBTree(vulndb) {
+  const container = document.getElementById('vulndb-tree');
+  
+  if (!vulndb || vulndb.length === 0) {
+    container.innerHTML = '<div class="vulndb-empty">No vulnerabilities recorded yet. Click "+ Add" to submit one.</div>';
+    return;
+  }
+  
+  // Sort by severity
+  const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
+  vulndb.sort((a, b) => severityOrder[a.severity?.toLowerCase() || 'info'] - severityOrder[b.severity?.toLowerCase() || 'info']);
+  
+  let html = '';
+  vulndb.forEach(vuln => {
+    const severity = (vuln.severity || 'info').toLowerCase();
+    html += `
+      <div class="vulndb-item" onclick="viewVulnerability('${vuln.id}')" title="${escapeHtml(vuln.title)}">
+        <span class="vulndb-severity ${severity}">${severity}</span>
+        <span class="vulndb-title">${escapeHtml(vuln.title)}</span>
+        <div class="vulndb-actions">
+          <button class="vulndb-action-btn" onclick="event.stopPropagation(); editVulnerability('${vuln.id}')" title="Edit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
+          <button class="vulndb-action-btn delete" onclick="event.stopPropagation(); deleteVulnerability('${vuln.id}')" title="Delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    `;
+  });
+  
+  container.innerHTML = html;
+}
+
+function renderTasksTree(tasks) {
+  const container = document.getElementById('dashboard-tasks-tree');
+  
+  if (!tasks || tasks.length === 0) {
+    container.innerHTML = '<div class="vulndb-empty">No tasks in this project</div>';
+    return;
+  }
+  
+  const taskIcons = {
+    'pentest_web': '🌐',
+    'pentest_api': '🔌',
+    'pentest_network': '🖧',
+    'pentest_osint': '🕵️',
+    'pentest': '🎯',
+    'scanning': '🛡️',
+    'recon': '🔍',
+    'discovery': '📂',
+    'general': '📝'
+  };
+  
+  let html = '';
+  tasks.forEach(task => {
+    const icon = taskIcons[task.label] || '📝';
+    const prompt = task.prompt || 'Unknown task';
+    const promptPreview = prompt.length > 60 ? prompt.substring(0, 60) + '...' : prompt;
+    
+    html += `
+      <div class="task-tree-item" onclick="toggleTaskReports('${task.id}')">
+        <button class="task-edit-btn vulndb-action-btn" onclick="event.stopPropagation(); editTaskName('${task.id}', '${escapeHtml(prompt).replace(/'/g, "\\'")}', '${task.label}')" title="Edit Task Name">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+        </button>
+        <div class="task-name">${icon} ${escapeHtml(promptPreview)}</div>
+        <div class="task-meta">
+          <span>${task.report_count} report${task.report_count !== 1 ? 's' : ''}</span>
+          <span>${task.created_at ? new Date(task.created_at).toLocaleDateString() : ''}</span>
+        </div>
+      </div>
+    `;
+  });
+  
+  container.innerHTML = html;
+}
+
+function closeProjectDashboard() {
+  document.getElementById('project-dashboard').style.display = 'none';
+  currentDashboardProjectId = null;
+  currentDashboardData = null;
+}
+
+// ============== VULNERABILITY MODAL FUNCTIONS ==============
+
+function submitVulnerabilityModal() {
+  if (!currentDashboardProjectId) {
+    alert('No project selected');
+    return;
+  }
+  
+  // Reset form
+  document.getElementById('vuln-edit-id').value = '';
+  document.getElementById('vuln-title').value = '';
+  document.getElementById('vuln-severity').value = 'medium';
+  document.getElementById('vuln-description').value = '';
+  document.getElementById('vuln-affected').value = '';
+  document.getElementById('vuln-owasp').value = '';
+  document.getElementById('vuln-cwe').value = '';
+  document.getElementById('vuln-cvss').value = '';
+  document.getElementById('vuln-tool').value = '';
+  document.getElementById('vuln-impact').value = '';
+  document.getElementById('vuln-evidence').value = '';
+  document.getElementById('vuln-steps').value = '';
+  document.getElementById('vuln-remediation').value = '';
+  document.getElementById('vuln-references').value = '';
+  document.getElementById('vuln-command').value = '';
+  
+  document.getElementById('vuln-modal-title-text').textContent = 'Submit Vulnerability';
+  document.getElementById('vuln-modal').classList.add('active');
+}
+
+function closeVulnModal() {
+  document.getElementById('vuln-modal').classList.remove('active');
+}
+
+function viewVulnerability(vulnId) {
+  // Find in current data
+  const vuln = currentDashboardData?.vulndb?.find(v => v.id === vulnId);
+  if (!vuln) return;
+  
+  // Show in modal with view mode (or open edit mode)
+  editVulnerability(vulnId);
+}
+
+async function editVulnerability(vulnId) {
+  if (!currentDashboardProjectId) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/vulnerabilities/' + vulnId);
+    if (!response.ok) throw new Error('Failed to load vulnerability');
+    
+    const vuln = await response.json();
+    
+    // Populate form
+    document.getElementById('vuln-edit-id').value = vuln.id;
+    document.getElementById('vuln-title').value = vuln.title || '';
+    document.getElementById('vuln-severity').value = (vuln.severity || 'medium').toLowerCase();
+    document.getElementById('vuln-description').value = vuln.description || '';
+    document.getElementById('vuln-affected').value = vuln.affected_component || '';
+    document.getElementById('vuln-owasp').value = vuln.owasp_category || '';
+    document.getElementById('vuln-cwe').value = vuln.cwe_id || '';
+    document.getElementById('vuln-cvss').value = vuln.cvss_score || '';
+    document.getElementById('vuln-tool').value = vuln.tool_used || '';
+    document.getElementById('vuln-impact').value = vuln.impact || '';
+    document.getElementById('vuln-evidence').value = vuln.evidence || '';
+    document.getElementById('vuln-steps').value = vuln.steps_to_reproduce || '';
+    document.getElementById('vuln-remediation').value = vuln.remediation || '';
+    document.getElementById('vuln-references').value = vuln.references || '';
+    document.getElementById('vuln-command').value = vuln.command_used || '';
+    
+    document.getElementById('vuln-modal-title-text').textContent = 'Edit Vulnerability';
+    document.getElementById('vuln-modal').classList.add('active');
+  } catch (error) {
+    console.error('Error loading vulnerability:', error);
+    alert('Failed to load vulnerability');
+  }
+}
+
+async function saveVulnerability() {
+  if (!currentDashboardProjectId) return;
+  
+  const vulnId = document.getElementById('vuln-edit-id').value;
+  const title = document.getElementById('vuln-title').value.trim();
+  const severity = document.getElementById('vuln-severity').value;
+  const description = document.getElementById('vuln-description').value.trim();
+  
+  if (!title || !description) {
+    alert('Title and Description are required');
+    return;
+  }
+  
+  const vulnData = {
+    title: title,
+    severity: severity,
+    description: description,
+    affected_component: document.getElementById('vuln-affected').value.trim(),
+    owasp_category: document.getElementById('vuln-owasp').value,
+    cwe_id: document.getElementById('vuln-cwe').value.trim(),
+    cvss_score: document.getElementById('vuln-cvss').value.trim(),
+    tool_used: document.getElementById('vuln-tool').value.trim(),
+    impact: document.getElementById('vuln-impact').value.trim(),
+    evidence: document.getElementById('vuln-evidence').value.trim(),
+    steps_to_reproduce: document.getElementById('vuln-steps').value.trim(),
+    remediation: document.getElementById('vuln-remediation').value.trim(),
+    references: document.getElementById('vuln-references').value.trim(),
+    command_used: document.getElementById('vuln-command').value.trim(),
+    source: 'manual'
+  };
+  
+  try {
+    let response;
+    if (vulnId) {
+      // Update existing
+      response = await fetch('/api/projects/' + currentDashboardProjectId + '/vulnerabilities/' + vulnId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vulnData)
+      });
+    } else {
+      // Create new
+      response = await fetch('/api/projects/' + currentDashboardProjectId + '/vulnerabilities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vulnData)
+      });
+    }
+    
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(errData.error || 'Failed to save vulnerability');
+    }
+    
+    closeVulnModal();
+    // Reload dashboard
+    openProjectDashboard(currentDashboardProjectId);
+    showToast('success', vulnId ? 'Vulnerability updated' : 'Vulnerability added');
+  } catch (error) {
+    console.error('Error saving vulnerability:', error);
+    alert('Failed to save vulnerability: ' + error.message);
+  }
+}
+
+async function deleteVulnerability(vulnId) {
+  if (!confirm('Are you sure you want to delete this vulnerability?')) return;
+  if (!currentDashboardProjectId) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/vulnerabilities/' + vulnId, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete vulnerability');
+    
+    // Reload dashboard
+    openProjectDashboard(currentDashboardProjectId);
+    showToast('success', 'Vulnerability deleted');
+  } catch (error) {
+    console.error('Error deleting vulnerability:', error);
+    alert('Failed to delete vulnerability');
+  }
+}
+
+// ============== REPORT REGENERATION ==============
+
+async function regenerateProjectReport() {
+  if (!currentDashboardProjectId) {
+    alert('No project selected');
+    return;
+  }
+  
+  if (!confirm('This will regenerate the final report from the current VulnDB. Continue?')) return;
+  
+  try {
+    showToast('info', 'Regenerating report...');
+    
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/regenerate-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(errData.error || 'Failed to regenerate report');
+    }
+    
+    const result = await response.json();
+    
+    showToast('success', 'Report regenerated successfully!');
+    
+    // Offer to view the new report
+    if (confirm('Report generated! Would you like to view it now?')) {
+      viewReport(result.report_path);
+    }
+    
+    // Reload dashboard to show new report
+    openProjectDashboard(currentDashboardProjectId);
+    loadReportsDirectory();
+  } catch (error) {
+    console.error('Error regenerating report:', error);
+    alert('Failed to regenerate report: ' + error.message);
+  }
+}
+
+// ============== EXPORT ZIP ==============
+
+async function exportProjectZip() {
+  if (!currentDashboardProjectId) {
+    alert('No project selected');
+    return;
+  }
+  
+  try {
+    showToast('info', 'Preparing export...');
+    
+    // Trigger download
+    const link = document.createElement('a');
+    link.href = '/api/projects/' + currentDashboardProjectId + '/export';
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast('success', 'Export started');
+  } catch (error) {
+    console.error('Error exporting project:', error);
+    alert('Failed to export project');
+  }
+}
+
+// ============== TASK EDIT FUNCTIONS ==============
+
+function editTaskName(taskId, currentPrompt, currentLabel) {
+  document.getElementById('task-edit-id').value = taskId;
+  document.getElementById('task-edit-prompt').value = currentPrompt || '';
+  document.getElementById('task-edit-label').value = currentLabel || 'general';
+  document.getElementById('task-edit-modal').classList.add('active');
+}
+
+function closeTaskEditModal() {
+  document.getElementById('task-edit-modal').classList.remove('active');
+}
+
+async function saveTaskEdit() {
+  const taskId = document.getElementById('task-edit-id').value;
+  const prompt = document.getElementById('task-edit-prompt').value.trim();
+  const label = document.getElementById('task-edit-label').value;
+  
+  if (!taskId || !prompt) {
+    alert('Task name is required');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/tasks/' + taskId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, label })
+    });
+    
+    if (!response.ok) throw new Error('Failed to update task');
+    
+    closeTaskEditModal();
+    
+    // Reload both dashboard and reports list
+    if (currentDashboardProjectId) {
+      openProjectDashboard(currentDashboardProjectId);
+    }
+    loadReportsDirectory();
+    
+    showToast('success', 'Task updated');
+  } catch (error) {
+    console.error('Error updating task:', error);
+    alert('Failed to update task');
   }
 }
 
