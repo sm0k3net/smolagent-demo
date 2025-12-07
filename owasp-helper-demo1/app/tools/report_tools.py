@@ -2628,7 +2628,7 @@ def _build_finding_references_html(references: str, owasp_cat: str, cwe_id: str)
 
 
 def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dict) -> str:
-    """Build professional conclusion section HTML."""
+    """Build professional conclusion section HTML with actionable recommendations."""
     total_findings = sum(severity_counts.values())
     critical_high = severity_counts.get("Critical", 0) + severity_counts.get("High", 0)
     
@@ -2636,31 +2636,87 @@ def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dic
     if severity_counts.get("Critical", 0) > 0:
         risk_level = "Critical"
         risk_color = "#dc3545"
-        risk_text = "The assessment identified critical vulnerabilities that pose an immediate threat to the security of the system."
+        risk_icon = "🔴"
+        risk_text = "The assessment identified critical vulnerabilities that pose an immediate threat to the security of the system. Immediate action is required to prevent potential compromise."
     elif severity_counts.get("High", 0) > 0:
         risk_level = "High"
         risk_color = "#fd7e14"
-        risk_text = "The assessment identified high-severity vulnerabilities that should be addressed as a priority."
+        risk_icon = "🟠"
+        risk_text = "The assessment identified high-severity vulnerabilities that could be exploited to gain unauthorized access or compromise sensitive data. These should be addressed as a priority."
     elif severity_counts.get("Medium", 0) > 0:
         risk_level = "Medium"
         risk_color = "#ffc107"
-        risk_text = "The assessment identified vulnerabilities of moderate severity that should be remediated in a timely manner."
+        risk_icon = "🟡"
+        risk_text = "The assessment identified vulnerabilities of moderate severity that could be exploited under certain conditions. These should be remediated in a timely manner."
     else:
         risk_level = "Low"
         risk_color = "#28a745"
-        risk_text = "The assessment found primarily low-severity or informational findings. The overall security posture is reasonable."
+        risk_icon = "🟢"
+        risk_text = "The assessment found primarily low-severity or informational findings. The overall security posture is reasonable, though continuous improvement is recommended."
     
-    # Build priority remediation lists
+    # Build detailed remediation actions with specific guidance
     immediate_actions = []
     short_term_actions = []
     medium_term_actions = []
     long_term_actions = []
     
+    # Mapping of vulnerability types to specific remediation guidance
+    remediation_guidance = {
+        "sql injection": "Use parameterized queries/prepared statements. Implement input validation and WAF rules.",
+        "sqli": "Use parameterized queries/prepared statements. Implement input validation and WAF rules.",
+        "xss": "Implement output encoding. Use Content-Security-Policy headers. Sanitize user input.",
+        "cross-site scripting": "Implement output encoding. Use Content-Security-Policy headers. Sanitize user input.",
+        "rce": "Validate and sanitize all user input. Avoid system calls with user data. Implement sandboxing.",
+        "remote code execution": "Validate and sanitize all user input. Avoid system calls with user data. Implement sandboxing.",
+        "lfi": "Use whitelist-based file access. Avoid user input in file paths. Implement chroot jails.",
+        "local file inclusion": "Use whitelist-based file access. Avoid user input in file paths. Implement chroot jails.",
+        "ssrf": "Implement URL validation and whitelist. Block internal IP ranges. Use network segmentation.",
+        "information disclosure": "Review server configurations. Remove version headers. Implement proper error handling.",
+        "version disclosure": "Configure server to suppress version information in response headers.",
+        "outdated": "Update to the latest stable version. Establish a regular patching schedule.",
+        "eol": "Urgently upgrade to a supported version. End-of-life software receives no security patches.",
+        "end-of-life": "Urgently upgrade to a supported version. End-of-life software receives no security patches.",
+        "x-frame-options": "Add 'X-Frame-Options: DENY' or 'SAMEORIGIN' header to prevent clickjacking.",
+        "clickjacking": "Add 'X-Frame-Options: DENY' or 'SAMEORIGIN' header. Consider CSP frame-ancestors.",
+        "hsts": "Implement Strict-Transport-Security header with adequate max-age (31536000 recommended).",
+        "ssl": "Upgrade to TLS 1.2+ only. Disable weak ciphers. Implement certificate pinning where applicable.",
+        "tls": "Upgrade to TLS 1.2+ only. Disable weak ciphers. Obtain valid certificates from trusted CAs.",
+        "certificate": "Obtain valid certificates from trusted CAs. Implement proper certificate chain.",
+        "crossdomain": "Review and restrict crossdomain.xml policies. Use specific domain allowlisting.",
+        "cors": "Implement strict CORS policies. Avoid 'Access-Control-Allow-Origin: *' in production.",
+        "directory listing": "Disable directory listing in web server configuration (Options -Indexes for Apache).",
+        "directory traversal": "Validate and sanitize file paths. Use chroot or containerization.",
+        "sensitive file": "Remove or restrict access to sensitive files. Implement proper access controls.",
+        "backup file": "Remove backup files from production. Exclude from deployment pipeline.",
+        "authentication": "Implement strong authentication. Use multi-factor authentication where possible.",
+        "session": "Use secure session management. Implement proper session timeout and invalidation.",
+        "csrf": "Implement anti-CSRF tokens. Use SameSite cookie attribute.",
+        "default credentials": "Change all default credentials immediately. Implement strong password policies.",
+        "weak password": "Enforce strong password policies. Implement account lockout mechanisms.",
+    }
+    
     for f in findings:
         sev = f.get("severity", "Info")
-        # Sanitize finding title before adding to remediation lists
-        safe_title = sanitize_html(f.get('title', 'Untitled'))
-        item = f"Fix: {safe_title}"
+        title = f.get('title', 'Untitled')
+        safe_title = sanitize_html(title)
+        remediation = f.get('remediation', '')
+        
+        # Generate specific guidance based on finding type
+        specific_guidance = ""
+        title_lower = title.lower()
+        for vuln_type, guidance in remediation_guidance.items():
+            if vuln_type in title_lower:
+                specific_guidance = guidance
+                break
+        
+        # Build action item with specific guidance
+        if specific_guidance:
+            item = f"<strong>{safe_title}</strong><br><span style='font-size: 0.85rem; color: #555;'>{specific_guidance}</span>"
+        elif remediation:
+            item = f"<strong>{safe_title}</strong><br><span style='font-size: 0.85rem; color: #555;'>{sanitize_html(remediation[:150])}</span>"
+        else:
+            item = f"<strong>{safe_title}</strong>"
+        
         if sev == "Critical":
             immediate_actions.append(item)
         elif sev == "High":
@@ -2678,79 +2734,118 @@ def _build_conclusion_html(conclusion: str, findings: list, severity_counts: dic
         for p in conclusion.split('\n\n'):
             p = p.strip()
             if p:
-                # Escaped tags are now safe text, wrap in paragraphs
                 conclusion_paragraphs += f"<p>{p.replace(chr(10), '<br>')}</p>"
     
+    # Build key statistics section
     html = f'''
-    <div class="risk-summary" style="border-color: {risk_color};">
-        <strong style="color: {risk_color};">Overall Risk Level: {risk_level}</strong>
-        <p style="margin: 0.5rem 0 0 0;">{risk_text}</p>
-        <p style="margin: 0.5rem 0 0 0;"><strong>Summary:</strong> {total_findings} total findings identified ({severity_counts.get("Critical", 0)} Critical, {severity_counts.get("High", 0)} High, {severity_counts.get("Medium", 0)} Medium, {severity_counts.get("Low", 0)} Low, {severity_counts.get("Info", 0)} Informational)</p>
+    <div class="risk-summary" style="border-color: {risk_color}; padding: 1.25rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+            <span style="font-size: 1.5rem;">{risk_icon}</span>
+            <strong style="color: {risk_color}; font-size: 1.25rem;">Overall Risk Level: {risk_level}</strong>
+        </div>
+        <p style="margin: 0.5rem 0;">{risk_text}</p>
+        <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #eee;">
+            <strong>Findings Summary:</strong>
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                <span style="background: #dc3545; color: white; padding: 0.25rem 0.75rem; border-radius: 4px;">🔴 Critical: {severity_counts.get("Critical", 0)}</span>
+                <span style="background: #fd7e14; color: white; padding: 0.25rem 0.75rem; border-radius: 4px;">🟠 High: {severity_counts.get("High", 0)}</span>
+                <span style="background: #ffc107; color: #333; padding: 0.25rem 0.75rem; border-radius: 4px;">🟡 Medium: {severity_counts.get("Medium", 0)}</span>
+                <span style="background: #28a745; color: white; padding: 0.25rem 0.75rem; border-radius: 4px;">🟢 Low: {severity_counts.get("Low", 0)}</span>
+                <span style="background: #6c757d; color: white; padding: 0.25rem 0.75rem; border-radius: 4px;">ℹ️ Info: {severity_counts.get("Info", 0)}</span>
+            </div>
+        </div>
     </div>
     
     <h3>Assessment Summary</h3>
-    {conclusion_paragraphs if conclusion_paragraphs else "<p>Based on the assessment, the recommendations in this report should be implemented to improve the security posture of the application.</p>"}
+    {conclusion_paragraphs if conclusion_paragraphs else "<p>Based on the assessment, the recommendations in this report should be implemented to improve the security posture of the application. Priority should be given to critical and high-severity findings.</p>"}
     
     <h3>Prioritized Remediation Roadmap</h3>
     <div class="conclusion-grid">
     '''
     
     if immediate_actions:
-        html += '''
-        <div class="conclusion-card">
+        html += f'''
+        <div class="conclusion-card" style="border-left: 4px solid #dc3545;">
             <h4>🚨 Immediate Actions <span class="priority-badge priority-immediate">0-48 hours</span></h4>
-            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Critical issues requiring emergency response</p>
-            <ul>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Critical issues requiring emergency response - potential for active exploitation</p>
+            <ul style="list-style-type: none; padding-left: 0;">
         '''
-        for action in immediate_actions[:5]:
-            html += f"<li>{action}</li>"
+        for action in immediate_actions[:10]:
+            html += f'<li style="margin-bottom: 0.75rem; padding: 0.5rem; background: #fff5f5; border-radius: 4px;">⚡ {action}</li>'
+        if len(immediate_actions) > 10:
+            html += f'<li style="color: #dc3545; font-style: italic;">...and {len(immediate_actions) - 10} more critical items</li>'
         html += "</ul></div>"
     
     if short_term_actions:
-        html += '''
-        <div class="conclusion-card">
+        html += f'''
+        <div class="conclusion-card" style="border-left: 4px solid #fd7e14;">
             <h4>⚠️ Short-Term Actions <span class="priority-badge priority-short">1-2 weeks</span></h4>
-            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">High priority issues for immediate sprint</p>
-            <ul>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">High priority issues to address in the next sprint cycle</p>
+            <ul style="list-style-type: none; padding-left: 0;">
         '''
-        for action in short_term_actions[:5]:
-            html += f"<li>{action}</li>"
+        for action in short_term_actions[:10]:
+            html += f'<li style="margin-bottom: 0.75rem; padding: 0.5rem; background: #fff8f0; border-radius: 4px;">🔶 {action}</li>'
+        if len(short_term_actions) > 10:
+            html += f'<li style="color: #fd7e14; font-style: italic;">...and {len(short_term_actions) - 10} more high-priority items</li>'
         html += "</ul></div>"
     
     if medium_term_actions:
-        html += '''
-        <div class="conclusion-card">
+        html += f'''
+        <div class="conclusion-card" style="border-left: 4px solid #ffc107;">
             <h4>📋 Medium-Term Actions <span class="priority-badge priority-medium">1-3 months</span></h4>
-            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Moderate issues for planned remediation</p>
-            <ul>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Moderate issues to include in quarterly security roadmap</p>
+            <ul style="list-style-type: none; padding-left: 0;">
         '''
-        for action in medium_term_actions[:5]:
-            html += f"<li>{action}</li>"
+        for action in medium_term_actions[:8]:
+            html += f'<li style="margin-bottom: 0.75rem; padding: 0.5rem; background: #fffbf0; border-radius: 4px;">📌 {action}</li>'
+        if len(medium_term_actions) > 8:
+            html += f'<li style="color: #ffc107; font-style: italic;">...and {len(medium_term_actions) - 8} more medium-priority items</li>'
         html += "</ul></div>"
     
     if long_term_actions:
-        html += '''
-        <div class="conclusion-card">
+        html += f'''
+        <div class="conclusion-card" style="border-left: 4px solid #28a745;">
             <h4>📝 Long-Term Improvements <span class="priority-badge priority-long">3-6 months</span></h4>
-            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Low priority enhancements and best practices</p>
-            <ul>
+            <p style="font-size: 0.9rem; color: #666; margin-bottom: 0.75rem;">Best practice enhancements and hardening measures</p>
+            <ul style="list-style-type: none; padding-left: 0;">
         '''
-        for action in long_term_actions[:5]:
-            html += f"<li>{action}</li>"
+        for action in long_term_actions[:6]:
+            html += f'<li style="margin-bottom: 0.75rem; padding: 0.5rem; background: #f0fff4; border-radius: 4px;">✅ {action}</li>'
+        if len(long_term_actions) > 6:
+            html += f'<li style="color: #28a745; font-style: italic;">...and {len(long_term_actions) - 6} more items</li>'
         html += "</ul></div>"
     
-    # Add general recommendations
+    # Add general recommendations with more detail
     html += '''
     </div>
     
-    <h3>General Recommendations</h3>
-    <ul>
-        <li><strong>Establish a Vulnerability Management Program:</strong> Implement regular security assessments and vulnerability scanning</li>
-        <li><strong>Security Awareness Training:</strong> Conduct regular security training for development and operations teams</li>
-        <li><strong>Secure Development Lifecycle:</strong> Integrate security testing into CI/CD pipelines</li>
-        <li><strong>Incident Response Plan:</strong> Ensure a documented and tested incident response procedure is in place</li>
-        <li><strong>Regular Patching:</strong> Maintain an aggressive patching schedule for all systems and dependencies</li>
-    </ul>
+    <h3>Strategic Security Recommendations</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: white;">🛡️ Vulnerability Management</h4>
+            <p style="margin: 0; font-size: 0.9rem; opacity: 0.95;">Implement regular security assessments, automated vulnerability scanning, and a formal remediation tracking process with defined SLAs.</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: white;">👥 Security Awareness</h4>
+            <p style="margin: 0; font-size: 0.9rem; opacity: 0.95;">Conduct regular security training for development and operations teams. Include secure coding practices and threat awareness.</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: white;">🔄 Secure SDLC</h4>
+            <p style="margin: 0; font-size: 0.9rem; opacity: 0.95;">Integrate SAST/DAST tools into CI/CD pipelines. Require security reviews for all changes. Implement dependency scanning.</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: white;">🚨 Incident Response</h4>
+            <p style="margin: 0; font-size: 0.9rem; opacity: 0.95;">Maintain a documented and tested incident response plan. Ensure logging and monitoring are in place for security events.</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: white; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: white;">📦 Patch Management</h4>
+            <p style="margin: 0; font-size: 0.9rem; opacity: 0.95;">Maintain aggressive patching for all systems and dependencies. Critical patches should be applied within 48 hours.</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); color: #333; padding: 1.25rem; border-radius: 8px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: #333;">🔐 Access Controls</h4>
+            <p style="margin: 0; font-size: 0.9rem;">Implement principle of least privilege. Use MFA for sensitive access. Regularly review and audit access permissions.</p>
+        </div>
+    </div>
     '''
     
     return html

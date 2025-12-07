@@ -128,6 +128,94 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
 6. **Exploit confirmed vulnerabilities** - demonstrate actual impact
 7. **REPORT IMMEDIATELY** - call add_finding_to_report() right after each tool completes
 
+## 🔴 MANDATORY WEB PENTEST CHECKLIST (FOLLOW IN ORDER)
+
+**YOU MUST COMPLETE EVERY ITEM. CHECK EACH ONE OFF AS YOU GO:**
+
+### Phase 1: Reconnaissance (ALL REQUIRED)
+```
+□ 1.1 enable_report_mode() - Start report collection
+□ 1.2 take_screenshot(target) - Initial state
+□ 1.3 whatweb_scan(target) - Technology fingerprinting → REPORT version disclosures
+□ 1.4 curl_request(target) - Get headers → REPORT missing security headers
+□ 1.5 dns_lookup(domain) - DNS records → Add to recon_data
+□ 1.6 whois_lookup(domain) - WHOIS data
+□ 1.7 crt_sh_search(domain) - Certificate transparency
+□ 1.8 subfinder_scan(domain) - Subdomain enumeration
+```
+
+### Phase 2: Configuration & Content Discovery (ALL REQUIRED)
+```
+□ 2.1 nmap_scan(target) or nmap_scan_full(target) - Port scan → REPORT open ports
+□ 2.2 nikto_scan(target) - Web server audit → REPORT EACH finding
+□ 2.3 gobuster_scan(target) - Directory enumeration → REPORT sensitive directories
+□ 2.4 curl robots.txt, sitemap.xml - Check accessible files
+□ 2.5 sslyze_scan(target) OR testssl_scan(target) - TLS/SSL testing → REPORT weak ciphers
+```
+
+### Phase 3: Vulnerability Scanning (ALL REQUIRED)
+```
+□ 3.1 nuclei_scan(target, automatic=True) - Full auto scan → REPORT ALL findings
+□ 3.2 nuclei_scan(target, tags="xss") - XSS templates
+□ 3.3 nuclei_scan(target, tags="sqli") - SQLi templates  
+□ 3.4 nuclei_scan(target, tags="lfi,rce,ssrf,ssti") - Other injection templates
+□ 3.5 nuclei_scan(target, templates="cves/") - Known CVE checks
+□ 3.6 nuclei_scan(target, templates="default-logins/") - Default credentials
+```
+
+### Phase 4: Web Application Deep Testing (ALL REQUIRED)
+```
+□ 4.1 get_page_links(target) - Extract all links
+□ 4.2 get_page_forms(target) - Find all forms
+□ 4.3 For EACH form with parameters:
+    □ sqlmap_scan(url_with_params) - SQL injection testing
+    □ Test for XSS manually with xsser or payload injection
+□ 4.4 ZAP scanning (if forms/params found):
+    □ zap_spider_scan(target) - Crawl site
+    □ zap_active_scan(target) - Active testing
+    □ zap_get_alerts() - Get findings → REPORT each alert
+```
+
+### Phase 5: Exploitation & Validation (REQUIRED for High/Critical)
+```
+□ 5.1 For EACH Critical/High finding:
+    □ Manually validate with curl_request or browse_page
+    □ take_screenshot showing the vulnerability
+    □ Attempt exploitation (sqlmap --dump, etc.)
+    □ Document exploitation steps in finding
+```
+
+### Phase 6: Report Generation (REQUIRED)
+```
+□ 6.1 Verify all findings have been added with add_finding_to_report()
+□ 6.2 set_executive_summary() - Write executive summary
+□ 6.3 set_conclusion() - Write conclusions
+□ 6.4 Attach all raw tool outputs with add_tool_output_to_report()
+□ 6.5 generate_html_report() - Generate final report
+```
+
+## 🔴 COMMON MISTAKES TO AVOID
+
+1. **Running nuclei with narrow tags** - WRONG: `nuclei -tags xss,sqli` (misses 95% of templates)
+   - CORRECT: Run `nuclei_scan(target, automatic=True)` FIRST for comprehensive scan
+   
+2. **Skipping XSS testing** - Many web apps are vulnerable to XSS. ALWAYS test:
+   - Use `nuclei_scan(target, tags="xss")`
+   - Use `xsser_scan(target)`
+   - Test forms manually with XSS payloads
+   
+3. **Not testing all parameters** - Every URL parameter is a potential injection point:
+   - Use `get_page_forms()` to find all input fields
+   - Use `sqlmap_scan()` on each URL with parameters
+   
+4. **Missing ZAP scanning** - ZAP finds vulnerabilities other scanners miss:
+   - Spider + Active scan catches logic flaws, session issues
+   
+5. **Not exploiting confirmed vulnerabilities** - A finding without exploitation proof is weak:
+   - SQLi → Dump database tables
+   - XSS → Show alert popup in screenshot
+   - LFI → Read /etc/passwd
+
 ## Progress Tracking (MANDATORY)
 
 After completing each major phase, output a progress summary:
