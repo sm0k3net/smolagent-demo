@@ -2762,6 +2762,77 @@ async def set_agent_max_steps(request: Request):
         }, status_code=400)
 
 
+# ============== AI CALCULATION ENDPOINTS ==============
+
+@app.post("/api/ai/calculate")
+async def ai_calculate(request: Request):
+    """Use AI to calculate CVSS, CWE, or process descriptions."""
+    try:
+        data = await request.json()
+        prompt = data.get("prompt", "")
+        calc_type = data.get("type", "general")
+        
+        if not prompt:
+            return JSONResponse({"success": False, "message": "No prompt provided"}, status_code=400)
+        
+        # Get the current LLM settings
+        api_keys = load_api_keys_from_file()
+        provider = api_keys.get("llm_provider", "deepseek")
+        
+        # Use a simple LLM call for calculations
+        from smolagents import LiteLLMModel
+        
+        model_map = {
+            "deepseek": "deepseek/deepseek-chat",
+            "openai": "gpt-4o-mini",
+            "anthropic": "claude-3-haiku-20240307",
+            "ollama": "ollama/llama3.1:8b"
+        }
+        
+        model_name = model_map.get(provider, "deepseek/deepseek-chat")
+        api_key = api_keys.get(f"{provider}_api_key") or api_keys.get("deepseek_api_key")
+        
+        if not api_key and provider != "ollama":
+            return JSONResponse({
+                "success": False, 
+                "message": f"No API key configured for {provider}"
+            }, status_code=400)
+        
+        # Create a simple model for the calculation
+        model = LiteLLMModel(
+            model_id=model_name,
+            api_key=api_key,
+            temperature=0.3  # Low temperature for more deterministic results
+        )
+        
+        # Make a simple completion call
+        messages = [{"role": "user", "content": prompt}]
+        result = model(messages)
+        
+        # Extract just the text response
+        if hasattr(result, 'content'):
+            response_text = result.content
+        else:
+            response_text = str(result)
+        
+        # Clean up the response
+        response_text = response_text.strip()
+        
+        return JSONResponse({
+            "success": True,
+            "result": response_text,
+            "type": calc_type
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({
+            "success": False,
+            "message": f"AI calculation failed: {str(e)}"
+        }, status_code=500)
+
+
 # ============== TOOLS MANAGEMENT ENDPOINTS ==============
 
 @app.get("/api/tools/list")
@@ -8051,6 +8122,101 @@ h1 {
   opacity: 0.8;
 }
 
+/* Bulk Actions Bar */
+.bulk-actions-bar {
+  display: none;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+.bulk-actions-bar.active {
+  display: flex;
+}
+.multi-select-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.bulk-actions-count {
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  font-weight: 500;
+}
+.bulk-actions-count span {
+  color: var(--primary);
+  font-weight: 600;
+}
+.bulk-actions-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.bulk-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 6px;
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.bulk-action-btn:hover {
+  background: rgba(99, 102, 241, 0.35);
+  transform: translateY(-1px);
+}
+.bulk-action-btn.danger {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+}
+.bulk-action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+/* Selectable items */
+.report-task-item.selectable,
+.report-project-group.selectable,
+.report-result-item.selectable {
+  position: relative;
+}
+.item-select-checkbox {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.bulk-mode .item-select-checkbox {
+  opacity: 1;
+}
+.bulk-mode .report-task-item,
+.bulk-mode .report-project-group > .project-header,
+.bulk-mode .report-result-item {
+  padding-left: 32px;
+}
+.report-task-item.selected,
+.report-project-group.selected > .project-header,
+.report-result-item.selected {
+  background: rgba(99, 102, 241, 0.15) !important;
+  border-color: rgba(99, 102, 241, 0.4) !important;
+}
+
 /* Reports Section Header */
 .reports-section-header {
   display: flex;
@@ -8641,6 +8807,553 @@ h1 {
   padding: 1rem 1.5rem;
   background: rgba(0,0,0,0.2);
   border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Modern Dashboard Header Buttons */
+.project-dashboard-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.project-dashboard-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 100%);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: var(--gray-300);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.project-dashboard-actions .btn-secondary:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: white;
+  transform: translateY(-1px);
+}
+.project-dashboard-actions .btn-secondary svg {
+  width: 15px;
+  height: 15px;
+  opacity: 0.8;
+}
+.project-dashboard-actions .btn-secondary:hover svg {
+  opacity: 1;
+}
+
+/* Confirmation Modal - Modern Design */
+.confirm-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.confirm-modal.active {
+  display: flex;
+}
+.confirm-modal-container {
+  background: var(--dark);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 16px;
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+.confirm-modal-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1rem;
+}
+.confirm-modal-icon.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+.confirm-modal-icon.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+.confirm-modal-icon svg {
+  width: 28px;
+  height: 28px;
+}
+.confirm-modal-title {
+  text-align: center;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--light);
+}
+.confirm-modal-message {
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--gray-400);
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+.confirm-modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+.confirm-modal-actions .btn-cancel {
+  flex: 1;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--gray-300);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.confirm-modal-actions .btn-cancel:hover {
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+.confirm-modal-actions .btn-confirm {
+  flex: 1;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: linear-gradient(135deg, var(--danger) 0%, #dc2626 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.confirm-modal-actions .btn-confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
+
+/* Improved Vulnerability Form Buttons */
+.vuln-modal-footer .btn-secondary,
+.vuln-modal-footer .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.vuln-modal-footer .btn-secondary {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--gray-300);
+}
+.vuln-modal-footer .btn-secondary:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: white;
+}
+.vuln-modal-footer .btn-primary {
+  background: linear-gradient(135deg, var(--success) 0%, #16a34a 100%);
+  border: none;
+  color: white;
+}
+.vuln-modal-footer .btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+}
+
+/* AI Action Button - Robot Icon Style */
+.ai-calc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 6px;
+  color: #a78bfa;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.ai-calc-btn:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.35) 0%, rgba(99, 102, 241, 0.25) 100%);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #c4b5fd;
+  transform: scale(1.05);
+}
+.ai-calc-btn:active {
+  transform: scale(0.95);
+}
+.ai-calc-btn.loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+.ai-calc-btn.loading svg {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Input with AI Button */
+.input-with-ai {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.input-with-ai .vuln-form-input,
+.input-with-ai .vuln-form-textarea {
+  flex: 1;
+}
+
+/* Icon Picker Styles */
+.icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+.icon-picker-item {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  background: rgba(255,255,255,0.05);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.icon-picker-item:hover {
+  background: rgba(255,255,255,0.1);
+  transform: scale(1.1);
+}
+.icon-picker-item.selected {
+  border-color: var(--success);
+  background: rgba(34, 197, 94, 0.15);
+}
+
+/* Task Tree Item Actions */
+.task-tree-item {
+  position: relative;
+}
+.task-tree-actions {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.task-tree-item:hover .task-tree-actions {
+  opacity: 1;
+}
+.task-tree-action-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 5px;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.task-tree-action-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+.task-tree-action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+
+/* Rich Text Editor Toolbar for Description */
+.desc-editor-toolbar {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  flex-wrap: wrap;
+}
+.desc-editor-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  color: var(--gray-400);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+.desc-editor-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+.desc-editor-btn.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--primary-light);
+}
+.desc-editor-separator {
+  width: 1px;
+  height: 20px;
+  background: rgba(255,255,255,0.1);
+  margin: 4px 0.25rem;
+}
+.desc-editor-container .vuln-form-textarea {
+  border-radius: 0 0 8px 8px;
+  border-top: none;
+}
+
+/* Multi-Select Checkbox */
+.multi-select-checkbox {
+  width: 18px;
+  height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255,255,255,0.05);
+  border: 2px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.multi-select-checkbox:checked {
+  background: var(--success);
+  border-color: var(--success);
+}
+.multi-select-checkbox:checked::after {
+  content: '✓';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+}
+.multi-select-checkbox:hover {
+  border-color: var(--success);
+}
+
+/* Bulk Actions Bar */
+.bulk-actions-bar {
+  display: none;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+.bulk-actions-bar.active {
+  display: flex;
+}
+.bulk-actions-count {
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  font-weight: 500;
+}
+.bulk-actions-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.bulk-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: var(--gray-300);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.bulk-action-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+.bulk-action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+
+/* AI Description Helper Modal */
+.ai-desc-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  z-index: 9600;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.ai-desc-modal.active {
+  display: flex;
+}
+.ai-desc-modal-container {
+  background: var(--dark);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 16px;
+  max-width: 500px;
+  width: 100%;
+  overflow: hidden;
+}
+.ai-desc-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.ai-desc-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 1rem;
+}
+.ai-desc-modal-title svg {
+  color: #a78bfa;
+}
+.ai-desc-options {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.ai-desc-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ai-desc-option:hover {
+  background: rgba(139, 92, 246, 0.1);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+.ai-desc-option-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+.ai-desc-option-text {
+  flex: 1;
+}
+.ai-desc-option-title {
+  font-weight: 500;
+  font-size: 0.9rem;
+  margin-bottom: 0.15rem;
+}
+.ai-desc-option-desc {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+}
+.ai-desc-custom {
+  padding: 0 1rem 1rem;
+}
+.ai-desc-custom textarea {
+  width: 100%;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--light);
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+}
+.ai-desc-custom textarea:focus {
+  outline: none;
+  border-color: rgba(139, 92, 246, 0.5);
+}
+.ai-desc-custom-btn {
+  margin-top: 0.5rem;
+  width: 100%;
+  padding: 0.6rem;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ai-desc-custom-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+}
+
+/* OWASP Category Cascading Select */
+.owasp-select-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.owasp-type-select,
+.owasp-category-select {
+  width: 100%;
 }
 
 /* Tasks Tree Styles */
@@ -14278,15 +14991,16 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
           <span id="dashboard-project-name">Project Dashboard</span>
         </div>
         <div class="project-dashboard-actions">
-          <button class="btn-secondary" onclick="submitVulnerabilityModal()" title="Submit Vulnerability">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <button class="btn-secondary" onclick="submitVulnerabilityModal()" title="Add New Finding">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
               <circle cx="12" cy="12" r="10"></circle>
-              <path d="M12 8v4M12 16h.01"></path>
+              <line x1="12" y1="8" x2="12" y2="16"></line>
+              <line x1="8" y1="12" x2="16" y2="12"></line>
             </svg>
             Add Finding
           </button>
-          <button class="btn-secondary" onclick="exportVulnsToNotes()" title="Export to Notes">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <button class="btn-secondary" onclick="exportVulnsToNotes()" title="Export Findings to Notes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
               <path d="M14 2v6h6"></path>
               <line x1="16" y1="13" x2="8" y2="13"></line>
@@ -14294,29 +15008,26 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
             </svg>
             To Notes
           </button>
-          <button class="btn-secondary" onclick="regenerateProjectReport()" title="Regenerate Report">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <button class="btn-secondary" onclick="regenerateProjectReport()" title="Regenerate Consolidated Report">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
               <polyline points="23 4 23 10 17 10"></polyline>
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
             </svg>
             Regenerate
           </button>
-          <button class="btn-secondary" onclick="parseProjectFindings()" title="Auto-parse findings from all tasks">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="11" y1="8" x2="11" y2="14"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
-            Parse
-          </button>
-          <button class="btn-secondary" onclick="exportProjectZip()" title="Export ZIP">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <button class="btn-secondary" onclick="exportProjectZip()" title="Export as ZIP Archive">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
             Export
+          </button>
+          <button class="btn-secondary" onclick="openProjectSettings()" title="Project Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
           </button>
           <button class="task-modal-close" onclick="closeProjectDashboard()">&times;</button>
         </div>
@@ -14433,6 +15144,36 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
                   <textarea class="vuln-form-textarea" id="edit-project-desc" rows="2" style="min-height: 60px; font-size: 0.85rem;"></textarea>
                 </div>
                 <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
+                  <label style="font-size: 0.75rem;">Project Icon</label>
+                  <input type="hidden" id="edit-project-icon" value="">
+                  <div class="icon-picker-grid" id="project-icon-picker">
+                    <div class="icon-picker-item" onclick="selectProjectIcon('')" title="None">-</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🎯')">🎯</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🔒')">🔒</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🛡️')">🛡️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🔐')">🔐</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🌐')">🌐</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🔌')">🔌</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('📱')">📱</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('💻')">💻</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🖥️')">🖥️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('☁️')">☁️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🔍')">🔍</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🕵️')">🕵️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('⚠️')">⚠️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🚨')">🚨</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('💰')">💰</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🏦')">🏦</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🏥')">🏥</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🏭')">🏭</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🏢')">🏢</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🎮')">🎮</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('📧')">📧</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('🗄️')">🗄️</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('📊')">📊</div>
+                  </div>
+                </div>
+                <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
                   <label style="font-size: 0.75rem;">Color</label>
                   <input type="color" id="edit-project-color" style="width: 100%; height: 30px; border: none; cursor: pointer;">
                 </div>
@@ -14536,8 +15277,28 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
         </div>
         
         <div class="vuln-form-group">
-          <label>Description <span class="required">*</span></label>
-          <textarea class="vuln-form-textarea" id="vuln-description" rows="3" placeholder="Detailed description of the vulnerability..."></textarea>
+          <label>Description <span class="required">*</span>
+            <button type="button" class="ai-calc-btn" onclick="openAIDescriptionHelper()" title="AI Description Assistant" style="margin-left: 8px; vertical-align: middle;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+              </svg>
+            </button>
+          </label>
+          <div class="desc-editor-container">
+            <div class="desc-editor-toolbar">
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('bold')" title="Bold"><strong>B</strong></button>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('italic')" title="Italic"><em>I</em></button>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('underline')" title="Underline"><u>U</u></button>
+              <div class="desc-editor-separator"></div>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('h3')" title="Heading">H</button>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('ul')" title="Bullet List">•</button>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('ol')" title="Numbered List">1.</button>
+              <div class="desc-editor-separator"></div>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('code')" title="Code">&lt;/&gt;</button>
+              <button type="button" class="desc-editor-btn" onclick="formatVulnDesc('table')" title="Table">⊞</button>
+            </div>
+            <textarea class="vuln-form-textarea" id="vuln-description" rows="4" placeholder="Detailed description of the vulnerability..."></textarea>
+          </div>
         </div>
         
         <div class="vuln-form-group">
@@ -14548,29 +15309,39 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
         <div class="vuln-form-row">
           <div class="vuln-form-group">
             <label>OWASP Category</label>
-            <select class="vuln-form-select" id="vuln-owasp">
-              <option value="">Select OWASP Category</option>
-              <option value="A01:2021 Broken Access Control">A01:2021 Broken Access Control</option>
-              <option value="A02:2021 Cryptographic Failures">A02:2021 Cryptographic Failures</option>
-              <option value="A03:2021 Injection">A03:2021 Injection</option>
-              <option value="A04:2021 Insecure Design">A04:2021 Insecure Design</option>
-              <option value="A05:2021 Security Misconfiguration">A05:2021 Security Misconfiguration</option>
-              <option value="A06:2021 Vulnerable Components">A06:2021 Vulnerable Components</option>
-              <option value="A07:2021 Auth Failures">A07:2021 Auth Failures</option>
-              <option value="A08:2021 Data Integrity Failures">A08:2021 Data Integrity Failures</option>
-              <option value="A09:2021 Logging Failures">A09:2021 Logging Failures</option>
-              <option value="A10:2021 SSRF">A10:2021 SSRF</option>
-            </select>
+            <div class="owasp-select-container">
+              <select class="vuln-form-select owasp-type-select" id="vuln-owasp-type" onchange="updateOwaspCategories()">
+                <option value="">Select OWASP Type</option>
+                <option value="web">OWASP Top 10 Web (2021)</option>
+                <option value="api">OWASP Top 10 API (2023)</option>
+                <option value="mobile">OWASP Top 10 Mobile (2024)</option>
+              </select>
+              <select class="vuln-form-select owasp-category-select" id="vuln-owasp" disabled>
+                <option value="">Select Category First</option>
+              </select>
+            </div>
           </div>
           <div class="vuln-form-group">
-            <label>CWE ID</label>
+            <label>CWE ID
+              <button type="button" class="ai-calc-btn" id="ai-cwe-btn" onclick="calculateCWE()" title="AI Calculate CWE" style="margin-left: 8px; vertical-align: middle;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+                </svg>
+              </button>
+            </label>
             <input type="text" class="vuln-form-input" id="vuln-cwe" placeholder="e.g., CWE-89">
           </div>
         </div>
         
         <div class="vuln-form-row">
           <div class="vuln-form-group">
-            <label>CVSS Score</label>
+            <label>CVSS Score
+              <button type="button" class="ai-calc-btn" id="ai-cvss-btn" onclick="calculateCVSS()" title="AI Calculate CVSS" style="margin-left: 8px; vertical-align: middle;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+                </svg>
+              </button>
+            </label>
             <input type="text" class="vuln-form-input" id="vuln-cvss" placeholder="e.g., 9.8">
           </div>
           <div class="vuln-form-group">
@@ -14636,6 +15407,87 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
             <polyline points="7 3 7 8 15 8"></polyline>
           </svg>
           Save Vulnerability
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Confirmation Modal -->
+  <div class="confirm-modal" id="confirm-modal">
+    <div class="confirm-modal-container">
+      <div class="confirm-modal-icon danger" id="confirm-modal-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+      <div class="confirm-modal-title" id="confirm-modal-title">Confirm Delete</div>
+      <div class="confirm-modal-message" id="confirm-modal-message">Are you sure you want to delete this item? This action cannot be undone.</div>
+      <div class="confirm-modal-actions">
+        <button class="btn-cancel" onclick="closeConfirmModal()">Cancel</button>
+        <button class="btn-confirm" id="confirm-modal-btn" onclick="confirmModalAction()">Delete</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- AI Description Helper Modal -->
+  <div class="ai-desc-modal" id="ai-desc-modal">
+    <div class="ai-desc-modal-container">
+      <div class="ai-desc-modal-header">
+        <span class="ai-desc-modal-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+          </svg>
+          AI Description Assistant
+        </span>
+        <button class="task-modal-close" onclick="closeAIDescModal()">&times;</button>
+      </div>
+      <div class="ai-desc-options">
+        <div class="ai-desc-option" onclick="applyAIDescOption('improve')">
+          <div class="ai-desc-option-icon">✨</div>
+          <div class="ai-desc-option-text">
+            <div class="ai-desc-option-title">Improve Description</div>
+            <div class="ai-desc-option-desc">Enhance clarity, add technical details, improve structure</div>
+          </div>
+        </div>
+        <div class="ai-desc-option" onclick="applyAIDescOption('expand')">
+          <div class="ai-desc-option-icon">📝</div>
+          <div class="ai-desc-option-text">
+            <div class="ai-desc-option-title">Expand Description</div>
+            <div class="ai-desc-option-desc">Add more context, technical explanation, and details</div>
+          </div>
+        </div>
+        <div class="ai-desc-option" onclick="applyAIDescOption('summarize')">
+          <div class="ai-desc-option-icon">📋</div>
+          <div class="ai-desc-option-text">
+            <div class="ai-desc-option-title">Summarize</div>
+            <div class="ai-desc-option-desc">Create a concise summary of the vulnerability</div>
+          </div>
+        </div>
+        <div class="ai-desc-option" onclick="applyAIDescOption('professional')">
+          <div class="ai-desc-option-icon">🎯</div>
+          <div class="ai-desc-option-text">
+            <div class="ai-desc-option-title">Make Professional</div>
+            <div class="ai-desc-option-desc">Format for executive or client-facing reports</div>
+          </div>
+        </div>
+        <div class="ai-desc-option" onclick="applyAIDescOption('technical')">
+          <div class="ai-desc-option-icon">🔧</div>
+          <div class="ai-desc-option-text">
+            <div class="ai-desc-option-title">Add Technical Details</div>
+            <div class="ai-desc-option-desc">Include technical specifics, CVE references, attack vectors</div>
+          </div>
+        </div>
+      </div>
+      <div class="ai-desc-custom">
+        <textarea id="ai-desc-custom-prompt" placeholder="Or enter a custom instruction..."></textarea>
+        <button class="ai-desc-custom-btn" onclick="applyAIDescOption('custom')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="margin-right: 6px;">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+          Apply Custom Instruction
         </button>
       </div>
     </div>
@@ -16656,17 +17508,50 @@ function renderGroupedReportsList(data) {
   
   let html = '';
   
+  // Bulk actions bar (hidden by default)
+  html += `
+    <div class="bulk-actions-bar" id="bulk-actions-bar">
+      <input type="checkbox" class="multi-select-checkbox" id="select-all-checkbox" onchange="toggleSelectAll(this.checked)">
+      <span class="bulk-actions-count"><span id="selected-count">0</span> selected</span>
+      <div class="bulk-actions-buttons">
+        <button class="bulk-action-btn" onclick="bulkMoveToProject()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          Move to Project
+        </button>
+        <button class="bulk-action-btn danger" onclick="bulkDelete()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          Delete Selected
+        </button>
+        <button class="bulk-action-btn" onclick="cancelBulkSelect()">Cancel</button>
+      </div>
+    </div>
+  `;
+  
   // Render projects section header
   html += `
     <div class="reports-section-header">
       <span>📁 Projects</span>
-      <button class="add-project-btn" onclick="showCreateProjectModal()" title="Create Project">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-        New Project
-      </button>
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="add-project-btn" onclick="enterBulkMode()" title="Select Multiple" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.3); color: var(--primary);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 11 12 14 22 4"></polyline>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+          Select
+        </button>
+        <button class="add-project-btn" onclick="showCreateProjectModal()" title="Create Project">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New Project
+        </button>
+      </div>
     </div>
   `;
   
@@ -16681,10 +17566,12 @@ function renderGroupedReportsList(data) {
       const vulnCount = (project.vulndb || []).length;
       
       html += `
-        <div class="report-project-group" data-project-id="${projectId}" 
+        <div class="report-project-group selectable" data-project-id="${projectId}" 
              ondragover="event.preventDefault(); this.classList.add('drag-over');"
              ondragleave="this.classList.remove('drag-over');"
              ondrop="dropTaskOnProject(event, '${projectId}');">
+          <input type="checkbox" class="item-select-checkbox" data-type="project" data-id="${projectId}" 
+                 onclick="event.stopPropagation(); toggleItemSelect(this, 'project', '${projectId}')">
           <div class="report-project-header" onclick="toggleReportProjectGroup('${projectId}')">
             <span class="report-project-color" style="background: ${project.color || '#22c55e'}"></span>
             <span class="report-task-toggle">▶</span>
@@ -16711,7 +17598,7 @@ function renderGroupedReportsList(data) {
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                 </svg>
               </button>
-              <button class="report-action-btn" onclick="event.stopPropagation(); deleteProject('${projectId}')" title="Delete">
+              <button class="report-action-btn" onclick="event.stopPropagation(); deleteProject('${projectId}', '${escapeHtml(project.name).replace(/'/g, "\\'")}')" title="Delete">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="3 6 5 6 21 6"></polyline>
                   <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -16766,8 +17653,10 @@ function renderGroupedReportsList(data) {
       const promptPreview = taskData.prompt ? taskData.prompt.substring(0, 80) + (taskData.prompt.length > 80 ? '...' : '') : 'Unknown task';
       
       html += `
-        <div class="report-task-group" data-task-id="${taskId}" draggable="true"
+        <div class="report-task-group selectable" data-task-id="${taskId}" draggable="true"
              ondragstart="dragTask(event, '${taskId}')">
+          <input type="checkbox" class="item-select-checkbox" data-type="task" data-id="${taskId}" 
+                 onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')" style="position: relative; left: 4px; margin-right: 8px;">
           <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
             <span class="drag-handle">⋮⋮</span>
             <span class="report-task-toggle">▶</span>
@@ -16825,8 +17714,10 @@ function renderDraggableTask(taskId, taskData, allTasks) {
   const promptPreview = taskData.prompt ? taskData.prompt.substring(0, 60) + (taskData.prompt.length > 60 ? '...' : '') : 'Unknown task';
   
   return `
-    <div class="report-task-group in-project" data-task-id="${taskId}" draggable="true"
+    <div class="report-task-group in-project selectable" data-task-id="${taskId}" draggable="true"
          ondragstart="dragTask(event, '${taskId}')">
+      <input type="checkbox" class="item-select-checkbox" data-type="task" data-id="${taskId}" 
+             onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')" style="position: relative; left: 4px; margin-right: 8px;">
       <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
         <span class="drag-handle">⋮⋮</span>
         <span class="report-task-toggle">▶</span>
@@ -17140,23 +18031,9 @@ async function saveProject(projectId) {
   }
 }
 
-async function deleteProject(projectId) {
-  if (!confirm('Are you sure you want to delete this project? Tasks will be moved to ungrouped.')) return;
-  
-  try {
-    const response = await fetch('/api/projects/' + projectId, {
-      method: 'DELETE'
-    });
-    
-    if (response.ok) {
-      loadReportsDirectory();
-    } else {
-      alert('Failed to delete project');
-    }
-  } catch (err) {
-    console.error('Error deleting project:', err);
-    alert('Failed to delete project');
-  }
+async function deleteProject(projectId, projectName) {
+  // Use the new confirmation modal instead of browser confirm
+  showDeleteConfirm('project', projectId, projectName || 'this project');
 }
 
 // ============== PROJECT DASHBOARD FUNCTIONS ==============
@@ -17312,16 +18189,30 @@ function renderTasksTree(tasks) {
   tasks.forEach(task => {
     const icon = taskIcons[task.label] || '📝';
     const prompt = task.prompt || 'Unknown task';
-    const promptPreview = prompt.length > 60 ? prompt.substring(0, 60) + '...' : prompt;
+    const promptPreview = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt;
     
     html += `
       <div class="task-tree-item" onclick="toggleTaskReports('${task.id}')">
-        <button class="task-edit-btn vulndb-action-btn" onclick="event.stopPropagation(); editTaskName('${task.id}', '${escapeHtml(prompt).replace(/'/g, "\\'")}', '${task.label}')" title="Edit Task Name">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-          </svg>
-        </button>
+        <div class="task-tree-actions">
+          <button class="task-tree-action-btn" onclick="event.stopPropagation(); exportTaskToNotes('${task.id}')" title="Export to Notes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <path d="M14 2v6h6"></path>
+            </svg>
+          </button>
+          <button class="task-tree-action-btn" onclick="event.stopPropagation(); editTaskName('${task.id}', '${escapeHtml(prompt).replace(/'/g, "\\'")}', '${task.label}')" title="Edit Task">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
+          <button class="task-tree-action-btn danger" onclick="event.stopPropagation(); showDeleteConfirm('task', '${task.id}', '${escapeHtml(promptPreview).replace(/'/g, "\\'")}')" title="Delete Task">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
         <div class="task-name">${icon} ${escapeHtml(promptPreview)}</div>
         <div class="task-meta">
           <span>${task.report_count} report${task.report_count !== 1 ? 's' : ''}</span>
@@ -17354,7 +18245,9 @@ function submitVulnerabilityModal() {
   document.getElementById('vuln-severity').value = 'medium';
   document.getElementById('vuln-description').value = '';
   document.getElementById('vuln-affected').value = '';
-  document.getElementById('vuln-owasp').value = '';
+  document.getElementById('vuln-owasp-type').value = '';
+  document.getElementById('vuln-owasp').innerHTML = '<option value="">Select Category First</option>';
+  document.getElementById('vuln-owasp').disabled = true;
   document.getElementById('vuln-cwe').value = '';
   document.getElementById('vuln-cvss').value = '';
   document.getElementById('vuln-tool').value = '';
@@ -17374,6 +18267,654 @@ function closeVulnModal() {
   // Clear evidence images
   evidenceImages = [];
   document.getElementById('evidence-images-preview').innerHTML = '';
+  // Reset OWASP selectors
+  document.getElementById('vuln-owasp-type').value = '';
+  document.getElementById('vuln-owasp').innerHTML = '<option value="">Select Category First</option>';
+  document.getElementById('vuln-owasp').disabled = true;
+}
+
+// ============== OWASP CATEGORY SELECTION ==============
+
+const owaspCategories = {
+  web: [
+    { value: 'A01:2021 Broken Access Control', label: 'A01:2021 Broken Access Control' },
+    { value: 'A02:2021 Cryptographic Failures', label: 'A02:2021 Cryptographic Failures' },
+    { value: 'A03:2021 Injection', label: 'A03:2021 Injection' },
+    { value: 'A04:2021 Insecure Design', label: 'A04:2021 Insecure Design' },
+    { value: 'A05:2021 Security Misconfiguration', label: 'A05:2021 Security Misconfiguration' },
+    { value: 'A06:2021 Vulnerable Components', label: 'A06:2021 Vulnerable Components' },
+    { value: 'A07:2021 Auth Failures', label: 'A07:2021 Auth Failures' },
+    { value: 'A08:2021 Data Integrity Failures', label: 'A08:2021 Data Integrity Failures' },
+    { value: 'A09:2021 Logging Failures', label: 'A09:2021 Logging Failures' },
+    { value: 'A10:2021 SSRF', label: 'A10:2021 SSRF' }
+  ],
+  api: [
+    { value: 'API1:2023 Broken Object Level Authorization', label: 'API1:2023 Broken Object Level Authorization' },
+    { value: 'API2:2023 Broken Authentication', label: 'API2:2023 Broken Authentication' },
+    { value: 'API3:2023 Broken Object Property Level Authorization', label: 'API3:2023 Broken Object Property Level Authorization' },
+    { value: 'API4:2023 Unrestricted Resource Consumption', label: 'API4:2023 Unrestricted Resource Consumption' },
+    { value: 'API5:2023 Broken Function Level Authorization', label: 'API5:2023 Broken Function Level Authorization' },
+    { value: 'API6:2023 Unrestricted Access to Sensitive Business Flows', label: 'API6:2023 Unrestricted Access to Sensitive Business Flows' },
+    { value: 'API7:2023 Server Side Request Forgery', label: 'API7:2023 Server Side Request Forgery' },
+    { value: 'API8:2023 Security Misconfiguration', label: 'API8:2023 Security Misconfiguration' },
+    { value: 'API9:2023 Improper Inventory Management', label: 'API9:2023 Improper Inventory Management' },
+    { value: 'API10:2023 Unsafe Consumption of APIs', label: 'API10:2023 Unsafe Consumption of APIs' }
+  ],
+  mobile: [
+    { value: 'M1:2024 Improper Credential Usage', label: 'M1:2024 Improper Credential Usage' },
+    { value: 'M2:2024 Inadequate Supply Chain Security', label: 'M2:2024 Inadequate Supply Chain Security' },
+    { value: 'M3:2024 Insecure Authentication/Authorization', label: 'M3:2024 Insecure Authentication/Authorization' },
+    { value: 'M4:2024 Insufficient Input/Output Validation', label: 'M4:2024 Insufficient Input/Output Validation' },
+    { value: 'M5:2024 Insecure Communication', label: 'M5:2024 Insecure Communication' },
+    { value: 'M6:2024 Inadequate Privacy Controls', label: 'M6:2024 Inadequate Privacy Controls' },
+    { value: 'M7:2024 Insufficient Binary Protections', label: 'M7:2024 Insufficient Binary Protections' },
+    { value: 'M8:2024 Security Misconfiguration', label: 'M8:2024 Security Misconfiguration' },
+    { value: 'M9:2024 Insecure Data Storage', label: 'M9:2024 Insecure Data Storage' },
+    { value: 'M10:2024 Insufficient Cryptography', label: 'M10:2024 Insufficient Cryptography' }
+  ]
+};
+
+function updateOwaspCategories() {
+  const typeSelect = document.getElementById('vuln-owasp-type');
+  const categorySelect = document.getElementById('vuln-owasp');
+  const selectedType = typeSelect.value;
+  
+  if (!selectedType) {
+    categorySelect.innerHTML = '<option value="">Select Category First</option>';
+    categorySelect.disabled = true;
+    return;
+  }
+  
+  const categories = owaspCategories[selectedType] || [];
+  let html = '<option value="">Select OWASP Category</option>';
+  categories.forEach(cat => {
+    html += `<option value="${cat.value}">${cat.label}</option>`;
+  });
+  
+  categorySelect.innerHTML = html;
+  categorySelect.disabled = false;
+}
+
+// ============== CONFIRMATION MODAL ==============
+
+let confirmModalCallback = null;
+let confirmModalData = null;
+
+function showDeleteConfirm(type, id, name) {
+  const modal = document.getElementById('confirm-modal');
+  const titleEl = document.getElementById('confirm-modal-title');
+  const messageEl = document.getElementById('confirm-modal-message');
+  const iconEl = document.getElementById('confirm-modal-icon');
+  
+  const typeNames = {
+    'task': 'Task',
+    'project': 'Project',
+    'result': 'Report',
+    'vulnerability': 'Vulnerability'
+  };
+  
+  const typeName = typeNames[type] || 'Item';
+  titleEl.textContent = `Delete ${typeName}?`;
+  messageEl.innerHTML = `Are you sure you want to delete <strong>"${name}"</strong>?<br><span style="font-size: 0.8rem; opacity: 0.7;">This action cannot be undone.</span>`;
+  iconEl.className = 'confirm-modal-icon danger';
+  
+  confirmModalData = { type, id };
+  modal.classList.add('active');
+}
+
+function closeConfirmModal() {
+  document.getElementById('confirm-modal').classList.remove('active');
+  confirmModalCallback = null;
+  confirmModalData = null;
+}
+
+async function confirmModalAction() {
+  if (!confirmModalData) return;
+  
+  const { type, id } = confirmModalData;
+  closeConfirmModal();
+  
+  try {
+    if (type === 'task') {
+      await deleteTaskConfirmed(id);
+    } else if (type === 'project') {
+      await deleteProjectConfirmed(id);
+    } else if (type === 'result') {
+      await deleteReportConfirmed(id);
+    } else if (type === 'vulnerability') {
+      await deleteVulnerabilityConfirmed(id);
+    }
+  } catch (error) {
+    console.error('Delete error:', error);
+    showToast('error', 'Failed to delete: ' + error.message);
+  }
+}
+
+async function deleteTaskConfirmed(taskId) {
+  // Implementation - remove from store and refresh
+  delete taskStore[taskId];
+  renderTasks();
+  if (currentDashboardProjectId) {
+    loadProjectDashboard(currentDashboardProjectId);
+  }
+  showToast('success', 'Task deleted');
+}
+
+async function deleteProjectConfirmed(projectId) {
+  try {
+    const response = await fetch(`/api/reports/projects/${projectId}`, { method: 'DELETE' });
+    if (response.ok) {
+      closeProjectDashboard();
+      loadReportsTree();
+      showToast('success', 'Project deleted');
+    }
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function deleteReportConfirmed(reportId) {
+  try {
+    const response = await fetch(`/api/reports/${reportId}`, { method: 'DELETE' });
+    if (response.ok) {
+      loadReportsTree();
+      if (currentDashboardProjectId) {
+        loadProjectDashboard(currentDashboardProjectId);
+      }
+      showToast('success', 'Report deleted');
+    }
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function deleteVulnerabilityConfirmed(vulnId) {
+  try {
+    const response = await fetch(`/api/reports/projects/${currentDashboardProjectId}/vulndb/${vulnId}`, { method: 'DELETE' });
+    if (response.ok) {
+      loadProjectDashboard(currentDashboardProjectId);
+      showToast('success', 'Vulnerability deleted');
+    }
+  } catch (error) {
+    throw error;
+  }
+}
+
+// ============== AI HELPER FUNCTIONS ==============
+
+async function calculateCVSS() {
+  const btn = document.getElementById('ai-cvss-btn');
+  const title = document.getElementById('vuln-title').value;
+  const description = document.getElementById('vuln-description').value;
+  const severity = document.getElementById('vuln-severity').value;
+  const impact = document.getElementById('vuln-impact').value;
+  const owasp = document.getElementById('vuln-owasp').value;
+  
+  if (!title && !description) {
+    showToast('warning', 'Please enter a title or description first');
+    return;
+  }
+  
+  btn.classList.add('loading');
+  
+  try {
+    const prompt = `Based on the following vulnerability details, calculate an appropriate CVSS 3.1 base score (0.0-10.0). Return ONLY the numeric score, nothing else.
+
+Title: ${title}
+Severity: ${severity}
+Description: ${description}
+Impact: ${impact}
+OWASP Category: ${owasp}
+
+Consider:
+- Attack Vector (Network/Adjacent/Local/Physical)
+- Attack Complexity (Low/High)
+- Privileges Required (None/Low/High)
+- User Interaction (None/Required)
+- Scope (Unchanged/Changed)
+- Confidentiality/Integrity/Availability Impact (None/Low/High)
+
+Return only the CVSS score as a number like: 7.5`;
+
+    const response = await fetch('/api/ai/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, type: 'cvss' })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      const score = parseFloat(data.result);
+      if (!isNaN(score) && score >= 0 && score <= 10) {
+        document.getElementById('vuln-cvss').value = score.toFixed(1);
+        showToast('success', `CVSS calculated: ${score.toFixed(1)}`);
+      } else {
+        document.getElementById('vuln-cvss').value = data.result;
+      }
+    } else {
+      throw new Error('AI calculation failed');
+    }
+  } catch (error) {
+    console.error('CVSS calculation error:', error);
+    showToast('error', 'Failed to calculate CVSS');
+  } finally {
+    btn.classList.remove('loading');
+  }
+}
+
+async function calculateCWE() {
+  const btn = document.getElementById('ai-cwe-btn');
+  const title = document.getElementById('vuln-title').value;
+  const description = document.getElementById('vuln-description').value;
+  const owasp = document.getElementById('vuln-owasp').value;
+  
+  if (!title && !description) {
+    showToast('warning', 'Please enter a title or description first');
+    return;
+  }
+  
+  btn.classList.add('loading');
+  
+  try {
+    const prompt = `Based on the following vulnerability details, identify the most appropriate CWE (Common Weakness Enumeration) ID. Return ONLY the CWE ID in format "CWE-XXX", nothing else.
+
+Title: ${title}
+Description: ${description}
+OWASP Category: ${owasp}
+
+Common CWEs:
+- CWE-79: XSS
+- CWE-89: SQL Injection
+- CWE-22: Path Traversal
+- CWE-352: CSRF
+- CWE-287: Authentication Issues
+- CWE-862: Missing Authorization
+- CWE-918: SSRF
+- CWE-502: Deserialization
+- CWE-78: OS Command Injection
+- CWE-611: XXE
+
+Return only the CWE ID like: CWE-89`;
+
+    const response = await fetch('/api/ai/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, type: 'cwe' })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      document.getElementById('vuln-cwe').value = data.result.trim();
+      showToast('success', `CWE identified: ${data.result.trim()}`);
+    } else {
+      throw new Error('AI calculation failed');
+    }
+  } catch (error) {
+    console.error('CWE calculation error:', error);
+    showToast('error', 'Failed to calculate CWE');
+  } finally {
+    btn.classList.remove('loading');
+  }
+}
+
+// ============== AI DESCRIPTION HELPER ==============
+
+function openAIDescriptionHelper() {
+  document.getElementById('ai-desc-modal').classList.add('active');
+  document.getElementById('ai-desc-custom-prompt').value = '';
+}
+
+function closeAIDescModal() {
+  document.getElementById('ai-desc-modal').classList.remove('active');
+}
+
+async function applyAIDescOption(option) {
+  const description = document.getElementById('vuln-description').value;
+  const title = document.getElementById('vuln-title').value;
+  let customPrompt = '';
+  
+  if (option === 'custom') {
+    customPrompt = document.getElementById('ai-desc-custom-prompt').value;
+    if (!customPrompt) {
+      showToast('warning', 'Please enter a custom instruction');
+      return;
+    }
+  }
+  
+  if (!description && option !== 'custom') {
+    showToast('warning', 'Please enter a description first');
+    return;
+  }
+  
+  closeAIDescModal();
+  showToast('info', 'Processing with AI...');
+  
+  const prompts = {
+    improve: `Improve this vulnerability description for clarity and technical accuracy. Keep the same meaning but make it more professional:\n\n${description}`,
+    expand: `Expand this vulnerability description with more technical details, potential attack scenarios, and comprehensive explanation:\n\nTitle: ${title}\nDescription: ${description}`,
+    summarize: `Create a concise summary of this vulnerability description (2-3 sentences max):\n\n${description}`,
+    professional: `Rewrite this vulnerability description in a professional format suitable for executive or client-facing security reports:\n\nTitle: ${title}\nDescription: ${description}`,
+    technical: `Add technical details to this vulnerability description including potential CVE references, attack vectors, and exploitation techniques:\n\nTitle: ${title}\nDescription: ${description}`,
+    custom: `${customPrompt}\n\nTitle: ${title}\nDescription: ${description}`
+  };
+  
+  try {
+    const response = await fetch('/api/ai/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prompts[option], type: 'description' })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      document.getElementById('vuln-description').value = data.result;
+      showToast('success', 'Description updated');
+    } else {
+      throw new Error('AI processing failed');
+    }
+  } catch (error) {
+    console.error('AI description error:', error);
+    showToast('error', 'Failed to process description');
+  }
+}
+
+// ============== DESCRIPTION RICH TEXT FORMATTING ==============
+
+function formatVulnDesc(format) {
+  const textarea = document.getElementById('vuln-description');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const selected = text.substring(start, end);
+  
+  let replacement = '';
+  let cursorOffset = 0;
+  
+  switch (format) {
+    case 'bold':
+      replacement = `**${selected || 'bold text'}**`;
+      cursorOffset = selected ? 0 : -2;
+      break;
+    case 'italic':
+      replacement = `*${selected || 'italic text'}*`;
+      cursorOffset = selected ? 0 : -1;
+      break;
+    case 'underline':
+      replacement = `<u>${selected || 'underlined text'}</u>`;
+      cursorOffset = selected ? 0 : -4;
+      break;
+    case 'h3':
+      replacement = `### ${selected || 'Heading'}`;
+      cursorOffset = 0;
+      break;
+    case 'ul':
+      if (selected) {
+        replacement = selected.split('\\n').map(line => `- ${line}`).join('\\n');
+      } else {
+        replacement = '- Item 1\\n- Item 2\\n- Item 3';
+      }
+      break;
+    case 'ol':
+      if (selected) {
+        replacement = selected.split('\\n').map((line, i) => `${i + 1}. ${line}`).join('\\n');
+      } else {
+        replacement = '1. First item\\n2. Second item\\n3. Third item';
+      }
+      break;
+    case 'code':
+      if (selected.includes('\\n')) {
+        replacement = '```\\n' + selected + '\\n```';
+      } else {
+        replacement = '`' + (selected || 'code') + '`';
+      }
+      break;
+    case 'table':
+      replacement = '| Column 1 | Column 2 | Column 3 |\\n|----------|----------|----------|\\n| Data 1   | Data 2   | Data 3   |';
+      break;
+  }
+  
+  textarea.value = text.substring(0, start) + replacement + text.substring(end);
+  textarea.focus();
+  textarea.setSelectionRange(start + replacement.length + cursorOffset, start + replacement.length + cursorOffset);
+}
+
+// ============== EXPORT TASK TO NOTES ==============
+
+async function exportTaskToNotes(taskId) {
+  const task = taskStore[taskId];
+  if (!task) {
+    showToast('error', 'Task not found');
+    return;
+  }
+  
+  const prompt = task.prompt || 'Unknown task';
+  const promptPreview = prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt;
+  
+  // Generate markdown from task data
+  let markdown = `# Task: ${promptPreview}\\n\\n`;
+  markdown += `**Date:** ${task.created_at ? new Date(task.created_at).toLocaleDateString() : new Date().toLocaleDateString()}\\n`;
+  markdown += `**Status:** ${task.status || 'completed'}\\n\\n`;
+  markdown += `---\\n\\n`;
+  markdown += `## Original Prompt\\n${prompt}\\n\\n`;
+  
+  if (task.report_html) {
+    markdown += `## Report Generated\\nA security report was generated for this task.\\n\\n`;
+  }
+  
+  try {
+    const response = await fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: `Task: ${promptPreview}`,
+        content: markdown,
+        project_id: currentDashboardProjectId
+      })
+    });
+    
+    if (!response.ok) throw new Error('Failed to create note');
+    
+    showToast('success', 'Task exported to Notes!');
+  } catch (error) {
+    console.error('Error exporting to notes:', error);
+    showToast('error', 'Failed to export: ' + error.message);
+  }
+}
+
+// ============== BULK SELECTION ==============
+
+let bulkSelectionMode = false;
+let selectedItems = { projects: [], tasks: [], results: [] };
+
+function enterBulkMode() {
+  bulkSelectionMode = true;
+  document.getElementById('reports-list').classList.add('bulk-mode');
+  document.getElementById('bulk-actions-bar').classList.add('active');
+  updateSelectedCount();
+}
+
+function cancelBulkSelect() {
+  bulkSelectionMode = false;
+  selectedItems = { projects: [], tasks: [], results: [] };
+  document.getElementById('reports-list').classList.remove('bulk-mode');
+  document.getElementById('bulk-actions-bar').classList.remove('active');
+  document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.item-select-checkbox').forEach(cb => cb.checked = false);
+  document.getElementById('select-all-checkbox').checked = false;
+}
+
+function toggleSelectAll(checked) {
+  if (!bulkSelectionMode) {
+    enterBulkMode();
+  }
+  
+  selectedItems = { projects: [], tasks: [], results: [] };
+  
+  document.querySelectorAll('.item-select-checkbox').forEach(checkbox => {
+    checkbox.checked = checked;
+    const itemEl = checkbox.closest('.report-task-item, .report-project-group, .report-result-item');
+    if (checked) {
+      itemEl.classList.add('selected');
+      const type = checkbox.dataset.type;
+      const id = checkbox.dataset.id;
+      if (type === 'project') selectedItems.projects.push(id);
+      else if (type === 'task') selectedItems.tasks.push(id);
+      else if (type === 'result') selectedItems.results.push(id);
+    } else {
+      itemEl.classList.remove('selected');
+    }
+  });
+  
+  updateSelectedCount();
+}
+
+function toggleItemSelect(checkbox, type, id) {
+  if (!bulkSelectionMode) {
+    enterBulkMode();
+  }
+  
+  const itemEl = checkbox.closest('.report-task-item, .report-project-group, .report-result-item');
+  
+  if (checkbox.checked) {
+    itemEl.classList.add('selected');
+    if (type === 'project' && !selectedItems.projects.includes(id)) {
+      selectedItems.projects.push(id);
+    } else if (type === 'task' && !selectedItems.tasks.includes(id)) {
+      selectedItems.tasks.push(id);
+    } else if (type === 'result' && !selectedItems.results.includes(id)) {
+      selectedItems.results.push(id);
+    }
+  } else {
+    itemEl.classList.remove('selected');
+    if (type === 'project') {
+      selectedItems.projects = selectedItems.projects.filter(p => p !== id);
+    } else if (type === 'task') {
+      selectedItems.tasks = selectedItems.tasks.filter(t => t !== id);
+    } else if (type === 'result') {
+      selectedItems.results = selectedItems.results.filter(r => r !== id);
+    }
+  }
+  
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const total = selectedItems.projects.length + selectedItems.tasks.length + selectedItems.results.length;
+  document.getElementById('selected-count').textContent = total;
+}
+
+async function bulkDelete() {
+  const totalCount = selectedItems.projects.length + selectedItems.tasks.length + selectedItems.results.length;
+  
+  if (totalCount === 0) {
+    showToast('warning', 'No items selected');
+    return;
+  }
+  
+  showConfirmModal(
+    'Delete Selected Items',
+    `Are you sure you want to delete ${totalCount} selected item(s)? This action cannot be undone.`,
+    'Delete All',
+    async function() {
+      hideConfirmModal();
+      
+      try {
+        // Delete results
+        for (const resultId of selectedItems.results) {
+          await fetch('/api/result/' + resultId, { method: 'DELETE' });
+        }
+        
+        // Delete tasks
+        for (const taskId of selectedItems.tasks) {
+          await fetch('/api/reports/' + taskId, { method: 'DELETE' });
+        }
+        
+        // Delete projects
+        for (const projectId of selectedItems.projects) {
+          await fetch('/api/projects/' + projectId, { method: 'DELETE' });
+        }
+        
+        showToast('success', `Deleted ${totalCount} item(s)`);
+        cancelBulkSelect();
+        loadReportsDirectory();
+      } catch (error) {
+        console.error('Bulk delete error:', error);
+        showToast('error', 'Failed to delete some items');
+      }
+    }
+  );
+}
+
+async function bulkMoveToProject() {
+  const taskCount = selectedItems.tasks.length;
+  const resultCount = selectedItems.results.length;
+  
+  if (taskCount === 0 && resultCount === 0) {
+    showToast('warning', 'Select tasks or results to move');
+    return;
+  }
+  
+  // Show project selection modal
+  const projectSelect = document.createElement('select');
+  projectSelect.style.cssText = 'width: 100%; padding: 0.5rem; background: var(--gray-700); border: 1px solid var(--gray-600); border-radius: 6px; color: var(--gray-100); margin-top: 0.5rem;';
+  projectSelect.innerHTML = '<option value="">-- Select Project --</option>';
+  
+  // Get projects from current data
+  Object.entries(projectStore || {}).forEach(([id, project]) => {
+    projectSelect.innerHTML += '<option value="' + id + '">' + (project.name || id) + '</option>';
+  });
+  
+  showConfirmModal(
+    'Move to Project',
+    'Select a project to move ' + (taskCount + resultCount) + ' item(s) to:',
+    'Move',
+    async function() {
+      const targetProjectId = projectSelect.value;
+      if (!targetProjectId) {
+        showToast('warning', 'Please select a project');
+        return;
+      }
+      
+      hideConfirmModal();
+      
+      try {
+        // Move tasks
+        for (const taskId of selectedItems.tasks) {
+          await fetch('/api/reports/' + taskId + '/project', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_id: targetProjectId })
+          });
+        }
+        
+        // Move results
+        for (const resultId of selectedItems.results) {
+          await fetch('/api/result/' + resultId + '/project', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_id: targetProjectId })
+          });
+        }
+        
+        showToast('success', 'Moved ' + (taskCount + resultCount) + ' item(s)');
+        cancelBulkSelect();
+        loadReportsDirectory();
+      } catch (error) {
+        console.error('Bulk move error:', error);
+        showToast('error', 'Failed to move some items');
+      }
+    }
+  );
+  
+  // Append select to modal
+  document.querySelector('.confirm-modal-body p').appendChild(projectSelect);
+}
+
+// ============== PROJECT SETTINGS ==============
+
+function openProjectSettings() {
+  // Toggle to the project info edit mode
+  toggleProjectInfoEdit();
 }
 
 // ============== EVIDENCE IMAGE HANDLING ==============
@@ -17810,12 +19351,24 @@ function cancelProjectInfoEdit() {
   document.getElementById('project-info-edit').style.display = 'none';
 }
 
+function selectProjectIcon(icon) {
+  document.getElementById('edit-project-icon').value = icon;
+  // Update visual selection
+  document.querySelectorAll('#project-icon-picker .icon-picker-item').forEach(item => {
+    item.classList.remove('selected');
+    if ((icon === '' && item.textContent === '-') || item.textContent === icon) {
+      item.classList.add('selected');
+    }
+  });
+}
+
 async function saveProjectInfo() {
   if (!currentDashboardProjectId) return;
   
   const name = document.getElementById('edit-project-name').value.trim();
   const description = document.getElementById('edit-project-desc').value.trim();
   const color = document.getElementById('edit-project-color').value;
+  const icon = document.getElementById('edit-project-icon').value;
   
   if (!name) {
     alert('Project name is required');
@@ -17826,7 +19379,7 @@ async function saveProjectInfo() {
     const response = await fetch('/api/projects/' + currentDashboardProjectId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, color })
+      body: JSON.stringify({ name, description, color, icon })
     });
     
     if (!response.ok) throw new Error('Failed to update project');
