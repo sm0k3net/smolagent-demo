@@ -2165,6 +2165,25 @@ def add_tool_output_to_report(
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
+    # Check for duplicate artifacts (same tool + similar filename/content)
+    for existing in _REPORT_ARTIFACTS:
+        if existing.get("tool_name") == tool_name:
+            # Check if same filename base (ignoring timestamp)
+            existing_base = existing.get("filename", "").rsplit("_", 1)[0] if "_" in existing.get("filename", "") else existing.get("filename", "")
+            new_base = filename.rsplit("_", 1)[0] if "_" in filename else filename
+            if existing_base == new_base:
+                # Check if content is similar (same length or > 80% overlap)
+                existing_len = len(existing.get("data", ""))
+                new_len = len(output_data)
+                if existing_len == new_len:
+                    return f"⚠️ Duplicate artifact skipped: {filename} (same tool and content length)"
+                # Check if it's the same content hash
+                import hashlib
+                existing_hash = hashlib.md5(existing.get("data", "").encode()).hexdigest()[:16]
+                new_hash = hashlib.md5(output_data.encode()).hexdigest()[:16]
+                if existing_hash == new_hash:
+                    return f"⚠️ Duplicate artifact skipped: {filename} (same content hash)"
+    
     # Only add to _REPORT_ARTIFACTS to avoid duplication
     _REPORT_ARTIFACTS.append(artifact)
     

