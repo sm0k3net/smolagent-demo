@@ -672,10 +672,10 @@ add_tool_output_to_report("nikto", nikto_result, "txt", "nikto_full_scan.txt")
 □ 4.3 For EACH form with parameters:
     □ sqlmap_scan(url_with_params) - SQL injection testing
     □ Test for XSS manually with xsser or payload injection
-□ 4.4 ZAP scanning (if forms/params found):
-    □ zap_spider_scan(target) - Crawl site
-    □ zap_active_scan(target) - Active testing
-    □ zap_get_alerts() - Get findings → REPORT each alert
+□ 4.4 ZAP scanning (MANDATORY for web apps):
+    □ zap_baseline_scan(target) - Complete spider + active scan
+    □ For JS-heavy apps: zap_baseline_scan(target, ajax_spider=True)
+    □ REPORT each vulnerability found by ZAP
 ```
 
 ### Phase 5: Exploitation & Validation (REQUIRED for ALL findings)
@@ -823,7 +823,9 @@ Q4: For each Critical/High finding:
    - Use `sqlmap_scan()` on each URL with parameters
    
 4. **Missing ZAP scanning** - ZAP finds vulnerabilities other scanners miss:
-   - Spider + Active scan catches logic flaws, session issues
+   - MANDATORY: Run `zap_baseline_scan(target)` for every web pentest
+   - For JavaScript apps: `zap_baseline_scan(target, ajax_spider=True)`
+   - ZAP catches logic flaws, session issues, CSRF, and more
    
 5. **Not exploiting confirmed vulnerabilities** - A finding without exploitation proof is weak:
    - SQLi → Use `sqlmap_dump()` to extract ALL databases, tables, and sensitive data
@@ -1041,13 +1043,16 @@ For web applications, follow OWASP WSTG:
 - `sslyze_scan(target)` or `testssl_scan(target)` - TLS/SSL analysis
 
 ### 1.3 Comprehensive Web Scanning with OWASP ZAP
-- `zap_start_daemon()` - Start ZAP in Docker headless mode
-- `zap_spider_scan(target)` - Crawl site for all pages and forms
-- `zap_ajax_spider_scan(target)` - For JavaScript-heavy SPAs (React, Angular, Vue)
-- `zap_active_scan(target)` - Active vulnerability scanning
-- `zap_get_alerts()` - Retrieve all discovered vulnerabilities
-- `zap_get_urls_with_params()` - Get URLs with parameters for manual injection testing
-- OR use `zap_full_scan(target)` for automated full workflow
+- `zap_baseline_scan(target)` - Quick vulnerability assessment scan
+- `zap_baseline_scan(target, ajax_spider=True)` - For JavaScript-heavy SPAs (React, Angular, Vue)
+- ZAP baseline scan includes: spider, active scan, and alerts all in one
+
+**IMPORTANT**: ZAP scan is MANDATORY for web application pentests. Always run:
+```python
+zap_baseline_scan(target)  # Basic scan
+# OR for JavaScript-heavy apps:
+zap_baseline_scan(target, ajax_spider=True)
+```
 
 ### 1.4 Targeted Vulnerability Assessment
 - `nuclei_scan(target, automatic=True)` - Comprehensive vulnerability scan

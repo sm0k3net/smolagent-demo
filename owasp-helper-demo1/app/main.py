@@ -8199,10 +8199,19 @@ h1 {
   accent-color: var(--primary);
   cursor: pointer;
   z-index: 5;
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  display: none;
 }
 .bulk-mode .item-select-checkbox {
+  display: block;
+}
+/* Show checkbox on hover even when not in bulk mode */
+.report-project-group:hover .item-select-checkbox,
+.report-task-item:hover .item-select-checkbox {
+  display: block;
+  opacity: 0.5;
+}
+.report-project-group:hover .item-select-checkbox:hover,
+.report-task-item:hover .item-select-checkbox:hover {
   opacity: 1;
 }
 .bulk-mode .report-task-item,
@@ -8397,6 +8406,16 @@ h1 {
   width: 6px;
   height: 32px;
   border-radius: 3px;
+}
+.project-dashboard-title .project-icon-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+}
+.project-dashboard-title .project-icon-display svg {
+  width: 24px;
+  height: 24px;
 }
 .project-dashboard-actions {
   display: flex;
@@ -9027,35 +9046,45 @@ h1 {
 /* Icon Picker Styles */
 .icon-picker-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 0.5rem;
   max-height: 200px;
   overflow-y: auto;
-  padding: 0.5rem;
-  background: rgba(0,0,0,0.2);
-  border-radius: 8px;
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.3);
+  border-radius: 10px;
   margin-top: 0.5rem;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 .icon-picker-item {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.2rem;
-  background: rgba(255,255,255,0.05);
-  border: 2px solid transparent;
-  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%);
+  border: 2px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
+  color: var(--gray-400);
 }
 .icon-picker-item:hover {
-  background: rgba(255,255,255,0.1);
-  transform: scale(1.1);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(99, 102, 241, 0.1) 100%);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 .icon-picker-item.selected {
   border-color: var(--success);
-  background: rgba(34, 197, 94, 0.15);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.1) 100%);
+  color: var(--success);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.2);
+}
+.icon-picker-item svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* Task Tree Item Actions */
@@ -14987,6 +15016,7 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
     <div class="project-dashboard-container">
       <div class="project-dashboard-header">
         <div class="project-dashboard-title">
+          <span class="project-icon-display" id="dashboard-project-icon"></span>
           <span class="project-color" id="dashboard-project-color"></span>
           <span id="dashboard-project-name">Project Dashboard</span>
         </div>
@@ -15147,30 +15177,180 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
                   <label style="font-size: 0.75rem;">Project Icon</label>
                   <input type="hidden" id="edit-project-icon" value="">
                   <div class="icon-picker-grid" id="project-icon-picker">
-                    <div class="icon-picker-item" onclick="selectProjectIcon('')" title="None">-</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🎯')">🎯</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🔒')">🔒</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🛡️')">🛡️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🔐')">🔐</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🌐')">🌐</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🔌')">🔌</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('📱')">📱</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('💻')">💻</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🖥️')">🖥️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('☁️')">☁️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🔍')">🔍</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🕵️')">🕵️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('⚠️')">⚠️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🚨')">🚨</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('💰')">💰</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🏦')">🏦</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🏥')">🏥</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🏭')">🏭</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🏢')">🏢</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🎮')">🎮</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('📧')">📧</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('🗄️')">🗄️</div>
-                    <div class="icon-picker-item" onclick="selectProjectIcon('📊')">📊</div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('')" title="None">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <circle cx="12" cy="12" r="10" stroke-dasharray="4,2"></circle>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('target')" title="Target">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('shield')" title="Shield">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('lock')" title="Lock">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('key')" title="Key">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('globe')" title="Web">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('api')" title="API">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('mobile')" title="Mobile">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+                        <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('server')" title="Server">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                        <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                        <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('cloud')" title="Cloud">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('database')" title="Database">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('network')" title="Network">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <rect x="16" y="16" width="6" height="6" rx="1"></rect>
+                        <rect x="2" y="16" width="6" height="6" rx="1"></rect>
+                        <rect x="9" y="2" width="6" height="6" rx="1"></rect>
+                        <path d="M5 16v-4h14v4"></path>
+                        <line x1="12" y1="12" x2="12" y2="8"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('bug')" title="Bug">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="m8 2 1.88 1.88"></path>
+                        <path d="M14.12 3.88 16 2"></path>
+                        <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path>
+                        <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path>
+                        <path d="M12 20v-9"></path>
+                        <path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path>
+                        <path d="M6 13H2"></path>
+                        <path d="M3 21c0-2.1 1.7-3.9 3.8-4"></path>
+                        <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path>
+                        <path d="M22 13h-4"></path>
+                        <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('search')" title="Recon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('alert')" title="Alert">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('scan')" title="Scanner">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
+                        <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
+                        <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
+                        <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
+                        <line x1="8" y1="12" x2="16" y2="12"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('terminal')" title="Terminal">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <polyline points="4 17 10 11 4 5"></polyline>
+                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('file')" title="Document">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('chart')" title="Analytics">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('briefcase')" title="Business">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('hospital')" title="Healthcare">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M3 21h18"></path>
+                        <path d="M5 21V7l8-4v18"></path>
+                        <path d="M19 21V11l-6-4"></path>
+                        <path d="M9 9v.01"></path>
+                        <path d="M9 12v.01"></path>
+                        <path d="M9 15v.01"></path>
+                        <path d="M9 18v.01"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('bank')" title="Financial">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <line x1="3" y1="22" x2="21" y2="22"></line>
+                        <line x1="6" y1="18" x2="6" y2="11"></line>
+                        <line x1="10" y1="18" x2="10" y2="11"></line>
+                        <line x1="14" y1="18" x2="14" y2="11"></line>
+                        <line x1="18" y1="18" x2="18" y2="11"></line>
+                        <polygon points="12 2 20 7 4 7"></polygon>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('factory')" title="Industrial">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path>
+                        <path d="M17 18h1"></path>
+                        <path d="M12 18h1"></path>
+                        <path d="M7 18h1"></path>
+                      </svg>
+                    </div>
+                    <div class="icon-picker-item" onclick="selectProjectIcon('zap')" title="Fast">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                      </svg>
+                    </div>
                   </div>
                 </div>
                 <div class="vuln-form-group" style="margin-bottom: 0.75rem;">
@@ -15921,6 +16101,11 @@ function showNotification(message, type = 'info') {
       setTimeout(() => toast.remove(), 300);
     }
   }, 4000);
+}
+
+// Alias for showNotification (commonly used as showToast)
+function showToast(type, message) {
+  showNotification(message, type);
 }
 
 // Styled prompt modal (replaces browser prompt)
@@ -18068,6 +18253,16 @@ function renderProjectDashboard(data) {
   document.getElementById('dashboard-project-name').textContent = project.name;
   document.getElementById('dashboard-project-color').style.background = project.color || '#22c55e';
   
+  // Render project icon
+  const iconEl = document.getElementById('dashboard-project-icon');
+  if (project.icon) {
+    iconEl.innerHTML = getProjectIconSvg(project.icon, 24);
+    iconEl.style.display = 'flex';
+  } else {
+    iconEl.innerHTML = '';
+    iconEl.style.display = 'none';
+  }
+  
   // Project Info
   document.getElementById('dashboard-project-desc').textContent = project.description || 'No description';
   document.getElementById('dashboard-project-created').textContent = project.created_at ? new Date(project.created_at).toLocaleDateString() : '-';
@@ -19338,6 +19533,8 @@ function toggleProjectInfoEdit() {
       document.getElementById('edit-project-name').value = project.name || '';
       document.getElementById('edit-project-desc').value = project.description || '';
       document.getElementById('edit-project-color').value = project.color || '#22c55e';
+      // Pre-select current icon
+      selectProjectIcon(project.icon || '');
     }
     display.style.display = 'none';
     edit.style.display = 'block';
@@ -19356,10 +19553,47 @@ function selectProjectIcon(icon) {
   // Update visual selection
   document.querySelectorAll('#project-icon-picker .icon-picker-item').forEach(item => {
     item.classList.remove('selected');
-    if ((icon === '' && item.textContent === '-') || item.textContent === icon) {
+    // Check onclick attribute for matching icon
+    const onclick = item.getAttribute('onclick');
+    if (onclick && onclick.includes("'" + icon + "'")) {
       item.classList.add('selected');
     }
   });
+}
+
+// Get SVG icon HTML for a project icon name
+function getProjectIconSvg(iconName, size = 16) {
+  const icons = {
+    'target': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>',
+    'shield': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>',
+    'lock': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
+    'key': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>',
+    'globe': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>',
+    'api': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
+    'mobile': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>',
+    'server': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>',
+    'cloud': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>',
+    'database': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>',
+    'network': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="16" y="16" width="6" height="6" rx="1"></rect><rect x="2" y="16" width="6" height="6" rx="1"></rect><rect x="9" y="2" width="6" height="6" rx="1"></rect><path d="M5 16v-4h14v4"></path><line x1="12" y1="12" x2="12" y2="8"></line></svg>',
+    'bug': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 2 1.88 1.88"></path><path d="M14.12 3.88 16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path><path d="M12 20v-9"></path></svg>',
+    'search': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+    'alert': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+    'scan': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="8" y1="12" x2="16" y2="12"></line></svg>',
+    'terminal': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>',
+    'file': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+    'chart': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>',
+    'briefcase': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>',
+    'hospital': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"></path><path d="M5 21V7l8-4v18"></path><path d="M19 21V11l-6-4"></path></svg>',
+    'bank': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="22" x2="21" y2="22"></line><line x1="6" y1="18" x2="6" y2="11"></line><line x1="10" y1="18" x2="10" y2="11"></line><line x1="14" y1="18" x2="14" y2="11"></line><line x1="18" y1="18" x2="18" y2="11"></line><polygon points="12 2 20 7 4 7"></polygon></svg>',
+    'factory': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path></svg>',
+    'zap': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>'
+  };
+  
+  if (!iconName || !icons[iconName]) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="' + size + '" height="' + size + '"><circle cx="12" cy="12" r="10"></circle></svg>';
+  }
+  
+  return icons[iconName].replace('<svg', '<svg width="' + size + '" height="' + size + '"');
 }
 
 async function saveProjectInfo() {
@@ -23481,6 +23715,7 @@ async function sendMessage() {
     session_id: sessionId,
     chat_id: currentChatId,
     task_id: taskId,
+    project_id: currentDashboardProjectId,  // Associate with current project if open
     report_mode: reportCheckbox.checked,
     background_task: isBackgroundTask,
     agent_mode: currentAgentMode,  // 'chat' or 'agent'
@@ -24565,6 +24800,7 @@ async def ws_endpoint(ws: WebSocket):
             session_id = msg_data.get("session_id", "default")
             chat_id = msg_data.get("chat_id", "default")
             task_id = msg_data.get("task_id")  # Activity task tracking ID
+            project_id = msg_data.get("project_id")  # Current project from UI
             report_mode_enabled = msg_data.get("report_mode", False)
             attached_files = msg_data.get("files", [])
             background_task = msg_data.get("background_task", False)
@@ -25399,8 +25635,11 @@ The report should be comprehensive and professional, suitable for executive stak
                 }))
                 
                 # Run task in background thread with captured task_id and separate agent
-                def run_background_task(tid, prompt):
+                def run_background_task(tid, prompt, proj_id=None):
                     try:
+                        # Set current task/project ID for report tools
+                        set_current_task_id(tid, proj_id)
+                        
                         task_store[tid].status = TaskStatus.running
                         task_store[tid].started_at = datetime.now()
                         
@@ -25469,7 +25708,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         task_store[tid].completed_at = datetime.now()
                 
                 # Pass task_id and prompt as arguments to prevent closure issues
-                threading.Thread(target=run_background_task, args=(task_id, full_message), daemon=True).start()
+                threading.Thread(target=run_background_task, args=(task_id, full_message, project_id), daemon=True).start()
                 continue  # Don't block, move to next message
             
             # Classify the task for real-time tasks too
@@ -25499,7 +25738,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 request_task_id = captured_task_id
                 
                 # Set current task ID for report tools to use
-                set_current_task_id(request_task_id)
+                set_current_task_id(request_task_id, project_id)
                 
                 # Initialize task persistence for crash recovery
                 task_persistence = get_task_persistence()
