@@ -19794,7 +19794,7 @@ function showAgentConfigMessage(message, isError = false) {
 async function saveAgentMaxSteps() {
   const value = parseInt(document.getElementById('agent-max-steps-value').value) || 200;
   const clampedValue = Math.max(50, Math.min(500, value));
-  sudo su
+  
   try {
     const response = await fetch('/api/settings/agent-max-steps', {
       method: 'POST',
