@@ -1604,6 +1604,7 @@ def add_finding_to_report(
 
 def _sync_finding_to_project_vulndb(finding: dict):
     """Sync a finding to the associated project's VulnDB."""
+    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
     import json
     from pathlib import Path
     from datetime import datetime
@@ -1619,27 +1620,44 @@ def _sync_finding_to_project_vulndb(finding: dict):
     except:
         return
     
-    # Find current task/project from report data
-    current_target = _CURRENT_REPORT_DATA.get("target", "")
-    current_title = _CURRENT_REPORT_DATA.get("title", "")
+    # First try to use _CURRENT_PROJECT_ID (explicitly set)
+    project_id = _CURRENT_PROJECT_ID
     
-    # Try to find a project that matches (by looking at tasks)
-    project_id = None
-    for pid, project in index.get("projects", {}).items():
-        # Check if project name or any task prompt contains target
-        if current_target and current_target in project.get("name", ""):
-            project_id = pid
-            break
-        for task_id in project.get("tasks", []):
-            task = index.get("tasks", {}).get(task_id, {})
-            if current_target and current_target in task.get("prompt", ""):
+    # If not set, try to find project from current task
+    if not project_id and _CURRENT_TASK_ID:
+        task = index.get("tasks", {}).get(_CURRENT_TASK_ID, {})
+        project_id = task.get("project_id")
+        
+        # Also check if any project has this task
+        if not project_id:
+            for pid, project in index.get("projects", {}).items():
+                if _CURRENT_TASK_ID in project.get("tasks", []):
+                    project_id = pid
+                    break
+    
+    # Fallback: Try to match by target name in project/task
+    if not project_id:
+        current_target = _CURRENT_REPORT_DATA.get("target", "")
+        current_title = _CURRENT_REPORT_DATA.get("title", "")
+        
+        for pid, project in index.get("projects", {}).items():
+            # Check if project name or any task prompt contains target
+            if current_target and current_target in project.get("name", ""):
                 project_id = pid
                 break
-        if project_id:
-            break
+            for task_id in project.get("tasks", []):
+                task = index.get("tasks", {}).get(task_id, {})
+                if current_target and current_target in task.get("prompt", ""):
+                    project_id = pid
+                    break
+            if project_id:
+                break
     
     if not project_id:
         return  # No project found
+    
+    if project_id not in index.get("projects", {}):
+        return  # Project doesn't exist
     
     project = index["projects"][project_id]
     if "vulndb" not in project:

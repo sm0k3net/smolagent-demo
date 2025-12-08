@@ -19794,7 +19794,7 @@ function showAgentConfigMessage(message, isError = false) {
 async function saveAgentMaxSteps() {
   const value = parseInt(document.getElementById('agent-max-steps-value').value) || 200;
   const clampedValue = Math.max(50, Math.min(500, value));
-  
+  sudo su
   try {
     const response = await fetch('/api/settings/agent-max-steps', {
       method: 'POST',
@@ -21037,19 +21037,27 @@ function updateTaskStatus(taskId, status) {
       cancelAnimationFrame(task.durationInterval);
     }
     
-    // Set progress to 100% on completion
+    // Set progress to 100% on completion (forceComplete = true to bypass 95% cap)
     if (status === 'completed') {
-      updateTaskProgress(taskId, 100);
+      updateTaskProgress(taskId, 100, true);
+      
+      // Hide ETA on completion
+      const etaContainer = document.getElementById(`stat-eta-container-${taskId}`);
+      if (etaContainer) {
+        etaContainer.style.display = 'none';
+      }
     }
   }
 }
 
-function updateTaskProgress(taskId, progress) {
+function updateTaskProgress(taskId, progress, forceComplete = false) {
   const task = activityTasks[taskId];
   if (!task) return;
   
   // Smooth progress updates (never go backwards, smooth transitions)
-  const newProgress = Math.min(95, Math.max(task.progress, progress));
+  // Allow 100% only when forceComplete is true (task actually completed)
+  const maxProgress = forceComplete ? 100 : 95;
+  const newProgress = Math.min(maxProgress, Math.max(task.progress, progress));
   task.targetProgress = newProgress;
   
   // Animate to target progress smoothly
@@ -21058,19 +21066,21 @@ function updateTaskProgress(taskId, progress) {
     animateProgress(taskId);
   }
   
-  // Track progress history for ETA calculation
-  task.progressHistory.push({
-    progress: newProgress,
-    time: Date.now()
-  });
+  // Track progress history for ETA calculation (only if not complete)
+  if (!forceComplete) {
+    task.progressHistory.push({
+      progress: newProgress,
+      time: Date.now()
+    });
   
-  // Keep only last 10 data points
-  if (task.progressHistory.length > 10) {
-    task.progressHistory.shift();
+    // Keep only last 10 data points
+    if (task.progressHistory.length > 10) {
+      task.progressHistory.shift();
+    }
+  
+    // Calculate and update ETA
+    updateTaskETA(taskId);
   }
-  
-  // Calculate and update ETA
-  updateTaskETA(taskId);
 }
 
 function animateProgress(taskId) {
