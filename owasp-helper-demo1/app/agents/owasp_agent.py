@@ -645,7 +645,8 @@ def build_owasp_agent() -> CodeAgent:
     
     # Provide instructions from prompt file
     # max_print_outputs_length limits tool output size to prevent context overflow
-    # DeepSeek has 128K context limit, so we limit outputs to ~20K chars per tool
+    # Most LLMs have 128K-200K context limits, but we need to be conservative
+    # Each tool output is limited to ~10K chars to allow for more tool calls
     # max_steps limits iterations to prevent runaway context growth
     # Use configurable max_steps from settings (default 200 for comprehensive pentesting)
     settings = get_settings()
@@ -653,7 +654,7 @@ def build_owasp_agent() -> CodeAgent:
         tools=tools, 
         model=model, 
         instructions=load_prompt_text(),
-        max_print_outputs_length=20000,  # Limit each tool output to prevent context explosion
+        max_print_outputs_length=10000,  # Reduced from 20K to prevent context explosion
         max_steps=settings.agent_max_steps,  # Configurable via Settings->General
     )
     return agent

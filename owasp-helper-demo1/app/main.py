@@ -26042,11 +26042,27 @@ The report should be comprehensive and professional, suitable for executive stak
                         })
                         
                     except Exception as e:
+                        error_msg = str(e)
+                        
+                        # Detect context overflow / JSON parsing errors
+                        if "Expecting value" in error_msg or "JSONDecodeError" in error_msg:
+                            error_msg = (
+                                "Context overflow detected - the conversation history became too large for the model to process. "
+                                f"Original error: {error_msg}\n\n"
+                                "This typically happens during long-running pentests with many tool outputs. "
+                                "WORKAROUND: Start a new conversation and continue with a fresh context. "
+                                "You can reference your previous findings by looking at the Reports section."
+                            )
+                        elif "rate limit" in error_msg.lower() or "429" in error_msg:
+                            error_msg = f"API rate limit reached. Please wait a moment and try again. Original error: {error_msg}"
+                        elif "timeout" in error_msg.lower():
+                            error_msg = f"Request timed out. The model took too long to respond. Original error: {error_msg}"
+                        
                         # Mark task as failed in persistence
-                        task_persistence.mark_failed(request_task_id, str(e))
+                        task_persistence.mark_failed(request_task_id, error_msg)
                         event_queue.put({
                             "type": "error",
-                            "error": str(e)
+                            "error": error_msg
                         })
                 
                 # Start agent in thread
