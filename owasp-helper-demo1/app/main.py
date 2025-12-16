@@ -3808,6 +3808,187 @@ async def delete_project_vulnerability(project_id: str, vuln_id: str):
     return JSONResponse({"success": True})
 
 
+# ============== SCANNERS DATABASE API ==============
+
+@app.get("/api/projects/{project_id}/scanners-db")
+async def get_project_scanners_db(project_id: str):
+    """Get scanners database summary for a project."""
+    from pathlib import Path
+    import json
+    
+    scanners_db_file = Path("reports/scanners_db.json")
+    
+    if not scanners_db_file.exists():
+        return JSONResponse({
+            "total_scans": 0,
+            "pending_validations": 0,
+            "scan_groups": {}
+        })
+    
+    try:
+        db = json.loads(scanners_db_file.read_text(encoding='utf-8'))
+        project_data = db.get("projects", {}).get(project_id, {})
+        
+        if not project_data:
+            return JSONResponse({
+                "total_scans": 0,
+                "pending_validations": 0,
+                "scan_groups": {}
+            })
+        
+        # Build summary by tool
+        scan_groups = {}
+        total_scans = 0
+        pending_validations = 0
+        
+        for group_name, group_data in project_data.get("scan_groups", {}).items():
+            scans = group_data.get("scans", [])
+            scan_groups[group_name] = []
+            
+            for scan in scans:
+                total_scans += 1
+                scan_summary = {
+                    "scan_id": scan.get("scan_id", ""),
+                    "target": scan.get("target", ""),
+                    "findings_count": scan.get("findings_count", 0),
+                    "status": scan.get("status", "pending"),
+                    "timestamp": scan.get("timestamp", "")
+                }
+                scan_groups[group_name].append(scan_summary)
+                
+                # Count pending validations
+                if scan.get("status") == "pending":
+                    pending_validations += scan.get("findings_count", 0)
+        
+        return JSONResponse({
+            "total_scans": total_scans,
+            "pending_validations": pending_validations,
+            "scan_groups": scan_groups
+        })
+        
+    except Exception as e:
+        return JSONResponse({
+            "total_scans": 0,
+            "pending_validations": 0,
+            "scan_groups": {},
+            "error": str(e)
+        })
+
+
+@app.get("/api/projects/{project_id}/scanners-db/{scan_id}")
+async def get_scan_result_detail(project_id: str, scan_id: str):
+    """Get detailed scan result including raw output."""
+    from pathlib import Path
+    import json
+    
+    scanners_db_file = Path("reports/scanners_db.json")
+    
+    if not scanners_db_file.exists():
+        return JSONResponse({"error": "Scanners database not found"}, status_code=404)
+    
+    try:
+        db = json.loads(scanners_db_file.read_text(encoding='utf-8'))
+        project_data = db.get("projects", {}).get(project_id, {})
+        
+        if not project_data:
+            return JSONResponse({"error": "Project not found in scanners db"}, status_code=404)
+        
+        # Search for scan in all groups
+        for group_name, group_data in project_data.get("scan_groups", {}).items():
+            for scan in group_data.get("scans", []):
+                if scan.get("scan_id") == scan_id:
+                    return JSONResponse({
+                        "scan_id": scan_id,
+                        "tool": group_name,
+                        "target": scan.get("target", ""),
+                        "findings_count": scan.get("findings_count", 0),
+                        "status": scan.get("status", "pending"),
+                        "timestamp": scan.get("timestamp", ""),
+                        "raw_output": scan.get("raw_output", ""),
+                        "metadata": scan.get("metadata", {})
+                    })
+        
+        return JSONResponse({"error": "Scan not found"}, status_code=404)
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============== AGENT STATUS API ==============
+
+@app.get("/api/projects/{project_id}/agent-status")
+async def get_project_agent_status(project_id: str):
+    """Get current agent/sub-agent status for a project."""
+    from pathlib import Path
+    import json
+    
+    tasks_db_file = Path("reports/agent_tasks.json")
+    
+    if not tasks_db_file.exists():
+        return JSONResponse({
+            "status": "idle",
+            "tasks": []
+        })
+    
+    try:
+        db = json.loads(tasks_db_file.read_text(encoding='utf-8'))
+        project_data = db.get("projects", {}).get(project_id, {})
+        
+        if not project_data:
+            return JSONResponse({
+                "status": "idle",
+                "tasks": []
+            })
+        
+        # Get active tasks (in_progress)
+        active_tasks = []
+        for task in project_data.get("tasks", []):
+            if task.get("status") == "in_progress":
+                active_tasks.append({
+                    "task_id": task.get("task_id", ""),
+                    "agent_type": task.get("agent_type", "scanner"),
+                    "title": task.get("title", "Working..."),
+                    "description": task.get("description", ""),
+                    "status": task.get("status", ""),
+                    "target": task.get("target", ""),
+                    "progress": task.get("metadata", {}).get("progress", 0),
+                    "current_tool": task.get("metadata", {}).get("current_tool", ""),
+                    "started_at": task.get("started_at", "")
+                })
+        
+        # Also check running tasks from task_store
+        try:
+            for task_id, task in task_store.items():
+                if task.status == TaskStatus.running:
+                    # Check if this task is for our project
+                    if hasattr(task, 'project_id') and task.project_id == project_id:
+                        active_tasks.append({
+                            "task_id": task_id,
+                            "agent_type": "scanner",  # Default
+                            "title": task.prompt[:50] if task.prompt else "Running...",
+                            "description": "",
+                            "status": "running",
+                            "target": "",
+                            "progress": min(95, (task.step_count or 0) * 5),  # Estimate progress
+                            "current_tool": "",
+                            "started_at": task.started_at.isoformat() if task.started_at else ""
+                        })
+        except Exception:
+            pass
+        
+        return JSONResponse({
+            "status": "running" if active_tasks else "idle",
+            "tasks": active_tasks
+        })
+        
+    except Exception as e:
+        return JSONResponse({
+            "status": "idle",
+            "tasks": [],
+            "error": str(e)
+        })
+
+
 @app.post("/api/projects/{project_id}/regenerate-report")
 async def regenerate_project_report(project_id: str, data: dict = None):
     """Regenerate the final report from the project's VulnDB.
@@ -8668,6 +8849,228 @@ h1 {
   color: var(--gray-500);
   padding: 2rem;
   font-size: 0.9rem;
+}
+
+/* Scanners Database Styles */
+.scanners-db-summary {
+  padding: 0.75rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+.scanner-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+}
+.scanner-stat-label {
+  color: var(--gray-400);
+}
+.scanner-stat-value {
+  font-weight: 600;
+  color: var(--gray-100);
+}
+.scanners-db-groups {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.scanner-group {
+  background: rgba(0,0,0,0.15);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+.scanner-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.scanner-group-header:hover {
+  background: rgba(255,255,255,0.05);
+}
+.scanner-group-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.scanner-group-count {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  background: rgba(0,0,0,0.3);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+}
+.scanner-group-items {
+  display: none;
+  padding: 0 0.5rem 0.5rem;
+}
+.scanner-group.expanded .scanner-group-items {
+  display: block;
+}
+.scanner-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  margin-bottom: 0.25rem;
+  background: rgba(0,0,0,0.2);
+}
+.scanner-item-target {
+  color: var(--gray-300);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+.scanner-item-findings {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--primary);
+  color: white;
+}
+.scanner-item-findings.zero {
+  background: var(--gray-600);
+}
+
+/* Agent Progress Styles */
+.agent-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gray-500);
+}
+.status-dot.idle {
+  background: var(--gray-500);
+}
+.status-dot.running {
+  background: var(--success);
+  animation: pulse 1.5s infinite;
+}
+.status-dot.scanning {
+  background: var(--primary);
+  animation: pulse 1s infinite;
+}
+.status-dot.validating {
+  background: var(--warning);
+  animation: pulse 1.2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.9); }
+}
+.status-text {
+  color: var(--gray-400);
+}
+.agent-progress-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: var(--gray-500);
+  font-size: 0.85rem;
+}
+.agent-tasks-list {
+  max-height: 250px;
+  overflow-y: auto;
+}
+.agent-task-item {
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-left: 3px solid var(--primary);
+}
+.agent-task-item.scanner { border-left-color: var(--primary); }
+.agent-task-item.validator { border-left-color: var(--warning); }
+.agent-task-item.quality_control { border-left-color: var(--info); }
+.agent-task-item.reporter { border-left-color: var(--success); }
+.agent-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.agent-task-type {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--gray-300);
+}
+.agent-task-type svg {
+  width: 12px;
+  height: 12px;
+}
+.agent-task-status {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  background: var(--primary);
+  color: white;
+}
+.agent-task-status.running {
+  background: var(--success);
+}
+.agent-task-status.pending {
+  background: var(--gray-600);
+}
+.agent-task-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--gray-100);
+  margin-bottom: 0.4rem;
+}
+.agent-task-desc {
+  font-size: 0.8rem;
+  color: var(--gray-400);
+  line-height: 1.4;
+  margin-bottom: 0.5rem;
+}
+.agent-task-progress {
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+}
+.agent-task-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.agent-task-tool {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--gray-400);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.agent-task-tool code {
+  background: rgba(0,0,0,0.3);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-family: monospace;
+  color: var(--gray-300);
 }
 
 /* Vulnerability Modal Styles */
@@ -15138,6 +15541,41 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
             </div>
           </div>
           
+          <!-- Scanners Database Card -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                </svg>
+                Scanners Database
+              </span>
+              <button class="btn-sm btn-secondary" onclick="refreshScannersDb()" title="Refresh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+              </button>
+            </div>
+            <div id="scanners-db-content">
+              <div class="scanners-db-summary" id="scanners-db-summary">
+                <div class="scanner-stat-row">
+                  <span class="scanner-stat-label">Total Scans:</span>
+                  <span class="scanner-stat-value" id="scanners-total">0</span>
+                </div>
+                <div class="scanner-stat-row">
+                  <span class="scanner-stat-label">Pending Validation:</span>
+                  <span class="scanner-stat-value" id="scanners-pending">0</span>
+                </div>
+              </div>
+              <div class="scanners-db-groups" id="scanners-db-groups">
+                <div class="vulndb-empty">No scan results yet</div>
+              </div>
+            </div>
+          </div>
+          
           <!-- Tasks Tree Card -->
           <div class="dashboard-card">
             <div class="dashboard-card-header">
@@ -15441,6 +15879,36 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
                 </svg>
                 Export to Notes
               </button>
+            </div>
+          </div>
+          
+          <!-- Agent Progress Card -->
+          <div class="dashboard-card">
+            <div class="dashboard-card-header">
+              <span class="dashboard-card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
+                  <circle cx="8" cy="14" r="1"></circle>
+                  <circle cx="16" cy="14" r="1"></circle>
+                </svg>
+                Agent Progress
+              </span>
+              <span class="agent-status-indicator" id="agent-status-indicator">
+                <span class="status-dot idle"></span>
+                <span class="status-text">Idle</span>
+              </span>
+            </div>
+            <div id="agent-progress-content">
+              <div class="agent-progress-empty" id="agent-progress-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="24" height="24" style="opacity: 0.5;">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span>No active tasks</span>
+              </div>
+              <div class="agent-tasks-list" id="agent-tasks-list" style="display: none;">
+                <!-- Active agent tasks will be rendered here -->
+              </div>
             </div>
           </div>
         </div>
@@ -18264,6 +18732,12 @@ async function openProjectDashboard(projectId) {
     
     currentDashboardData = await response.json();
     renderProjectDashboard(currentDashboardData);
+    
+    // Load Scanners Database
+    refreshScannersDb();
+    
+    // Start agent progress polling
+    startAgentProgressPolling();
   } catch (error) {
     console.error('Error loading dashboard:', error);
     alert('Failed to load project dashboard');
@@ -18449,6 +18923,213 @@ function closeProjectDashboard() {
   document.getElementById('project-dashboard').style.display = 'none';
   currentDashboardProjectId = null;
   currentDashboardData = null;
+  // Stop agent progress polling
+  stopAgentProgressPolling();
+}
+
+// ============== SCANNERS DATABASE FUNCTIONS ==============
+
+async function refreshScannersDb() {
+  if (!currentDashboardProjectId) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/scanners-db');
+    if (!response.ok) {
+      // No data yet or endpoint not available
+      renderScannersDbEmpty();
+      return;
+    }
+    
+    const data = await response.json();
+    renderScannersDb(data);
+  } catch (error) {
+    console.error('Error loading scanners db:', error);
+    renderScannersDbEmpty();
+  }
+}
+
+function renderScannersDbEmpty() {
+  document.getElementById('scanners-total').textContent = '0';
+  document.getElementById('scanners-pending').textContent = '0';
+  document.getElementById('scanners-db-groups').innerHTML = '<div class="vulndb-empty">No scan results yet</div>';
+}
+
+function renderScannersDb(data) {
+  // Update summary
+  document.getElementById('scanners-total').textContent = data.total_scans || 0;
+  document.getElementById('scanners-pending').textContent = data.pending_validations || 0;
+  
+  const container = document.getElementById('scanners-db-groups');
+  
+  if (!data.scan_groups || Object.keys(data.scan_groups).length === 0) {
+    container.innerHTML = '<div class="vulndb-empty">No scan results yet</div>';
+    return;
+  }
+  
+  // Tool icons
+  const toolIcons = {
+    'nmap': '🔍', 'nuclei': '☢️', 'nikto': '🕷️', 'sqlmap': '💉',
+    'gobuster': '📁', 'dirb': '📂', 'ffuf': '⚡', 'wpscan': '📝',
+    'httpx': '🌐', 'subfinder': '🔎', 'amass': '🗺️', 'zap': '⚡',
+    'default': '🔧'
+  };
+  
+  let html = '';
+  for (const [toolName, scans] of Object.entries(data.scan_groups)) {
+    const icon = toolIcons[toolName.toLowerCase()] || toolIcons['default'];
+    const scanCount = scans.length;
+    const totalFindings = scans.reduce((sum, s) => sum + (s.findings_count || 0), 0);
+    
+    html += `
+      <div class="scanner-group" id="scanner-group-${toolName}">
+        <div class="scanner-group-header" onclick="toggleScannerGroup('${toolName}')">
+          <span class="scanner-group-name">${icon} ${toolName}</span>
+          <span class="scanner-group-count">${scanCount} scans, ${totalFindings} findings</span>
+        </div>
+        <div class="scanner-group-items">
+    `;
+    
+    scans.forEach(scan => {
+      const target = scan.target || 'Unknown';
+      const shortTarget = target.length > 30 ? target.substring(0, 30) + '...' : target;
+      const findingsClass = scan.findings_count > 0 ? '' : 'zero';
+      
+      html += `
+        <div class="scanner-item" onclick="viewScanResult('${scan.scan_id}')" title="${escapeHtml(target)}">
+          <span class="scanner-item-target">${escapeHtml(shortTarget)}</span>
+          <span class="scanner-item-findings ${findingsClass}">${scan.findings_count || 0} findings</span>
+        </div>
+      `;
+    });
+    
+    html += '</div></div>';
+  }
+  
+  container.innerHTML = html;
+}
+
+function toggleScannerGroup(toolName) {
+  const group = document.getElementById('scanner-group-' + toolName);
+  if (group) {
+    group.classList.toggle('expanded');
+  }
+}
+
+async function viewScanResult(scanId) {
+  // Show scan details in a modal or panel
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/scanners-db/' + scanId);
+    if (!response.ok) throw new Error('Failed to load scan result');
+    
+    const data = await response.json();
+    
+    // Show in a simple alert for now - could be enhanced to a modal
+    const preview = data.raw_output ? data.raw_output.substring(0, 2000) : 'No output';
+    alert('Scan: ' + scanId + '\\n\\nTarget: ' + data.target + '\\n\\nOutput Preview:\\n' + preview + (data.raw_output && data.raw_output.length > 2000 ? '\\n\\n[Truncated...]' : ''));
+  } catch (error) {
+    console.error('Error loading scan result:', error);
+    showToast('error', 'Failed to load scan result');
+  }
+}
+
+// ============== AGENT PROGRESS FUNCTIONS ==============
+
+let agentProgressInterval = null;
+
+function startAgentProgressPolling() {
+  if (agentProgressInterval) return;
+  
+  // Poll every 2 seconds
+  agentProgressInterval = setInterval(updateAgentProgress, 2000);
+  updateAgentProgress(); // Initial update
+}
+
+function stopAgentProgressPolling() {
+  if (agentProgressInterval) {
+    clearInterval(agentProgressInterval);
+    agentProgressInterval = null;
+  }
+}
+
+async function updateAgentProgress() {
+  if (!currentDashboardProjectId) return;
+  
+  try {
+    const response = await fetch('/api/projects/' + currentDashboardProjectId + '/agent-status');
+    if (!response.ok) {
+      renderAgentProgressIdle();
+      return;
+    }
+    
+    const data = await response.json();
+    renderAgentProgress(data);
+  } catch (error) {
+    renderAgentProgressIdle();
+  }
+}
+
+function renderAgentProgressIdle() {
+  const indicator = document.getElementById('agent-status-indicator');
+  indicator.innerHTML = '<span class="status-dot idle"></span><span class="status-text">Idle</span>';
+  
+  document.getElementById('agent-progress-empty').style.display = 'flex';
+  document.getElementById('agent-tasks-list').style.display = 'none';
+}
+
+function renderAgentProgress(data) {
+  const indicator = document.getElementById('agent-status-indicator');
+  const emptyEl = document.getElementById('agent-progress-empty');
+  const listEl = document.getElementById('agent-tasks-list');
+  
+  // Check if any tasks are active
+  const activeTasks = data.tasks ? data.tasks.filter(t => t.status === 'in_progress' || t.status === 'running') : [];
+  
+  if (activeTasks.length === 0) {
+    renderAgentProgressIdle();
+    return;
+  }
+  
+  // Update indicator
+  const mainTask = activeTasks[0];
+  const statusClass = mainTask.agent_type === 'scanner' ? 'scanning' : 
+                      mainTask.agent_type === 'validator' ? 'validating' : 'running';
+  indicator.innerHTML = '<span class="status-dot ' + statusClass + '"></span><span class="status-text">Working</span>';
+  
+  emptyEl.style.display = 'none';
+  listEl.style.display = 'block';
+  
+  // Agent type icons
+  const agentIcons = {
+    'scanner': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+    'validator': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>',
+    'quality_control': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><line x1="16" y1="13" x2="8" y2="13"></line></svg>',
+    'reporter': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>'
+  };
+  
+  let html = '';
+  activeTasks.forEach(task => {
+    const agentType = task.agent_type || 'scanner';
+    const icon = agentIcons[agentType] || agentIcons['scanner'];
+    const progress = task.progress || 0;
+    const currentTool = task.current_tool || '';
+    
+    html += `
+      <div class="agent-task-item ${agentType}">
+        <div class="agent-task-header">
+          <span class="agent-task-type">${icon} ${agentType.replace('_', ' ')}</span>
+          <span class="agent-task-status running">${task.status}</span>
+        </div>
+        <div class="agent-task-title">${escapeHtml(task.title || 'Working...')}</div>
+        ${task.description ? '<div class="agent-task-desc">' + escapeHtml(task.description.substring(0, 100)) + '</div>' : ''}
+        <div class="agent-task-progress">
+          <div class="agent-task-progress-bar" style="width: ${progress}%"></div>
+        </div>
+        ${currentTool ? '<div class="agent-task-tool">Running: <code>' + escapeHtml(currentTool) + '</code></div>' : ''}
+      </div>
+    `;
+  });
+  
+  listEl.innerHTML = html;
 }
 
 // ============== VULNERABILITY MODAL FUNCTIONS ==============
@@ -18622,11 +19303,14 @@ async function deleteTaskConfirmed(taskId) {
 
 async function deleteProjectConfirmed(projectId) {
   try {
-    const response = await fetch(`/api/reports/projects/${projectId}`, { method: 'DELETE' });
+    const response = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
     if (response.ok) {
       closeProjectDashboard();
       loadReportsTree();
       showToast('success', 'Project deleted');
+    } else {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to delete project');
     }
   } catch (error) {
     throw error;
@@ -18650,10 +19334,13 @@ async function deleteReportConfirmed(reportId) {
 
 async function deleteVulnerabilityConfirmed(vulnId) {
   try {
-    const response = await fetch(`/api/reports/projects/${currentDashboardProjectId}/vulndb/${vulnId}`, { method: 'DELETE' });
+    const response = await fetch(`/api/projects/${currentDashboardProjectId}/vulnerabilities/${vulnId}`, { method: 'DELETE' });
     if (response.ok) {
       loadProjectDashboard(currentDashboardProjectId);
       showToast('success', 'Vulnerability deleted');
+    } else {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to delete vulnerability');
     }
   } catch (error) {
     throw error;
