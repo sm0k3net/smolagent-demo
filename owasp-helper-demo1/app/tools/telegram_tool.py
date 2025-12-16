@@ -49,11 +49,11 @@ def _get_or_create_event_loop():
     return loop
 
 
-def _run_async(coro):
+def _run_async(coro, timeout=60):
     """Run an async coroutine in the persistent event loop."""
     loop = _get_or_create_event_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=60)  # 60 second timeout
+    return future.result(timeout=timeout)
 
 
 def _get_telegram_bot():

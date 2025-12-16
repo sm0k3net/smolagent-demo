@@ -5692,9 +5692,11 @@ def run_telegram_monitor():
         try:
             async def get_updates():
                 bot = _telegram_state["bot"]
-                return await bot.get_updates(offset=last_update_id + 1, timeout=30)
+                # Use shorter timeout for more responsive monitoring
+                return await bot.get_updates(offset=last_update_id + 1, timeout=10)
             
-            updates = _run_async(get_updates())
+            # Use longer timeout for _run_async to handle long-polling
+            updates = _run_async(get_updates(), timeout=30)
             
             for update in updates:
                 last_update_id = update.update_id
@@ -5718,51 +5720,74 @@ def run_telegram_monitor():
                 chat_id = msg.chat.id
                 user = msg.from_user.username if msg.from_user else "Unknown"
                 
+                # Set this chat as the default for responses
+                _telegram_state["chat_id"] = chat_id
+                
                 print(f"Telegram command from @{user} in chat {chat_id}: {command}")
                 
                 # Send acknowledgment
-                async def send_ack():
-                    await _telegram_state["bot"].send_message(
-                        chat_id=chat_id,
-                        text=f"🤖 Processing your request: {command[:100]}...",
-                        reply_to_message_id=msg.message_id
-                    )
-                _run_async(send_ack())
+                try:
+                    async def send_ack():
+                        await _telegram_state["bot"].send_message(
+                            chat_id=chat_id,
+                            text=f"🤖 Processing your request: {command[:100]}...",
+                            reply_to_message_id=msg.message_id
+                        )
+                    _run_async(send_ack(), timeout=30)
+                    print(f"Telegram: Sent acknowledgment to chat {chat_id}")
+                except Exception as ack_err:
+                    print(f"Telegram: Failed to send acknowledgment: {ack_err}")
                 
                 # Execute command with agent
                 def execute_command():
                     try:
+                        print(f"Telegram: Starting agent for command: {command[:50]}...")
                         task_agent = build_owasp_agent()
                         result = task_agent.run(command)
+                        print(f"Telegram: Agent completed, result length: {len(str(result))}")
                         
                         # Send result back (truncate if too long)
                         result_text = str(result)
                         if len(result_text) > 4000:
                             result_text = result_text[:4000] + "\\n\\n[Result truncated]"
                         
-                        async def send_result():
-                            await _telegram_state["bot"].send_message(
-                                chat_id=chat_id,
-                                text=f"✅ Result for @{user}:\\n\\n{result_text}",
-                                reply_to_message_id=msg.message_id
-                            )
-                        _run_async(send_result())
+                        try:
+                            async def send_result():
+                                await _telegram_state["bot"].send_message(
+                                    chat_id=chat_id,
+                                    text=f"✅ Result for @{user}:\\n\\n{result_text}",
+                                    reply_to_message_id=msg.message_id
+                                )
+                            _run_async(send_result(), timeout=30)
+                            print(f"Telegram: Sent result to chat {chat_id}")
+                        except Exception as send_err:
+                            print(f"Telegram: Failed to send result: {send_err}")
                     except Exception as e:
-                        async def send_error():
-                            await _telegram_state["bot"].send_message(
-                                chat_id=chat_id,
-                                text=f"❌ Error: {str(e)[:500]}",
-                                reply_to_message_id=msg.message_id
-                            )
-                        _run_async(send_error())
+                        print(f"Telegram: Agent error: {e}")
+                        try:
+                            async def send_error():
+                                await _telegram_state["bot"].send_message(
+                                    chat_id=chat_id,
+                                    text=f"❌ Error: {str(e)[:500]}",
+                                    reply_to_message_id=msg.message_id
+                                )
+                            _run_async(send_error(), timeout=30)
+                        except Exception as err_send:
+                            print(f"Telegram: Failed to send error message: {err_send}")
                 
                 # Run in separate thread
                 threading.Thread(target=execute_command, daemon=True).start()
                 
+        except concurrent.futures.TimeoutError:
+            # Long-polling timeout is normal, just continue
+            continue
         except Exception as e:
             if not telegram_monitor_stop_event.is_set():
-                print(f"Telegram monitor error: {e}")
-                time.sleep(5)
+                error_msg = str(e)
+                # Don't spam logs for timeout errors
+                if "Timed out" not in error_msg:
+                    print(f"Telegram monitor error: {e}")
+                time.sleep(2)  # Brief pause before retry
     
     print("Telegram monitor: Stopped")
 
