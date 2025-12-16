@@ -250,6 +250,25 @@ from app.tools.zap_tools import (
     zap_generate_report,
     zap_full_scan,
 )
+# NEW: Scanners Database - persist raw scan outputs to avoid context overflow
+from app.tools.scanners_db import (
+    add_scan_result,
+    get_scan_results,
+    get_scan_raw_output,
+    mark_scan_finding_validated,
+    get_pending_validations,
+    get_scanners_db_summary,
+)
+# NEW: Sub-agent Task Management - orchestrate complex pentest workflows
+from app.tools.subagent_tasks import (
+    create_subagent_task,
+    get_pending_tasks,
+    start_task,
+    complete_task,
+    fail_task,
+    get_task_status,
+    add_task_note,
+)
 from app.config import get_settings, PROVIDER_CONFIGS
 
 # DefectDojo tools are optional; import only if base URL is configured
@@ -624,6 +643,29 @@ def build_owasp_agent() -> CodeAgent:
         dispatch_qc_final_review,
         # Full orchestration (runs complete pentest with all sub-agents)
         run_full_pentest_orchestration,
+    ])
+    
+    # NEW: Scanners Database - persist raw scan outputs to prevent context overflow
+    # These tools should be used to store ALL scanner outputs and retrieve only summaries
+    tools.extend([
+        add_scan_result,           # Store scanner output -> returns scan_id
+        get_scan_results,          # Get summaries (not full outputs)
+        get_scan_raw_output,       # Retrieve specific scan output when needed
+        mark_scan_finding_validated,  # Track validation status
+        get_pending_validations,   # Get findings needing validation
+        get_scanners_db_summary,   # High-level overview
+    ])
+    
+    # NEW: Sub-agent Task Management - orchestrate work across specialized agents
+    # Use these to delegate tasks and track progress without context overflow
+    tools.extend([
+        create_subagent_task,      # Create task for scanner/validator/qc/reporter
+        get_pending_tasks,         # See what needs to be done
+        start_task,                # Begin working on a task
+        complete_task,             # Mark task done with results
+        fail_task,                 # Mark task failed
+        get_task_status,           # Check progress
+        add_task_note,             # Add notes to tasks
     ])
     
     # Add DefectDojo tools only if configured

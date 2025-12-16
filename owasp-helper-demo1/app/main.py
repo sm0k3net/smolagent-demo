@@ -25665,6 +25665,13 @@ The report should be comprehensive and professional, suitable for executive stak
                         # Set current task/project ID for report tools
                         set_current_task_id(tid, proj_id)
                         
+                        # Set current project ID for Scanners Database auto-storage
+                        try:
+                            from app.tools.pentest_tools import set_current_project_id
+                            set_current_project_id(proj_id or tid)
+                        except ImportError:
+                            pass
+                        
                         task_store[tid].status = TaskStatus.running
                         task_store[tid].started_at = datetime.now()
                         
@@ -25764,6 +25771,13 @@ The report should be comprehensive and professional, suitable for executive stak
                 
                 # Set current task ID for report tools to use
                 set_current_task_id(request_task_id, project_id)
+                
+                # Set current project ID for Scanners Database auto-storage
+                try:
+                    from app.tools.pentest_tools import set_current_project_id
+                    set_current_project_id(project_id or request_task_id)
+                except ImportError:
+                    pass
                 
                 # Initialize task persistence for crash recovery
                 task_persistence = get_task_persistence()
