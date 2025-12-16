@@ -4056,7 +4056,7 @@ async def regenerate_project_report(project_id: str, data: dict = None):
         prompt = task.get("prompt", "")
         # Extract URLs from prompt
         import re
-        urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', prompt)
+        urls = re.findall(r'https?://[^\s<>"{}|\\^\[\]]+', prompt)
         scope.extend(urls)
     scope = list(set(scope)) if scope else [project.get("name", "Target")]
     
@@ -4756,53 +4756,40 @@ async def get_reports(grouped: bool = True):
     """Get list of all generated reports, optionally grouped by task."""
     reports = []
     index = load_reports_index()
-    indexed_paths = {r["path"] for r in index.get("reports", [])}
+    tasks_data = index.get("tasks", {})
+    projects_data = index.get("projects", {})
     
-    # Also check common output directories
-    report_dirs = [REPORTS_DIR, Path("output"), Path("reports")]
-    
-    for report_dir in report_dirs:
-        if not report_dir.exists():
+    # Only include indexed reports that exist on filesystem
+    for report_entry in index.get("reports", []):
+        path_str = report_entry.get("path", "")
+        file_path = Path(path_str)
+        
+        if not file_path.exists():
             continue
             
-        for file_path in report_dir.rglob("*"):
-            if file_path.is_file() and file_path.name != "reports_index.json":
-                ext = file_path.suffix.lower().lstrip('.')
-                if ext in ['html', 'pdf', 'md', 'json', 'txt', 'xml', 'csv']:
-                    try:
-                        stat = file_path.stat()
-                        path_str = str(file_path)
-                        
-                        # Find task_id from index
-                        task_id = None
-                        project_id = None
-                        for r in index.get("reports", []):
-                            if r["path"] == path_str:
-                                task_id = r.get("task_id")
-                                project_id = r.get("project_id")
-                                break
-                        
-                        reports.append({
-                            "name": file_path.name,
-                            "path": path_str,
-                            "type": ext,
-                            "size": stat.st_size,
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            "task_id": task_id,
-                            "project_id": project_id
-                        })
-                    except Exception:
-                        pass
+        try:
+            stat = file_path.stat()
+            ext = file_path.suffix.lower().lstrip('.')
+            if ext not in ['html', 'pdf', 'md', 'json', 'txt', 'xml', 'csv']:
+                continue
+                
+            reports.append({
+                "name": file_path.name,
+                "path": path_str,
+                "type": ext,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "task_id": report_entry.get("task_id"),
+                "project_id": report_entry.get("project_id")
+            })
+        except Exception:
+            pass
     
     # Sort by modified date descending
     reports.sort(key=lambda x: x.get("modified", ""), reverse=True)
     
     if not grouped:
         return JSONResponse(reports)
-    
-    # Group by task
-    tasks_data = index.get("tasks", {})
-    projects_data = index.get("projects", {})
     
     # Group reports by task
     grouped_reports = {
@@ -8392,44 +8379,64 @@ h1 {
 /* Selectable items */
 .report-task-item.selectable,
 .report-project-group.selectable,
+.report-task-group.selectable,
 .report-result-item.selectable {
   position: relative;
 }
 .item-select-checkbox {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
   width: 16px;
   height: 16px;
+  min-width: 16px;
   accent-color: var(--primary);
   cursor: pointer;
   z-index: 5;
   display: none;
+  margin-right: 0.5rem;
+  flex-shrink: 0;
 }
 .bulk-mode .item-select-checkbox {
-  display: block;
+  display: inline-block;
 }
 /* Show checkbox on hover even when not in bulk mode */
-.report-project-group:hover .item-select-checkbox,
+.report-project-group:hover > .item-select-checkbox,
+.report-task-group:hover > .item-select-checkbox,
 .report-task-item:hover .item-select-checkbox {
-  display: block;
+  display: inline-block;
   opacity: 0.5;
 }
-.report-project-group:hover .item-select-checkbox:hover,
+.report-project-group:hover > .item-select-checkbox:hover,
+.report-task-group:hover > .item-select-checkbox:hover,
 .report-task-item:hover .item-select-checkbox:hover {
   opacity: 1;
 }
-.bulk-mode .report-task-item,
-.bulk-mode .report-project-group > .project-header,
-.bulk-mode .report-result-item {
-  padding-left: 32px;
-}
 .report-task-item.selected,
-.report-project-group.selected > .project-header,
+.report-project-group.selected,
+.report-task-group.selected,
 .report-result-item.selected {
   background: rgba(99, 102, 241, 0.15) !important;
   border-color: rgba(99, 102, 241, 0.4) !important;
+}
+/* Checkbox container for projects and tasks */
+.report-project-group,
+.report-task-group {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.report-project-group > .item-select-checkbox,
+.report-task-group > .item-select-checkbox {
+  margin-top: 0.9rem;
+  margin-left: 0.5rem;
+}
+.report-project-group > .report-project-header,
+.report-task-group > .report-task-header {
+  flex: 1;
+  min-width: 0;
+}
+.report-project-group > .report-project-tasks,
+.report-task-group > .report-task-reports {
+  width: 100%;
+  flex-basis: 100%;
 }
 
 /* Reports Section Header */
@@ -18334,7 +18341,7 @@ function renderGroupedReportsList(data) {
         <div class="report-task-group selectable" data-task-id="${taskId}" draggable="true"
              ondragstart="dragTask(event, '${taskId}')">
           <input type="checkbox" class="item-select-checkbox" data-type="task" data-id="${taskId}" 
-                 onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')" style="position: relative; left: 4px; margin-right: 8px;">
+                 onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')">
           <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
             <span class="drag-handle">⋮⋮</span>
             <span class="report-task-toggle">▶</span>
@@ -18395,7 +18402,7 @@ function renderDraggableTask(taskId, taskData, allTasks) {
     <div class="report-task-group in-project selectable" data-task-id="${taskId}" draggable="true"
          ondragstart="dragTask(event, '${taskId}')">
       <input type="checkbox" class="item-select-checkbox" data-type="task" data-id="${taskId}" 
-             onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')" style="position: relative; left: 4px; margin-right: 8px;">
+             onclick="event.stopPropagation(); toggleItemSelect(this, 'task', '${taskId}')">
       <div class="report-task-header" onclick="toggleReportTaskGroup('${taskId}')">
         <span class="drag-handle">⋮⋮</span>
         <span class="report-task-toggle">▶</span>
@@ -19306,7 +19313,7 @@ async function deleteProjectConfirmed(projectId) {
     const response = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
     if (response.ok) {
       closeProjectDashboard();
-      loadReportsTree();
+      await loadReportsDirectory();
       showToast('success', 'Project deleted');
     } else {
       const err = await response.json();
@@ -19321,7 +19328,7 @@ async function deleteReportConfirmed(reportId) {
   try {
     const response = await fetch(`/api/reports/${reportId}`, { method: 'DELETE' });
     if (response.ok) {
-      loadReportsTree();
+      await loadReportsDirectory();
       if (currentDashboardProjectId) {
         loadProjectDashboard(currentDashboardProjectId);
       }
