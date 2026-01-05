@@ -3482,6 +3482,25 @@ async def get_project_dashboard(project_id: str):
                 if dashboard["latest_report"] is None or report.get("modified", "") > dashboard["latest_report"].get("modified", ""):
                     dashboard["latest_report"] = report
     
+    # Also check all reports in index for this project (in case they are not linked to a task)
+    for report_entry in index.get("reports", []):
+        if report_entry.get("project_id") == project_id:
+            report_path = Path(report_entry.get("path", ""))
+            if report_path.exists() and report_path.suffix.lower() == '.html':
+                try:
+                    stat = report_path.stat()
+                    modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    if dashboard["latest_report"] is None or modified > dashboard["latest_report"].get("modified", ""):
+                        dashboard["latest_report"] = {
+                            "name": report_path.name,
+                            "path": str(report_path),
+                            "type": "html",
+                            "size": stat.st_size,
+                            "modified": modified
+                        }
+                except:
+                    pass
+    
     return JSONResponse(dashboard)
 
 
@@ -3995,11 +4014,15 @@ async def regenerate_project_report(project_id: str, data: dict = None):
     
     This recalculates statistics, updates all sections, and generates a new HTML report.
     """
-    from app.tools.report_tools import (
-        _build_executive_summary_html, _build_findings_html, 
-        _build_conclusion_html, _build_appendix_html,
-        _build_report_header_html
-    )
+    try:
+        from app.tools.report_tools import (
+            _build_executive_summary_html, _build_findings_html, 
+            _build_conclusion_html, _build_appendix_html,
+            _build_report_header_html
+        )
+    except Exception as e:
+        print(f"Error importing report tools: {e}")
+        return JSONResponse({"error": f"Server configuration error: {str(e)}"}, status_code=500)
     
     index = load_reports_index()
     
@@ -16092,6 +16115,35 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
     </div>
   </div>
   
+  <!-- Scan Result Modal -->
+  <div class="vuln-modal" id="scan-result-modal">
+    <div class="vuln-modal-container" style="max-width: 900px;">
+      <div class="vuln-modal-header">
+        <span class="vuln-modal-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span id="scan-modal-title-text">Scan Result</span>
+        </span>
+        <button class="task-modal-close" onclick="closeScanModal()">&times;</button>
+      </div>
+      <div class="vuln-modal-body">
+        <div class="vuln-form-group">
+          <label>Target</label>
+          <div id="scan-target" style="padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px;"></div>
+        </div>
+        <div class="vuln-form-group">
+          <label>Raw Output</label>
+          <pre id="scan-output" style="height: 400px; overflow: auto; background: #111; padding: 1rem; border-radius: 4px; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;"></pre>
+        </div>
+      </div>
+      <div class="vuln-modal-footer">
+        <button class="btn-secondary" onclick="closeScanModal()">Close</button>
+        <button class="btn-primary" id="scan-download-btn" onclick="downloadScanResult()">Download Output</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Confirmation Modal -->
   <div class="confirm-modal" id="confirm-modal">
     <div class="confirm-modal-container">
@@ -16809,6 +16861,13 @@ function stopSectionResize() {
 }
 
 // Sidebar tabs
+function switchTab(tabId) {
+  const tab = document.querySelector(`.sidebar-tab[data-tab="${tabId}"]`);
+  if (tab) {
+    tab.click();
+  }
+}
+
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
   tab.onclick = () => {
     // Remove active from all tabs and content
@@ -17547,7 +17606,7 @@ async function resumeTask(taskId) {
     if (!confirm(confirmMsg)) return;
     
     // Create a new chat or use current one
-    const resumeChatId = currentChat || await createNewChat();
+    const resumeChatId = currentChatId || await createNewChat();
     
     // Send the resume prompt through WebSocket
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -19022,21 +19081,41 @@ function toggleScannerGroup(toolName) {
   }
 }
 
+let currentScanData = null;
+
 async function viewScanResult(scanId) {
-  // Show scan details in a modal or panel
   try {
     const response = await fetch('/api/projects/' + currentDashboardProjectId + '/scanners-db/' + scanId);
     if (!response.ok) throw new Error('Failed to load scan result');
     
-    const data = await response.json();
+    currentScanData = await response.json();
     
-    // Show in a simple alert for now - could be enhanced to a modal
-    const preview = data.raw_output ? data.raw_output.substring(0, 2000) : 'No output';
-    alert('Scan: ' + scanId + '\\n\\nTarget: ' + data.target + '\\n\\nOutput Preview:\\n' + preview + (data.raw_output && data.raw_output.length > 2000 ? '\\n\\n[Truncated...]' : ''));
+    document.getElementById('scan-target').textContent = currentScanData.target;
+    document.getElementById('scan-output').textContent = currentScanData.raw_output || 'No output';
+    document.getElementById('scan-modal-title-text').textContent = `Scan Result: ${scanId}`;
+    
+    document.getElementById('scan-result-modal').classList.add('active');
   } catch (error) {
     console.error('Error loading scan result:', error);
     showToast('error', 'Failed to load scan result');
   }
+}
+
+function closeScanModal() {
+  document.getElementById('scan-result-modal').classList.remove('active');
+  currentScanData = null;
+}
+
+function downloadScanResult() {
+  if (!currentScanData) return;
+  
+  const blob = new Blob([currentScanData.raw_output || ''], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `scan_${currentScanData.scan_id}_${new Date().toISOString().split('T')[0]}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============== AGENT PROGRESS FUNCTIONS ==============
@@ -24264,6 +24343,20 @@ ws.onmessage = (event) => {
       existingProgress.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
     } else {
       addMessage('progress', data.content);
+    }
+  } else if (data.type === 'task_created') {
+    // Handle restored task from server
+    if (data.task_id && !activityTasks[data.task_id]) {
+      // Create task tab and container
+      createActivityTask(data.task_id, data.prompt || 'Restored Task');
+      
+      // If this is the only task, switch to it
+      if (Object.keys(activityTasks).length === 1) {
+        switchActivityTask(data.task_id);
+      }
+      
+      // Add initial activity
+      addActivity('system', 'Task Restored', 'Task restored from server state', null, data.task_id);
     }
   } else if (data.type === 'task_classification') {
     // Task classification received from backend
