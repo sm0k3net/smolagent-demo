@@ -269,7 +269,7 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
             # Auto-add to report if report mode is enabled
             try:
                 from app.tools.report_tools import _REPORT_MODE_ENABLED, _add_screenshot_to_report_internal
-                if _REPORT_MODE_ENABLED:
+                if _REPORT_MODE_ENABLED.get():
                     description = f"Screenshot: {title}" if title else f"Screenshot of {url}"
                     _add_screenshot_to_report_internal(url=url, base64_data=base64_data, description=description)
             except:

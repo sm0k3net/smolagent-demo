@@ -46,16 +46,40 @@ def sanitize_url(url: str) -> str:
     return html_module.escape(url)
 
 
-# Global state for report mode
-_REPORT_MODE_ENABLED = False
-_CURRENT_REPORT_DATA: dict = {}
+import contextvars
+
+# Global state for report mode - REPLACED WITH CONTEXTVARS FOR THREAD SAFETY
+_REPORT_MODE_ENABLED = contextvars.ContextVar("report_mode_enabled", default=False)
+_CURRENT_REPORT_DATA = contextvars.ContextVar("current_report_data", default=None)
 # Track all tools used during the session (even outside report mode)
-_SESSION_TOOLS_USED: set = set()
+_SESSION_TOOLS_USED = contextvars.ContextVar("session_tools_used", default=None)
 # Artifacts storage (screenshots, raw tool outputs)
-_REPORT_ARTIFACTS: list = []
+_REPORT_ARTIFACTS = contextvars.ContextVar("report_artifacts", default=None)
 # Current task ID for project association
-_CURRENT_TASK_ID: str = None
-_CURRENT_PROJECT_ID: str = None
+_CURRENT_TASK_ID = contextvars.ContextVar("current_task_id", default=None)
+_CURRENT_PROJECT_ID = contextvars.ContextVar("current_project_id", default=None)
+
+# Helper functions to access context vars safely
+def _get_current_report_data_dict():
+    data = _CURRENT_REPORT_DATA.get()
+    if data is None:
+        data = {}
+        _CURRENT_REPORT_DATA.set(data)
+    return data
+
+def _get_session_tools_set():
+    tools = _SESSION_TOOLS_USED.get()
+    if tools is None:
+        tools = set()
+        _SESSION_TOOLS_USED.set(tools)
+    return tools
+
+def _get_report_artifacts_list():
+    artifacts = _REPORT_ARTIFACTS.get()
+    if artifacts is None:
+        artifacts = []
+        _REPORT_ARTIFACTS.set(artifacts)
+    return artifacts
 
 
 def save_task_output_as_report(output: str, tool_name: str, target: str, file_ext: str = "txt") -> str:
@@ -75,7 +99,7 @@ def save_task_output_as_report(output: str, tool_name: str, target: str, file_ex
         
     Returns: Path to the saved report file or error message
     """
-    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
+    # Context vars are accessed via .get()
     import json
     import uuid
     from pathlib import Path
@@ -110,6 +134,10 @@ def save_task_output_as_report(output: str, tool_name: str, target: str, file_ex
     else:
         index = {"reports": [], "tasks": {}, "projects": {}}
     
+    # Get current context
+    current_task_id = _CURRENT_TASK_ID.get()
+    current_project_id = _CURRENT_PROJECT_ID.get()
+    
     # Create report entry
     report_entry = {
         "path": str(file_path),
@@ -118,34 +146,34 @@ def save_task_output_as_report(output: str, tool_name: str, target: str, file_ex
         "tool": tool_name,
         "target": target,
         "created_at": datetime.now().isoformat(),
-        "task_id": _CURRENT_TASK_ID,
-        "project_id": _CURRENT_PROJECT_ID
+        "task_id": current_task_id,
+        "project_id": current_project_id
     }
     
     # Add to reports list
     index["reports"].append(report_entry)
     
     # Update task entry if we have a current task
-    if _CURRENT_TASK_ID:
-        if _CURRENT_TASK_ID not in index.get("tasks", {}):
-            index.setdefault("tasks", {})[_CURRENT_TASK_ID] = {
+    if current_task_id:
+        if current_task_id not in index.get("tasks", {}):
+            index.setdefault("tasks", {})[current_task_id] = {
                 "prompt": f"{tool_name} scan of {target}",
                 "label": "scanning",
                 "created_at": datetime.now().isoformat(),
-                "project_id": _CURRENT_PROJECT_ID,
+                "project_id": current_project_id,
                 "reports": []
             }
         
         # Add report path to task's reports list
-        if "reports" not in index["tasks"][_CURRENT_TASK_ID]:
-            index["tasks"][_CURRENT_TASK_ID]["reports"] = []
-        index["tasks"][_CURRENT_TASK_ID]["reports"].append(str(file_path))
+        if "reports" not in index["tasks"][current_task_id]:
+            index["tasks"][current_task_id]["reports"] = []
+        index["tasks"][current_task_id]["reports"].append(str(file_path))
         
         # Ensure task is in project's task list if project exists
-        if _CURRENT_PROJECT_ID and _CURRENT_PROJECT_ID in index.get("projects", {}):
-            project = index["projects"][_CURRENT_PROJECT_ID]
-            if _CURRENT_TASK_ID not in project.get("tasks", []):
-                project.setdefault("tasks", []).append(_CURRENT_TASK_ID)
+        if current_project_id and current_project_id in index.get("projects", {}):
+            project = index["projects"][current_project_id]
+            if current_task_id not in project.get("tasks", []):
+                project.setdefault("tasks", []).append(current_task_id)
     
     # Save index
     index_file.write_text(json.dumps(index, indent=2))
@@ -164,9 +192,8 @@ def _add_screenshot_to_report_internal(
     
     This is used by other tools like playwright_tool to add screenshots directly.
     """
-    global _REPORT_MODE_ENABLED, _REPORT_ARTIFACTS
-    
-    if not _REPORT_MODE_ENABLED:
+    # Use context vars
+    if not _REPORT_MODE_ENABLED.get():
         return "Report mode is not enabled."
     
     artifact = {
@@ -316,16 +343,19 @@ def auto_capture_tool_output(tool_name: str, tool_args: dict, output: str, durat
         output: Output returned by the tool
         duration_ms: Execution time in milliseconds
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS, _SESSION_TOOLS_USED
-    
     # Always track tool usage
     normalized_name = normalize_tool_name(tool_name)
-    _SESSION_TOOLS_USED.add(normalized_name)
-    if _REPORT_MODE_ENABLED and _CURRENT_REPORT_DATA:
-        _CURRENT_REPORT_DATA["tools"].add(normalized_name)
+    
+    session_tools = _get_session_tools_set()
+    session_tools.add(normalized_name)
+    
+    report_data = _get_current_report_data_dict()
+    if "tools" not in report_data:
+        report_data["tools"] = set()
+    report_data["tools"].add(normalized_name)
     
     # Only auto-capture if report mode is enabled and output is substantial
-    if not _REPORT_MODE_ENABLED:
+    if not _REPORT_MODE_ENABLED.get():
         return
     
     # Check if this tool should be auto-captured
@@ -359,27 +389,31 @@ def auto_capture_tool_output(tool_name: str, tool_args: dict, output: str, durat
     }
     
     # Check for duplicates (same tool + similar content)
-    for existing in _REPORT_ARTIFACTS:
+    artifacts = _get_report_artifacts_list()
+    for existing in artifacts:
         if existing.get("tool_name") == normalized_name:
             # Same tool - check if content is similar (first 500 chars)
             if existing.get("data", "")[:500] == str(output)[:500]:
                 return  # Skip duplicate
     
-    _REPORT_ARTIFACTS.append(artifact)
+    artifacts.append(artifact)
 
 
 def track_tool_usage(tool_name: str):
     """Track tool usage for the session (called by other tools)."""
-    global _SESSION_TOOLS_USED, _CURRENT_REPORT_DATA
-    _SESSION_TOOLS_USED.add(tool_name)
-    if _REPORT_MODE_ENABLED and _CURRENT_REPORT_DATA:
-        _CURRENT_REPORT_DATA["tools"].add(tool_name)
+    session_tools = _get_session_tools_set()
+    session_tools.add(tool_name)
+    
+    if _REPORT_MODE_ENABLED.get():
+        report_data = _get_current_report_data_dict()
+        if "tools" not in report_data:
+            report_data["tools"] = set()
+        report_data["tools"].add(tool_name)
 
 
 def get_session_tools() -> set:
     """Get all tools used in the current session."""
-    global _SESSION_TOOLS_USED
-    return _SESSION_TOOLS_USED.copy()
+    return _get_session_tools_set().copy()
 
 
 def _get_report_template_html() -> str:
@@ -1458,11 +1492,11 @@ def enable_report_mode(
         report_type: Type of assessment (default 'Penetration Test').
     Returns: Confirmation that report mode is enabled.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    # Context vars are accessed via .set()
     
-    _REPORT_MODE_ENABLED = True
-    _REPORT_ARTIFACTS.clear()  # Clear previous artifacts
-    _CURRENT_REPORT_DATA = {
+    _REPORT_MODE_ENABLED.set(True)
+    _REPORT_ARTIFACTS.set([])  # Clear previous artifacts
+    _CURRENT_REPORT_DATA.set({
         "title": title,
         "subtitle": f"{report_type} Report",
         "target": target,
@@ -1476,7 +1510,7 @@ def enable_report_mode(
         "conclusion": "",
         "references": [],
         "artifacts": []  # Screenshots and tool outputs
-    }
+    })
     
     return f"✅ Report mode ENABLED. Collecting findings for: {title}\nTarget: {target}\nUse add_finding_to_report() to add findings, then generate_report() when done."
 
@@ -1487,10 +1521,10 @@ def disable_report_mode() -> str:
 
     Returns: Confirmation that report mode is disabled.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    # Context vars are accessed via .set()
     
-    _REPORT_MODE_ENABLED = False
-    _CURRENT_REPORT_DATA = {}
+    _REPORT_MODE_ENABLED.set(False)
+    _CURRENT_REPORT_DATA.set({})
     
     return "Report mode DISABLED. Data cleared."
 
@@ -1501,23 +1535,24 @@ def get_report_status() -> str:
 
     Returns: Current report mode status and collected findings count.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
+    # Context vars are accessed via .get()
     
-    if not _REPORT_MODE_ENABLED:
+    if not _REPORT_MODE_ENABLED.get():
         return "Report mode is DISABLED. Use enable_report_mode() to start collecting findings."
     
-    findings_count = len(_CURRENT_REPORT_DATA.get("findings", []))
+    current_data = _CURRENT_REPORT_DATA.get() or {}
+    findings_count = len(current_data.get("findings", []))
     severity_counts = {}
-    for f in _CURRENT_REPORT_DATA.get("findings", []):
+    for f in current_data.get("findings", []):
         sev = f.get("severity", "Info")
         severity_counts[sev] = severity_counts.get(sev, 0) + 1
     
     return f"""Report mode ENABLED
-Title: {_CURRENT_REPORT_DATA.get('title')}
-Target: {_CURRENT_REPORT_DATA.get('target')}
+Title: {current_data.get('title')}
+Target: {current_data.get('target')}
 Findings collected: {findings_count}
 By severity: {severity_counts}
-Tools used: {', '.join(_CURRENT_REPORT_DATA.get('tools', set()))}"""
+Tools used: {', '.join(current_data.get('tools', set()))}"""
 
 
 @tool
@@ -4002,9 +4037,7 @@ def generate_pdf_report(output_path: str | None = None) -> str:
         output_path: Optional file path to save the PDF. If not provided, returns instructions.
     Returns: Path to generated PDF or instructions for manual generation.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
-    
-    if not _REPORT_MODE_ENABLED:
+    if not _REPORT_MODE_ENABLED.get():
         return "Report mode is not enabled."
     
     # Try using playwright for PDF generation
@@ -4050,14 +4083,13 @@ Or install Playwright: pip install playwright && playwright install chromium"""
 
 def is_report_mode_enabled() -> bool:
     """Check if report mode is enabled (non-tool function for internal use)."""
-    global _REPORT_MODE_ENABLED
-    return _REPORT_MODE_ENABLED
+    return _REPORT_MODE_ENABLED.get()
 
 
 def get_report_data() -> dict:
     """Get current report data (non-tool function for internal use)."""
-    global _CURRENT_REPORT_DATA
-    return _CURRENT_REPORT_DATA.copy() if _CURRENT_REPORT_DATA else {}
+    data = _CURRENT_REPORT_DATA.get()
+    return data.copy() if data else {}
 
 
 # ============== NOTE ACCESS TOOLS ==============
@@ -4888,15 +4920,13 @@ def list_projects() -> str:
 
 def set_current_task_id(task_id: str, project_id: str = None):
     """Set the current task ID for project association. Called by the agent runner."""
-    global _CURRENT_TASK_ID, _CURRENT_PROJECT_ID
-    _CURRENT_TASK_ID = task_id
-    _CURRENT_PROJECT_ID = project_id
+    _CURRENT_TASK_ID.set(task_id)
+    _CURRENT_PROJECT_ID.set(project_id)
 
 
 def get_current_task_id() -> str:
     """Get the current task ID."""
-    global _CURRENT_TASK_ID
-    return _CURRENT_TASK_ID
+    return _CURRENT_TASK_ID.get()
 
 
 @tool

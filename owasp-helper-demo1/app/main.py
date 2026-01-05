@@ -26560,6 +26560,16 @@ The report should be comprehensive and professional, suitable for executive stak
                 def run_agent_with_streaming():
                     """Run agent in thread and put events in queue."""
                     try:
+                        # Initialize context for this thread
+                        set_current_task_id(request_task_id)
+                        
+                        # Set project ID for this thread
+                        try:
+                            from app.tools.pentest_tools import set_current_project_id
+                            set_current_project_id(project_id or request_task_id)
+                        except ImportError:
+                            pass
+                        
                         # Create a dedicated agent for this task (enables true parallel execution)
                         task_agent = build_owasp_agent()
                         
@@ -26652,6 +26662,22 @@ The report should be comprehensive and professional, suitable for executive stak
                                         "tool_count": tool_count,
                                         "step_count": step_count
                                     })
+                                    
+                                    # Update activity state directly (for persistence across disconnects)
+                                    try:
+                                        add_activity_log(request_task_id, {
+                                            "type": activity_type,
+                                            "title": activity_msg,
+                                            "content": f"Tool #{tool_count}: {tool_name}{target_info}",
+                                            "tool_name": tool_name,
+                                            "timestamp": time.time() * 1000
+                                        })
+                                        update_activity_state(request_task_id, 
+                                            stepCount=step_count, 
+                                            toolCount=tool_count
+                                        )
+                                    except Exception as log_err:
+                                        print(f"Error updating activity log: {log_err}")
                                     
                                     # Log tool call to database
                                     if db_storage.enabled:
@@ -26749,6 +26775,22 @@ The report should be comprehensive and professional, suitable for executive stak
                             "step_count": step_count
                         })
                         
+                        # Update activity state directly (for persistence across disconnects)
+                        try:
+                            update_activity_state(request_task_id, 
+                                status="completed",
+                                stepCount=step_count,
+                                toolCount=tool_count
+                            )
+                            add_activity_log(request_task_id, {
+                                "type": "complete",
+                                "title": "Task Completed",
+                                "content": f"Finished with {step_count} steps, {tool_count} tool calls",
+                                "timestamp": time.time() * 1000
+                            })
+                        except Exception as log_err:
+                            print(f"Error updating completion log: {log_err}")
+                        
                     except Exception as e:
                         error_msg = str(e)
                         
@@ -26768,6 +26810,22 @@ The report should be comprehensive and professional, suitable for executive stak
                         
                         # Mark task as failed in persistence
                         task_persistence.mark_failed(request_task_id, error_msg)
+                        
+                        # Update activity state directly (for persistence across disconnects)
+                        try:
+                            update_activity_state(request_task_id, 
+                                status="failed",
+                                error=error_msg
+                            )
+                            add_activity_log(request_task_id, {
+                                "type": "error",
+                                "title": "Task Failed",
+                                "content": error_msg,
+                                "timestamp": time.time() * 1000
+                            })
+                        except Exception as log_err:
+                            print(f"Error updating failure log: {log_err}")
+                        
                         event_queue.put({
                             "type": "error",
                             "error": error_msg
@@ -26809,109 +26867,78 @@ The report should be comprehensive and professional, suitable for executive stak
                                 }
                                 
                                 # Send activity update with counts, chat_id, task_id and tool_name
-                                await ws.send_text(json.dumps(activity_msg))
-                                
-                                # Store in server-side activity state for reconnection
-                                add_activity_log(request_task_id, {
-                                    "type": event["activity_type"],
-                                    "title": event["title"],
-                                    "content": event["content"],
-                                    "tool_name": event.get("tool_name", ""),
-                                    "timestamp": time.time() * 1000
-                                })
-                                update_activity_state(request_task_id, 
-                                    stepCount=last_step_count, 
-                                    toolCount=last_tool_count
-                                )
-                                
-                                # Also send progress update for chat
-                                await ws.send_text(json.dumps({
-                                    "type": "progress",
-                                    "content": event["title"],
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
+                                try:
+                                    await ws.send_text(json.dumps(activity_msg))
+                                    
+                                    # Also send progress update for chat
+                                    await ws.send_text(json.dumps({
+                                        "type": "progress",
+                                        "content": event["title"],
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                except Exception:
+                                    # WebSocket disconnected, stop streaming but let thread continue
+                                    return
                             
                             elif event["type"] == "complete":
                                 final_response = event["result"]
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                # Update server-side state to completed
-                                update_activity_state(request_task_id, 
-                                    status="completed",
-                                    stepCount=last_step_count,
-                                    toolCount=last_tool_count
-                                )
-                                add_activity_log(request_task_id, {
-                                    "type": "complete",
-                                    "title": "Task Completed",
-                                    "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
-                                    "timestamp": time.time() * 1000
-                                })
-                                
-                                await ws.send_text(json.dumps({
-                                    "type": "activity",
-                                    "activity_type": "complete",
-                                    "title": "Task Completed",
-                                    "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
-                                    "tool_count": last_tool_count,
-                                    "step_count": last_step_count,
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
+                                try:
+                                    await ws.send_text(json.dumps({
+                                        "type": "activity",
+                                        "activity_type": "complete",
+                                        "title": "Task Completed",
+                                        "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
+                                        "tool_count": last_tool_count,
+                                        "step_count": last_step_count,
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                except Exception:
+                                    pass
                                 break
                             
                             elif event["type"] == "error":
-                                # Update server-side state to failed
-                                update_activity_state(request_task_id, status="failed")
-                                add_activity_log(request_task_id, {
-                                    "type": "error",
-                                    "title": "Error Occurred",
-                                    "content": event["error"],
-                                    "timestamp": time.time() * 1000
-                                })
-                                
-                                await ws.send_text(json.dumps({
-                                    "type": "activity",
-                                    "activity_type": "error",
-                                    "title": "Error Occurred",
-                                    "content": event["error"],
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
-                                await ws.send_text(json.dumps({
-                                    "type": "error",
-                                    "content": f"Error: {event['error']}",
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
+                                try:
+                                    await ws.send_text(json.dumps({
+                                        "type": "activity",
+                                        "activity_type": "error",
+                                        "title": "Error Occurred",
+                                        "content": event["error"],
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                    await ws.send_text(json.dumps({
+                                        "type": "error",
+                                        "content": f"Error: {event['error']}",
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                except Exception:
+                                    pass
                                 return
                             
                             elif event["type"] == "cancelled":
-                                # Task was cancelled by user
-                                update_activity_state(request_task_id, status="cancelled")
-                                add_activity_log(request_task_id, {
-                                    "type": "cancelled",
-                                    "title": "Task Cancelled",
-                                    "content": event.get("message", "Task was cancelled"),
-                                    "timestamp": time.time() * 1000
-                                })
-                                
-                                await ws.send_text(json.dumps({
-                                    "type": "activity",
-                                    "activity_type": "cancelled",
-                                    "title": "Task Cancelled",
-                                    "content": "Task was stopped by user",
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
-                                await ws.send_text(json.dumps({
-                                    "type": "assistant",
-                                    "content": "⛔ Task was cancelled by user.",
-                                    "chat_id": request_chat_id,
-                                    "task_id": request_task_id
-                                }))
+                                try:
+                                    await ws.send_text(json.dumps({
+                                        "type": "activity",
+                                        "activity_type": "cancelled",
+                                        "title": "Task Cancelled",
+                                        "content": "Task was stopped by user",
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                    await ws.send_text(json.dumps({
+                                        "type": "assistant",
+                                        "content": "⛔ Task was cancelled by user.",
+                                        "chat_id": request_chat_id,
+                                        "task_id": request_task_id
+                                    }))
+                                except Exception:
+                                    pass
                                 return
                         
                         # Check if we got final response
