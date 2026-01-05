@@ -464,6 +464,16 @@ class TaskPersistenceManager:
                 self._dirty.add(task_id)
                 self._save_task(task)  # Immediate save
 
+    def get_active_tasks(self, chat_id: Optional[str] = None) -> List[TaskState]:
+        """Get all currently running or interrupted tasks."""
+        with self._lock:
+            active_tasks = []
+            for task in self._cache.values():
+                if task.status in [TaskStatus.RUNNING, TaskStatus.INTERRUPTED, TaskStatus.PAUSED]:
+                    if chat_id is None or task.chat_id == chat_id:
+                        active_tasks.append(task)
+            return active_tasks
+
     def get_resumable_tasks(self) -> List[TaskState]:
         """Get all tasks that can be resumed."""
         with self._lock:

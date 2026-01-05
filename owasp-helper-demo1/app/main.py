@@ -25497,9 +25497,80 @@ window.onFullscreenNoteChange = onFullscreenNoteChange;
 async def index():
     return HTMLResponse(HTML)
 
+# Global connection manager
+active_connections: Dict[str, WebSocket] = {}
+
+async def send_ws_message(chat_id: str, message: str):
+    """Send message to the active WebSocket for a given chat_id."""
+    if chat_id in active_connections:
+        try:
+            await active_connections[chat_id].send_text(message)
+        except Exception:
+            # Connection might be dead, remove it
+            active_connections.pop(chat_id, None)
+
+async def send_initial_state(ws: WebSocket, chat_id: str):
+    """Send state of all running tasks to the new connection."""
+    try:
+        task_persistence = get_task_persistence()
+        active_tasks = task_persistence.get_active_tasks(chat_id)
+        
+        for task in active_tasks:
+            # Send task_created event to restore UI card
+            label_icons = {
+                "pentest_web": "🌐",
+                "pentest_api": "🔌",
+                "pentest_network": "🖧",
+                "pentest_osint": "🕵️",
+                "pentest": "🎯",
+                "scanning": "🛡️",
+                "recon": "🔍",
+                "discovery": "📂",
+                "general": "📝"
+            }
+            label_names = {
+                "pentest_web": "Web Application Pentest",
+                "pentest_api": "API Pentest",
+                "pentest_network": "Network Pentest",
+                "pentest_osint": "OSINT Assessment",
+                "pentest": "Penetration Test",
+                "scanning": "Vulnerability Scan",
+                "recon": "Reconnaissance",
+                "discovery": "Discovery",
+                "general": "General Task"
+            }
+            
+            # Send task_created to make it appear in the list
+            await ws.send_text(json.dumps({
+                "type": "task_created",
+                "task_id": task.task_id,
+                "task_label": task.task_label,
+                "target_type": task.target_type,
+                "content": f"🔄 Restored active task {label_icons.get(task.task_label, '📝')} [{label_names.get(task.task_label, 'General Task')}]"
+            }))
+            
+            # Send latest activity update to restore progress bar
+            await ws.send_text(json.dumps({
+                "type": "activity",
+                "activity_type": "restore",
+                "title": "Task Restored",
+                "content": f"Resuming monitoring... (Step {task.step_count})",
+                "tool_count": task.tool_count,
+                "step_count": task.step_count,
+                "chat_id": chat_id,
+                "task_id": task.task_id
+            }))
+            
+    except Exception as e:
+        print(f"Error sending initial state: {e}")
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
+    
+    # We don't know the chat_id yet, so we can't register it immediately.
+    # We'll register it when we receive the first message or if the client sends an init message.
+    
     if agent is None:
         await ws.send_text(json.dumps({"type": "system", "content": "Agent not ready"}))
         await ws.close()
@@ -25518,6 +25589,13 @@ async def ws_endpoint(ws: WebSocket):
             msg_content = msg_data.get("content", raw_msg)
             session_id = msg_data.get("session_id", "default")
             chat_id = msg_data.get("chat_id", "default")
+            
+            # Register connection for this chat_id to enable background updates
+            if chat_id:
+                active_connections[chat_id] = ws
+                # Restore state for any running tasks
+                await send_initial_state(ws, chat_id)
+                
             task_id = msg_data.get("task_id")  # Activity task tracking ID
             project_id = msg_data.get("project_id")  # Current project from UI
             report_mode_enabled = msg_data.get("report_mode", False)
@@ -26509,7 +26587,7 @@ The report should be comprehensive and professional, suitable for executive stak
                     "general": "General Task"
                 }
                 
-                await ws.send_text(json.dumps({
+                await send_ws_message(request_chat_id, json.dumps({
                     "type": "task_classification",
                     "task_label": captured_task_label.value,
                     "target_type": captured_target_type,
@@ -26530,7 +26608,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 )
                 
                 # Send initial progress
-                await ws.send_text(json.dumps({
+                await send_ws_message(request_chat_id, json.dumps({
                     "type": "activity",
                     "activity_type": "start",
                     "title": "Task Started",
@@ -26547,7 +26625,7 @@ The report should be comprehensive and professional, suitable for executive stak
                     "timestamp": time.time() * 1000
                 })
                 
-                await ws.send_text(json.dumps({
+                await send_ws_message(request_chat_id, json.dumps({
                     "type": "progress",
                     "content": "Agent analyzing your request...",
                     "chat_id": request_chat_id,
@@ -26867,78 +26945,65 @@ The report should be comprehensive and professional, suitable for executive stak
                                 }
                                 
                                 # Send activity update with counts, chat_id, task_id and tool_name
-                                try:
-                                    await ws.send_text(json.dumps(activity_msg))
-                                    
-                                    # Also send progress update for chat
-                                    await ws.send_text(json.dumps({
-                                        "type": "progress",
-                                        "content": event["title"],
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                except Exception:
-                                    # WebSocket disconnected, stop streaming but let thread continue
-                                    return
+                                await send_ws_message(request_chat_id, json.dumps(activity_msg))
+                                
+                                # Also send progress update for chat
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "progress",
+                                    "content": event["title"],
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
                             
                             elif event["type"] == "complete":
                                 final_response = event["result"]
                                 last_tool_count = event.get("tool_count", last_tool_count)
                                 last_step_count = event.get("step_count", last_step_count)
                                 
-                                try:
-                                    await ws.send_text(json.dumps({
-                                        "type": "activity",
-                                        "activity_type": "complete",
-                                        "title": "Task Completed",
-                                        "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
-                                        "tool_count": last_tool_count,
-                                        "step_count": last_step_count,
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                except Exception:
-                                    pass
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "complete",
+                                    "title": "Task Completed",
+                                    "content": f"Finished with {last_step_count} steps, {last_tool_count} tool calls",
+                                    "tool_count": last_tool_count,
+                                    "step_count": last_step_count,
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
                                 break
                             
                             elif event["type"] == "error":
-                                try:
-                                    await ws.send_text(json.dumps({
-                                        "type": "activity",
-                                        "activity_type": "error",
-                                        "title": "Error Occurred",
-                                        "content": event["error"],
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                    await ws.send_text(json.dumps({
-                                        "type": "error",
-                                        "content": f"Error: {event['error']}",
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                except Exception:
-                                    pass
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "error",
+                                    "title": "Error Occurred",
+                                    "content": event["error"],
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "error",
+                                    "content": f"Error: {event['error']}",
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
                                 return
                             
                             elif event["type"] == "cancelled":
-                                try:
-                                    await ws.send_text(json.dumps({
-                                        "type": "activity",
-                                        "activity_type": "cancelled",
-                                        "title": "Task Cancelled",
-                                        "content": "Task was stopped by user",
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                    await ws.send_text(json.dumps({
-                                        "type": "assistant",
-                                        "content": "⛔ Task was cancelled by user.",
-                                        "chat_id": request_chat_id,
-                                        "task_id": request_task_id
-                                    }))
-                                except Exception:
-                                    pass
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "activity",
+                                    "activity_type": "cancelled",
+                                    "title": "Task Cancelled",
+                                    "content": "Task was stopped by user",
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
+                                await send_ws_message(request_chat_id, json.dumps({
+                                    "type": "assistant",
+                                    "content": "⛔ Task was cancelled by user.",
+                                    "chat_id": request_chat_id,
+                                    "task_id": request_task_id
+                                }))
                                 return
                         
                         # Check if we got final response
@@ -26959,7 +27024,7 @@ The report should be comprehensive and professional, suitable for executive stak
                             "timestamp": time.time() * 1000
                         })
                         
-                        await ws.send_text(json.dumps({
+                        await send_ws_message(request_chat_id, json.dumps({
                             "type": "activity",
                             "activity_type": "error", 
                             "title": "Error",
@@ -26975,7 +27040,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 # Handle report mode
                 if final_response and report_mode_enabled and is_report_mode_enabled():
                     if '<!DOCTYPE html>' not in str(final_response) and '<html' not in str(final_response):
-                        await ws.send_text(json.dumps({
+                        await send_ws_message(request_chat_id, json.dumps({
                             "type": "activity",
                             "activity_type": "tool",
                             "title": "📋 Generating Report",
@@ -26987,14 +27052,14 @@ The report should be comprehensive and professional, suitable for executive stak
                         html_report = generate_html_report()
                         md_report = generate_markdown_report()
                         
-                        await ws.send_text(json.dumps({
+                        await send_ws_message(request_chat_id, json.dumps({
                             "type": "final",
                             "content": str(final_response),
                             "chat_id": request_chat_id,
                             "task_id": request_task_id
                         }))
                         
-                        await ws.send_text(json.dumps({
+                        await send_ws_message(request_chat_id, json.dumps({
                             "type": "report",
                             "content": "📋 Professional security report has been generated.",
                             "html": html_report,
@@ -27005,7 +27070,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         return
                 
                 # Send final response
-                await ws.send_text(json.dumps({
+                await send_ws_message(request_chat_id, json.dumps({
                     "type": "final",
                     "content": str(final_response) if final_response else "Task completed",
                     "chat_id": request_chat_id,
@@ -27017,8 +27082,16 @@ The report should be comprehensive and professional, suitable for executive stak
             # Continue immediately to process next message (don't block on task completion)
             
     except WebSocketDisconnect:
+        # Remove this ws from active_connections
+        for cid, conn in list(active_connections.items()):
+            if conn == ws:
+                del active_connections[cid]
         return
     except Exception as e:
+        # Remove this ws from active_connections
+        for cid, conn in list(active_connections.items()):
+            if conn == ws:
+                del active_connections[cid]
         try:
             await ws.send_text(json.dumps({"type": "final", "content": f"Error: {e}"}))
         except:
