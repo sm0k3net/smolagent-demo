@@ -3120,13 +3120,15 @@ def generate_html_report() -> str:
 
     Returns: Complete HTML report as a string.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED
+    report_enabled = _REPORT_MODE_ENABLED.get()
+    report_data = _CURRENT_REPORT_DATA.get()
+    session_tools = _SESSION_TOOLS_USED.get() or set()
     
-    if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
+    if not report_enabled or not report_data:
         return "Report mode is not enabled or no data collected. Use enable_report_mode() first."
     
     template = _get_report_template_html()
-    data = _CURRENT_REPORT_DATA
+    data = report_data
     
     # Count severities
     severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
@@ -3147,7 +3149,7 @@ def generate_html_report() -> str:
     )
     
     # Build tools HTML with cards for better presentation
-    all_tools = data.get("tools", set()) | _SESSION_TOOLS_USED
+    all_tools = data.get("tools", set()) | session_tools
     tool_details = data.get("tool_details", {})
     
     tool_icons = {
@@ -3591,12 +3593,14 @@ def generate_markdown_report() -> str:
 
     Returns: Complete Markdown report as a string.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _SESSION_TOOLS_USED
+    report_enabled = _REPORT_MODE_ENABLED.get()
+    report_data = _CURRENT_REPORT_DATA.get()
+    session_tools = _SESSION_TOOLS_USED.get() or set()
     
-    if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
+    if not report_enabled or not report_data:
         return "Report mode is not enabled or no data collected."
     
-    data = _CURRENT_REPORT_DATA
+    data = report_data
     
     # Count severities
     severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
@@ -3606,7 +3610,7 @@ def generate_markdown_report() -> str:
             severity_counts[sev] += 1
     
     # Combine all tools used
-    all_tools = data.get("tools", set()) | _SESSION_TOOLS_USED
+    all_tools = data.get("tools", set()) | session_tools
     
     lines = []
     
@@ -4260,9 +4264,12 @@ def save_pentest_session() -> str:
     
     Returns: Confirmation of session save.
     """
-    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _LAST_PENTEST_DATA, _SESSION_TOOLS_USED
+    report_enabled = _REPORT_MODE_ENABLED.get()
+    report_data = _CURRENT_REPORT_DATA.get()
+    session_tools = _SESSION_TOOLS_USED.get() or set()
+    global _LAST_PENTEST_DATA
     
-    if not _REPORT_MODE_ENABLED or not _CURRENT_REPORT_DATA:
+    if not report_enabled or not report_data:
         return "No active pentest session to save. Enable report mode first."
     
     import json
@@ -4270,14 +4277,14 @@ def save_pentest_session() -> str:
     
     # Deep copy the current data
     _LAST_PENTEST_DATA = {
-        "title": _CURRENT_REPORT_DATA.get("title", ""),
-        "subtitle": _CURRENT_REPORT_DATA.get("subtitle", ""),
-        "target": _CURRENT_REPORT_DATA.get("target", ""),
-        "author": _CURRENT_REPORT_DATA.get("author", ""),
-        "date": _CURRENT_REPORT_DATA.get("date", ""),
-        "executive_summary": _CURRENT_REPORT_DATA.get("executive_summary", ""),
-        "scope": list(_CURRENT_REPORT_DATA.get("scope", [])),
-        "methodology": _CURRENT_REPORT_DATA.get("methodology", ""),
+        "title": report_data.get("title", ""),
+        "subtitle": report_data.get("subtitle", ""),
+        "target": report_data.get("target", ""),
+        "author": report_data.get("author", ""),
+        "date": report_data.get("date", ""),
+        "executive_summary": report_data.get("executive_summary", ""),
+        "scope": list(report_data.get("scope", [])),
+        "methodology": report_data.get("methodology", ""),
         "tools": list(_CURRENT_REPORT_DATA.get("tools", set())),
         "findings": list(_CURRENT_REPORT_DATA.get("findings", [])),
         "conclusion": _CURRENT_REPORT_DATA.get("conclusion", ""),

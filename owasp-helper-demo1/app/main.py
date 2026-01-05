@@ -801,18 +801,22 @@ app = FastAPI(title="Pentest.Systems Assistant")
 agent = None  # Global agent kept for startup but each task gets its own instance
 startup_lock = asyncio.Lock()
 # Note: Tasks now use dedicated agent instances for true parallel execution
+# Limit concurrent background tasks to prevent resource exhaustion
 executor = ThreadPoolExecutor(max_workers=8)
+background_task_semaphore = threading.Semaphore(16)  # Max 16 concurrent background tasks
 
 # File storage for sessions
 file_store: dict[str, list[dict]] = {}
 
-# Task management
+# Task management - with lock for thread safety
 task_store: Dict[str, Task] = {}
+task_store_lock = threading.Lock()
 tasks_store: Dict[str, Dict[str, Any]] = {}
 task_queues: Dict[str, queue.Queue] = {}
 
 # Task chain management
 chain_store: Dict[str, TaskChain] = {}
+chain_store_lock = threading.Lock()
 CHAINS_FILE = os.path.join(os.path.dirname(__file__), ".task_chains.json")
 chain_monitor_thread = None
 chain_monitor_stop_event = threading.Event()
@@ -891,17 +895,63 @@ def cleanup_old_activity_states():
             print(f"[ActivityState] Cleaned up {len(tasks_to_remove)} old activity states")
 
 
+def cleanup_old_task_store():
+    """Remove old completed/failed tasks from in-memory task_store to prevent memory leaks."""
+    with task_store_lock:
+        current_time = datetime.now()
+        max_age = timedelta(hours=4)  # Keep tasks for 4 hours
+        
+        tasks_to_remove = []
+        for task_id, task in task_store.items():
+            # Remove completed/failed tasks older than max_age
+            if task.status in [TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled]:
+                completed_at = task.completed_at or task.started_at or task.created_at
+                if completed_at and (current_time - completed_at) > max_age:
+                    tasks_to_remove.append(task_id)
+        
+        for task_id in tasks_to_remove:
+            del task_store[task_id]
+        
+        if tasks_to_remove:
+            print(f"[TaskStore] Cleaned up {len(tasks_to_remove)} old tasks from memory")
+
+
+def cleanup_old_chain_store():
+    """Remove old completed/failed chains from in-memory chain_store to prevent memory leaks."""
+    with chain_store_lock:
+        current_time = datetime.now()
+        max_age = timedelta(hours=4)  # Keep chains for 4 hours
+        
+        chains_to_remove = []
+        for chain_id, chain in chain_store.items():
+            # Remove completed/failed chains older than max_age
+            if chain.status in [TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled]:
+                if (current_time - chain.created_at) > max_age:
+                    chains_to_remove.append(chain_id)
+        
+        for chain_id in chains_to_remove:
+            del chain_store[chain_id]
+        
+        if chains_to_remove:
+            print(f"[ChainStore] Cleaned up {len(chains_to_remove)} old chains from memory")
+
+
 # Activity cleanup thread management
 activity_cleanup_thread = None
 activity_cleanup_stop_event = threading.Event()
 
 def activity_cleanup_worker():
-    """Background thread to periodically clean up old activity states."""
+    """Background thread to periodically clean up old activity states and memory stores."""
     while not activity_cleanup_stop_event.is_set():
         try:
+            # Clean up activity states
             cleanup_old_activity_states()
+            # Clean up in-memory task store
+            cleanup_old_task_store()
+            # Clean up in-memory chain store
+            cleanup_old_chain_store()
         except Exception as e:
-            print(f"[ActivityState] Cleanup error: {e}")
+            print(f"[Cleanup] Error: {e}")
         # Run cleanup every 30 minutes
         activity_cleanup_stop_event.wait(timeout=1800)
 
@@ -912,7 +962,7 @@ def start_activity_cleanup_thread():
         activity_cleanup_stop_event.clear()
         activity_cleanup_thread = threading.Thread(target=activity_cleanup_worker, daemon=True)
         activity_cleanup_thread.start()
-        print("[ActivityState] Cleanup thread started")
+        print("[Cleanup] Memory cleanup thread started")
 
 
 def classify_task_prompt(prompt: str) -> tuple[TaskLabel, str | None]:
@@ -4014,15 +4064,7 @@ async def regenerate_project_report(project_id: str, data: dict = None):
     
     This recalculates statistics, updates all sections, and generates a new HTML report.
     """
-    try:
-        from app.tools.report_tools import (
-            _build_executive_summary_html, _build_findings_html, 
-            _build_conclusion_html, _build_appendix_html,
-            _build_report_header_html
-        )
-    except Exception as e:
-        print(f"Error importing report tools: {e}")
-        return JSONResponse({"error": f"Server configuration error: {str(e)}"}, status_code=500)
+    # Note: Report generation is done inline here, no external imports needed
     
     index = load_reports_index()
     
@@ -18358,12 +18400,13 @@ function renderGroupedReportsList(data) {
     });
   }
   
-  // Render unassigned tasks section (with drop zone)
+  // Render unassigned tasks section (collapsible, collapsed by default)
   html += `
-    <div class="reports-section-header" style="margin-top: 1rem;">
-      <span>📋 Unassigned Tasks</span>
+    <div class="reports-section-header unassigned-header" style="margin-top: 1rem; cursor: pointer;" onclick="toggleUnassignedSection()">
+      <span class="unassigned-toggle">▶</span>
+      <span>📋 Unassigned Tasks (${unassignedTasks.length})</span>
     </div>
-    <div id="unassigned-tasks-area" class="unassigned-tasks-area"
+    <div id="unassigned-tasks-area" class="unassigned-tasks-area" style="display: none;"
          ondragover="event.preventDefault(); this.classList.add('drag-over');"
          ondragleave="this.classList.remove('drag-over');"
          ondrop="dropTaskOnUnassigned(event)">
@@ -20623,6 +20666,22 @@ function toggleReportTaskGroup(taskId) {
     reportsContainer.style.display = 'none';
     toggle.textContent = '▶';
     groupEl.classList.remove('expanded');
+  }
+}
+
+function toggleUnassignedSection() {
+  const area = document.getElementById('unassigned-tasks-area');
+  const header = document.querySelector('.unassigned-header');
+  const toggle = header ? header.querySelector('.unassigned-toggle') : null;
+  
+  if (area.style.display === 'none') {
+    area.style.display = 'block';
+    if (toggle) toggle.textContent = '▼';
+    header?.classList.add('expanded');
+  } else {
+    area.style.display = 'none';
+    if (toggle) toggle.textContent = '▶';
+    header?.classList.remove('expanded');
   }
 }
 
@@ -24218,6 +24277,14 @@ ws.onopen = () => {
   statusText.textContent = 'Connected';
   addMessage('system', '🟢 Connected to Pentest.Systems Assistant - Ready for security analysis');
   
+  // IMPORTANT: Send init message to register this WebSocket connection
+  // This ensures the backend can route live updates to this connection
+  ws.send(JSON.stringify({
+    type: 'init',
+    chat_id: currentChatId,
+    session_id: 'default'
+  }));
+  
   // Restore activity state from server on reconnection
   restoreActivityState();
 };
@@ -25455,6 +25522,12 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
         scheduledRefreshInterval = null;
       }
     }
+    
+    // Auto-load data for tools tab
+    if (tabId === 'tools') {
+      // Load reports by default when tools tab is opened
+      loadReportsDirectory();
+    }
   };
 });
 
@@ -25590,17 +25663,32 @@ window.onFullscreenNoteChange = onFullscreenNoteChange;
 async def index():
     return HTMLResponse(HTML)
 
-# Global connection manager
+# Global connection manager with asyncio-safe access
 active_connections: Dict[str, WebSocket] = {}
+connections_lock = asyncio.Lock()
 
 async def send_ws_message(chat_id: str, message: str):
     """Send message to the active WebSocket for a given chat_id."""
-    if chat_id in active_connections:
+    async with connections_lock:
+        ws = active_connections.get(chat_id)
+    
+    if ws:
         try:
-            await active_connections[chat_id].send_text(message)
+            await ws.send_text(message)
         except Exception:
             # Connection might be dead, remove it
-            active_connections.pop(chat_id, None)
+            async with connections_lock:
+                active_connections.pop(chat_id, None)
+
+async def register_connection(chat_id: str, ws: WebSocket):
+    """Register a WebSocket connection for a chat_id."""
+    async with connections_lock:
+        active_connections[chat_id] = ws
+
+async def unregister_connection(chat_id: str):
+    """Remove a WebSocket connection."""
+    async with connections_lock:
+        active_connections.pop(chat_id, None)
 
 async def send_initial_state(ws: WebSocket, chat_id: str):
     """Send state of all running tasks to the new connection."""
@@ -25685,9 +25773,15 @@ async def ws_endpoint(ws: WebSocket):
             
             # Register connection for this chat_id to enable background updates
             if chat_id:
-                active_connections[chat_id] = ws
+                await register_connection(chat_id, ws)
                 # Restore state for any running tasks
                 await send_initial_state(ws, chat_id)
+            
+            # Handle init message - just for registering connection, no further action
+            if msg_data.get("type") == "init":
+                # Connection is already registered above, just acknowledge
+                print(f"[WebSocket] Connection registered for chat_id: {chat_id}")
+                continue
                 
             task_id = msg_data.get("task_id")  # Activity task tracking ID
             project_id = msg_data.get("project_id")  # Current project from UI
@@ -27175,16 +27269,12 @@ The report should be comprehensive and professional, suitable for executive stak
             # Continue immediately to process next message (don't block on task completion)
             
     except WebSocketDisconnect:
-        # Remove this ws from active_connections
-        for cid, conn in list(active_connections.items()):
-            if conn == ws:
-                del active_connections[cid]
+        # Remove this ws from active_connections using safe unregister
+        await unregister_connection(chat_id)
         return
     except Exception as e:
-        # Remove this ws from active_connections
-        for cid, conn in list(active_connections.items()):
-            if conn == ws:
-                del active_connections[cid]
+        # Remove this ws from active_connections using safe unregister
+        await unregister_connection(chat_id)
         try:
             await ws.send_text(json.dumps({"type": "final", "content": f"Error: {e}"}))
         except:
