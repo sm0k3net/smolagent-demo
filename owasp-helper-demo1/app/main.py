@@ -846,6 +846,15 @@ def update_activity_state(task_id: str, **kwargs):
                 "progress": 0,
             }
         activity_state_store[task_id].update(kwargs)
+        
+        # Auto-calculate progress based on stepCount (capped at 95% until complete)
+        step_count = activity_state_store[task_id].get("stepCount", 0)
+        status = activity_state_store[task_id].get("status", "running")
+        if status == "completed":
+            activity_state_store[task_id]["progress"] = 100
+        elif status == "running":
+            # Estimate: each step is ~3-5% progress, cap at 95%
+            activity_state_store[task_id]["progress"] = min(95, step_count * 4)
 
 def add_activity_log(task_id: str, log_entry: dict):
     """Add a log entry to activity state (thread-safe)."""
@@ -18400,6 +18409,15 @@ function renderGroupedReportsList(data) {
     });
   }
   
+  // Calculate unassigned tasks BEFORE using them in HTML
+  const unassignedTasks = Object.entries(data.tasks || {}).filter(([tid, t]) => {
+    // Check if task is not in any project
+    for (const proj of Object.values(data.projects || {})) {
+      if (proj.tasks && proj.tasks.includes(tid)) return false;
+    }
+    return true;
+  });
+  
   // Render unassigned tasks section (collapsible, collapsed by default)
   html += `
     <div class="reports-section-header unassigned-header" style="margin-top: 1rem; cursor: pointer;" onclick="toggleUnassignedSection()">
@@ -18424,15 +18442,7 @@ function renderGroupedReportsList(data) {
     'general': '📝'
   };
   
-  // Render task groups (unassigned to projects)
-  const unassignedTasks = Object.entries(data.tasks || {}).filter(([tid, t]) => {
-    // Check if task is not in any project
-    for (const proj of Object.values(data.projects || {})) {
-      if (proj.tasks && proj.tasks.includes(tid)) return false;
-    }
-    return true;
-  });
-  
+  // Render task groups (unassigned to projects) - unassignedTasks already calculated above
   if (unassignedTasks.length > 0) {
     unassignedTasks.forEach(([taskId, taskData]) => {
       const icon = taskIcons[taskData.label] || '📝';
@@ -24287,6 +24297,10 @@ ws.onopen = () => {
   
   // Restore activity state from server on reconnection
   restoreActivityState();
+  
+  // Start periodic activity sync for remote viewers (Cloudflare tunnel, etc.)
+  // This ensures viewers can see progress even if they're not the task initiator
+  startActivitySync();
 };
 
 // Function to restore activity state from server
@@ -24310,17 +24324,39 @@ async function restoreActivityState() {
       if (activityTasks[taskId]) continue;
       
       // Create the task in client
-      createActivityTask(taskId, taskState.prompt, taskState.taskLabel, taskState.targetType);
+      createActivityTask(taskId, taskState.prompt || 'Restored Task', taskState.taskLabel, taskState.targetType);
       
-      // Update stats
+      // Update stats and restore proper timing
       if (activityTasks[taskId]) {
-        activityTasks[taskId].stepCount = taskState.stepCount || 0;
-        activityTasks[taskId].toolCount = taskState.toolCount || 0;
-        activityTasks[taskId].status = taskState.status || 'running';
-        activityTasks[taskId].startTime = taskState.startTime;
+        const task = activityTasks[taskId];
+        task.stepCount = taskState.stepCount || 0;
+        task.toolCount = taskState.toolCount || 0;
+        task.status = taskState.status || 'running';
+        
+        // CRITICAL: Restore the original start time for proper timer display
+        if (taskState.startTime) {
+          task.startTime = taskState.startTime;
+          task.timerStartTime = taskState.startTime;  // This is what the timer actually uses!
+        }
+        
+        // Restore progress (don't let it show 100% unless completed)
+        const restoredProgress = taskState.progress || 0;
+        task.progress = taskState.status === 'completed' ? 100 : Math.min(restoredProgress, 95);
+        task.targetProgress = task.progress;
+        task.lastProgress = task.progress;
+        
+        // Update progress bar UI
+        const progressBar = document.getElementById(`tab-progress-${taskId}`);
+        if (progressBar) {
+          progressBar.style.width = `${task.progress}%`;
+        }
+        const progressEl = document.getElementById(`stat-progress-${taskId}`);
+        if (progressEl) {
+          progressEl.textContent = `${Math.round(task.progress)}%`;
+        }
         
         // Update UI stats
-        updateTaskStats(taskId, taskState.stepCount || 0, taskState.toolCount || 0);
+        updateTaskStats(taskId, task.stepCount, task.toolCount);
         
         // Replay logs
         if (taskState.logs && Array.isArray(taskState.logs)) {
@@ -24331,7 +24367,7 @@ async function restoreActivityState() {
         
         // Update status in UI
         if (taskState.status === 'completed') {
-          completeActivityTask(taskId, taskState.status);
+          completeActivityTask(taskId, 'completed');
         } else if (taskState.status === 'failed') {
           completeActivityTask(taskId, 'failed');
         }
@@ -24347,6 +24383,81 @@ async function restoreActivityState() {
     await checkResumableTasks();
   } catch (error) {
     console.error('Failed to restore activity state:', error);
+  }
+}
+
+// Periodic activity sync for remote viewers
+let activitySyncInterval = null;
+
+function startActivitySync() {
+  // Stop any existing sync
+  if (activitySyncInterval) {
+    clearInterval(activitySyncInterval);
+  }
+  
+  // Poll for activity state updates every 3 seconds
+  // This ensures remote viewers (via Cloudflare tunnel) can see live progress
+  activitySyncInterval = setInterval(async () => {
+    try {
+      // Only sync if we have running tasks in the activity monitor
+      const runningTasks = Object.values(activityTasks).filter(t => t.status === 'running');
+      if (runningTasks.length === 0) return;
+      
+      const response = await fetch('/api/activity/state');
+      if (!response.ok) return;
+      
+      const serverState = await response.json();
+      
+      // Update local state from server for running tasks
+      for (const taskId of Object.keys(serverState)) {
+        const serverTask = serverState[taskId];
+        const localTask = activityTasks[taskId];
+        
+        if (!localTask) {
+          // New task appeared - add it
+          if (serverTask.status === 'running') {
+            createActivityTask(taskId, serverTask.prompt || 'Remote Task', serverTask.taskLabel, serverTask.targetType);
+            if (activityTasks[taskId]) {
+              activityTasks[taskId].startTime = serverTask.startTime;
+              activityTasks[taskId].timerStartTime = serverTask.startTime;
+            }
+          }
+          continue;
+        }
+        
+        // Update stats if server has newer data
+        if (localTask.status === 'running') {
+          const serverSteps = serverTask.stepCount || 0;
+          const serverTools = serverTask.toolCount || 0;
+          
+          if (serverSteps > localTask.stepCount || serverTools > localTask.toolCount) {
+            updateTaskStats(taskId, serverSteps, serverTools);
+          }
+          
+          // Sync progress
+          const serverProgress = serverTask.progress || 0;
+          if (serverProgress > localTask.progress) {
+            updateTaskProgress(taskId, serverProgress);
+          }
+          
+          // Check for completion
+          if (serverTask.status === 'completed') {
+            completeActivityTask(taskId, 'completed');
+          } else if (serverTask.status === 'failed') {
+            completeActivityTask(taskId, 'failed');
+          }
+        }
+      }
+    } catch (error) {
+      // Silently fail - this is background sync
+    }
+  }, 3000);
+}
+
+function stopActivitySync() {
+  if (activitySyncInterval) {
+    clearInterval(activitySyncInterval);
+    activitySyncInterval = null;
   }
 }
 
@@ -25680,6 +25791,29 @@ async def send_ws_message(chat_id: str, message: str):
             async with connections_lock:
                 active_connections.pop(chat_id, None)
 
+async def broadcast_activity_message(message: str, exclude_chat_id: str = None):
+    """Broadcast activity update to ALL connected clients (for shared monitoring).
+    This enables users connected via Cloudflare tunnel or other connections
+    to see live progress of running tasks.
+    """
+    async with connections_lock:
+        connections_snapshot = dict(active_connections)
+    
+    dead_connections = []
+    for chat_id, ws in connections_snapshot.items():
+        if chat_id == exclude_chat_id:
+            continue  # Already sent to this one
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead_connections.append(chat_id)
+    
+    # Clean up dead connections
+    if dead_connections:
+        async with connections_lock:
+            for chat_id in dead_connections:
+                active_connections.pop(chat_id, None)
+
 async def register_connection(chat_id: str, ws: WebSocket):
     """Register a WebSocket connection for a chat_id."""
     async with connections_lock:
@@ -25691,12 +25825,41 @@ async def unregister_connection(chat_id: str):
         active_connections.pop(chat_id, None)
 
 async def send_initial_state(ws: WebSocket, chat_id: str):
-    """Send state of all running tasks to the new connection."""
+    """Send state of all running tasks to the new connection (from ALL active sessions)."""
     try:
-        task_persistence = get_task_persistence()
-        active_tasks = task_persistence.get_active_tasks(chat_id)
-        
-        for task in active_tasks:
+        # Also send activity state from in-memory store (covers all active tasks)
+        all_activity_state = get_activity_state()
+        for task_id, task_state in all_activity_state.items():
+            if task_state.get("status") == "running":
+                # Send task_created for each running task
+                label_icons = {
+                    "pentest_web": "🌐", "pentest_api": "🔌", "pentest_network": "🖧",
+                    "pentest_osint": "🕵️", "pentest": "🎯", "scanning": "🛡️",
+                    "recon": "🔍", "discovery": "📂", "general": "📝"
+                }
+                task_label = task_state.get("taskLabel", "general")
+                await ws.send_text(json.dumps({
+                    "type": "task_created",
+                    "task_id": task_id,
+                    "prompt": task_state.get("prompt", "Running Task"),
+                    "task_label": task_label,
+                    "target_type": task_state.get("targetType"),
+                    "content": f"🔄 Viewing active task {label_icons.get(task_label, '📝')}"
+                }))
+                
+                # Send stats update
+                await ws.send_text(json.dumps({
+                    "type": "activity",
+                    "activity_type": "restore",
+                    "title": "Task in Progress",
+                    "content": f"Step {task_state.get('stepCount', 0)}",
+                    "tool_count": task_state.get("toolCount", 0),
+                    "step_count": task_state.get("stepCount", 0),
+                    "task_id": task_id
+                }))
+                
+    except Exception as e:
+        print(f"Error sending initial state: {e}")        for task in active_tasks:
             # Send task_created event to restore UI card
             label_icons = {
                 "pentest_web": "🌐",
