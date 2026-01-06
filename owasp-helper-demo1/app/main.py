@@ -16618,6 +16618,7 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
   </main>
 </div>
 <script>
+console.log("[DEBUG] Script starting...");
 const messagesDiv = document.getElementById('messages');
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
@@ -16666,6 +16667,7 @@ const MAX_RECONNECT_DELAY = 10000;
 let isReconnecting = false;
 
 function connectWebSocket() {
+  console.log("[DEBUG] connectWebSocket() called, ws state:", ws ? ws.readyState : "null");
   if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
     return; // Already connected or connecting
   }
@@ -16681,8 +16683,11 @@ function connectWebSocket() {
   }
   
   try {
+    console.log("[DEBUG] Creating new WebSocket to:", `${wsProtocol}//${location.host}/ws`);
     ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+    console.log("[DEBUG] WebSocket created, setting up handlers...");
     setupWebSocketHandlers();
+    console.log("[DEBUG] Handlers set up");
   } catch(e) {
     console.error("WebSocket connection failed:", e);
     scheduleReconnect();
@@ -16704,6 +16709,7 @@ function scheduleReconnect() {
 }
 
 function setupWebSocketHandlers() {
+  console.log("[DEBUG] setupWebSocketHandlers called, ws:", ws);
   if (!ws) return;
   ws.onopen = handleWsOpen;
   ws.onclose = handleWsClose;
@@ -16711,6 +16717,7 @@ function setupWebSocketHandlers() {
   ws.onerror = (e) => {
       console.error("WebSocket error:", e);
   };
+  console.log("[DEBUG] Handlers assigned");
 }
 
 
@@ -24336,6 +24343,7 @@ function downloadReport(type) {
 }
 
 function handleWsOpen() {
+  console.log("[DEBUG] handleWsOpen() called - WebSocket connected!");
   reconnectAttempts = 0;
   isReconnecting = false;
   statusBadge.className = 'status-badge connected';
@@ -24536,6 +24544,7 @@ async function checkResumableTasks() {
 }
 
 function handleWsClose() {
+  console.log("[DEBUG] handleWsClose() called - WebSocket disconnected");
   statusBadge.className = 'status-badge disconnected';
   statusText.textContent = 'Disconnected';
   // Don't spam chat with disconnect messages if we are already reconnecting loop
@@ -24543,13 +24552,13 @@ function handleWsClose() {
       addMessage('system', '🔴 Disconnected from server. Attempting to reconnect...');
   }
   scheduleReconnect();
-};
+}
 
 function handleWsMessage(event) {
   let data;
   try {
     data = JSON.parse(event.data);
-  } catch {
+  } catch (e) {
     addMessage('agent', event.data);
     return;
   }
@@ -25826,7 +25835,9 @@ window.openAIProcessModalFromFullscreen = openAIProcessModalFromFullscreen;
 window.onFullscreenNoteChange = onFullscreenNoteChange;
 
 // Initialize connection
+console.log("[DEBUG] About to call connectWebSocket...");
 connectWebSocket();
+console.log("[DEBUG] connectWebSocket called");
 </script>
 </body>
 </html>
