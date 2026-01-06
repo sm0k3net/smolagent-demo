@@ -16713,8 +16713,6 @@ function setupWebSocketHandlers() {
   };
 }
 
-// Initialize connection
-connectWebSocket();
 
 // Task store for UI
 let taskStore = {};
@@ -25826,6 +25824,9 @@ window.insertFullscreenImage = insertFullscreenImage;
 window.showInsertReportModalFullscreen = showInsertReportModalFullscreen;
 window.openAIProcessModalFromFullscreen = openAIProcessModalFromFullscreen;
 window.onFullscreenNoteChange = onFullscreenNoteChange;
+
+// Initialize connection
+connectWebSocket();
 </script>
 </body>
 </html>
