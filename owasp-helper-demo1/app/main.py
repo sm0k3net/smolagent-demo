@@ -16659,7 +16659,62 @@ let currentReport = { html: null, markdown: null };
 
 // Determine WebSocket protocol based on page protocol (ws for http, wss for https)
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+let ws = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY = 10000;
+let isReconnecting = false;
+
+function connectWebSocket() {
+  if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+    return; // Already connected or connecting
+  }
+  
+  // Clean up existing closed connection if any
+  if (ws) {
+    try { ws.close(); } catch(e) {}
+  }
+  
+  if (isReconnecting) {
+    statusBadge.className = 'status-badge disconnected';
+    statusText.textContent = `Reconnecting(${reconnectAttempts})...`;
+  }
+  
+  try {
+    ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+    setupWebSocketHandlers();
+  } catch(e) {
+    console.error("WebSocket connection failed:", e);
+    scheduleReconnect();
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  isReconnecting = true;
+  reconnectAttempts++;
+  
+  // Exponential backoff with jitter
+  const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY);
+  const jitter = Math.random() * 500;
+  
+  reconnectTimer = setTimeout(() => {
+    connectWebSocket();
+  }, delay + jitter);
+}
+
+function setupWebSocketHandlers() {
+  if (!ws) return;
+  ws.onopen = handleWsOpen;
+  ws.onclose = handleWsClose;
+  ws.onmessage = handleWsMessage;
+  ws.onerror = (e) => {
+      console.error("WebSocket error:", e);
+  };
+}
+
+// Initialize connection
+connectWebSocket();
 
 // Task store for UI
 let taskStore = {};
@@ -24282,7 +24337,9 @@ function downloadReport(type) {
   URL.revokeObjectURL(url);
 }
 
-ws.onopen = () => {
+function handleWsOpen() {
+  reconnectAttempts = 0;
+  isReconnecting = false;
   statusBadge.className = 'status-badge connected';
   statusText.textContent = 'Connected';
   addMessage('system', '🟢 Connected to Pentest.Systems Assistant - Ready for security analysis');
@@ -24480,13 +24537,17 @@ async function checkResumableTasks() {
   }
 }
 
-ws.onclose = () => {
+function handleWsClose() {
   statusBadge.className = 'status-badge disconnected';
   statusText.textContent = 'Disconnected';
-  addMessage('system', '🔴 Disconnected from server. Please refresh the page.');
+  // Don't spam chat with disconnect messages if we are already reconnecting loop
+  if (!isReconnecting) {
+      addMessage('system', '🔴 Disconnected from server. Attempting to reconnect...');
+  }
+  scheduleReconnect();
 };
 
-ws.onmessage = (event) => {
+function handleWsMessage(event) {
   let data;
   try {
     data = JSON.parse(event.data);
