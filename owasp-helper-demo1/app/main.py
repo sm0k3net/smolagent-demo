@@ -6557,7 +6557,7 @@ async def get_report(format: str):
     else:
         return JSONResponse({"error": "Invalid format"}, status_code=400)
 
-HTML = """
+HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -25858,53 +25858,6 @@ async def send_initial_state(ws: WebSocket, chat_id: str):
                     "task_id": task_id
                 }))
                 
-    except Exception as e:
-        print(f"Error sending initial state: {e}")        for task in active_tasks:
-            # Send task_created event to restore UI card
-            label_icons = {
-                "pentest_web": "🌐",
-                "pentest_api": "🔌",
-                "pentest_network": "🖧",
-                "pentest_osint": "🕵️",
-                "pentest": "🎯",
-                "scanning": "🛡️",
-                "recon": "🔍",
-                "discovery": "📂",
-                "general": "📝"
-            }
-            label_names = {
-                "pentest_web": "Web Application Pentest",
-                "pentest_api": "API Pentest",
-                "pentest_network": "Network Pentest",
-                "pentest_osint": "OSINT Assessment",
-                "pentest": "Penetration Test",
-                "scanning": "Vulnerability Scan",
-                "recon": "Reconnaissance",
-                "discovery": "Discovery",
-                "general": "General Task"
-            }
-            
-            # Send task_created to make it appear in the list
-            await ws.send_text(json.dumps({
-                "type": "task_created",
-                "task_id": task.task_id,
-                "task_label": task.task_label,
-                "target_type": task.target_type,
-                "content": f"🔄 Restored active task {label_icons.get(task.task_label, '📝')} [{label_names.get(task.task_label, 'General Task')}]"
-            }))
-            
-            # Send latest activity update to restore progress bar
-            await ws.send_text(json.dumps({
-                "type": "activity",
-                "activity_type": "restore",
-                "title": "Task Restored",
-                "content": f"Resuming monitoring... (Step {task.step_count})",
-                "tool_count": task.tool_count,
-                "step_count": task.step_count,
-                "chat_id": chat_id,
-                "task_id": task.task_id
-            }))
-            
     except Exception as e:
         print(f"Error sending initial state: {e}")
 
