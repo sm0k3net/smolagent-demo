@@ -17221,7 +17221,7 @@ async function viewTaskResult(taskId) {
     let resultHtml = task.result || 'No result available';
     
     // Handle SCREENSHOT_IMAGE_DATA format first
-    const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g;
+    const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+/=]+):END_IMAGE_DATA/g;
     resultHtml = resultHtml.replace(screenshotRegex, (match, base64Data) => {
       return `<div style="margin: 15px 0;">
         <div style="font-weight: bold; margin-bottom: 8px;">📸 Screenshot:</div>
@@ -17233,7 +17233,7 @@ async function viewTaskResult(taskId) {
     });
     
     // Check for regular base64 images and render them
-    const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
+    const base64Pattern = /data:image\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)/g;
     resultHtml = resultHtml.replace(base64Pattern, '<img src="$&" style="max-width: 100%; margin: 10px 0; border-radius: 8px; cursor: pointer;" onclick="showImageModal(this.src)">');
     
     // Build the modal content
@@ -24150,7 +24150,7 @@ function addMessage(type, content, meta = {}) {
   }
   // Handle SCREENSHOT_IMAGE_DATA format from agent
   else if (content.includes('SCREENSHOT_IMAGE_DATA:')) {
-    const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g;
+        const screenshotRegex = /SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+/=]+):END_IMAGE_DATA/g;
     let formattedContent = content;
     let match;
     let imageCount = 0;
@@ -24184,7 +24184,7 @@ function addMessage(type, content, meta = {}) {
     let formattedContent = formatContent(content);
     
     // Handle base64 image data
-    const base64Pattern = /data:image\\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+\\/=]+)/g;
+    const base64Pattern = /data:image\/(png|jpg|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+)/g;
     const matches = content.match(base64Pattern);
     if (matches) {
       matches.forEach(match => {
@@ -25479,7 +25479,7 @@ function viewScheduledTaskResult(taskId) {
   let resultHtml = task.last_result;
   
   // Convert SCREENSHOT_IMAGE_DATA to actual images
-  resultHtml = resultHtml.replace(/SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+\\/=]+):END_IMAGE_DATA/g, 
+    resultHtml = resultHtml.replace(/SCREENSHOT_IMAGE_DATA:([A-Za-z0-9+/=]+):END_IMAGE_DATA/g, 
     '<img src="data:image/png;base64,$1" style="max-width:100%; margin: 10px 0; border-radius: 8px; border: 1px solid var(--gray-600);" />');
   
   // Escape remaining HTML but preserve our img tags
@@ -25488,7 +25488,7 @@ function viewScheduledTaskResult(taskId) {
   let safeHtml = tempDiv.innerHTML;
   
   // Restore img tags (they were escaped)
-  safeHtml = safeHtml.replace(/&lt;img src="data:image\\/png;base64,([A-Za-z0-9+\\/=]+)" style="([^"]*)" \\/&gt;/g,
+    safeHtml = safeHtml.replace(/&lt;img src="data:image\/png;base64,([A-Za-z0-9+/=]+)" style="([^"]*)" \/&gt;/g,
     '<img src="data:image/png;base64,$1" style="$2" />');
   
   body.innerHTML = `
