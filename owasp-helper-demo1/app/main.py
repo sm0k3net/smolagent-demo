@@ -17065,10 +17065,11 @@ function renderTasks() {
   
   // Build running chains HTML
   const chainsHtml = runningChains.map(chain => {
-    const taskCount = chain.task_details?.length || 0;
+        const taskDetails = chain.task_details || [];
+        const taskCount = taskDetails.length || 0;
     const currentIndex = chain.current_task_index || 0;
-    const currentTask = chain.task_details?.[currentIndex];
-    const currentTaskName = currentTask?.name || `Step ${currentIndex + 1}`;
+        const currentTask = taskDetails[currentIndex];
+        const currentTaskName = (currentTask && currentTask.name) ? currentTask.name : `Step ${currentIndex + 1}`;
     
     // Mini progress steps
     const stepsHtml = (chain.task_details || []).map((task, i) => {
@@ -17164,7 +17165,7 @@ function renderTasks() {
 async function pauseTask(taskId) {
   try {
     const task = taskStore[taskId];
-    const action = task?.status === 'paused' ? 'resume' : 'pause';
+        const action = (task && task.status === 'paused') ? 'resume' : 'pause';
     await fetch(`/api/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -17189,7 +17190,7 @@ async function cancelTask(taskId) {
 async function deleteTask(taskId) {
   try {
     await fetch(`/api/tasks/${taskId}?remove=true`, { method: 'DELETE' });
-    delete taskStore[taskId];
+        const action = (task && task.status === 'paused') ? 'resume' : 'pause';
     renderTasks();
   } catch (err) {
     addMessage('system', `⚠️ Failed to delete task: ${err.message}`);
@@ -17368,7 +17369,7 @@ function renderChains() {
   
   chainsList.innerHTML = chains.map(chain => {
     const statusClass = chain.status || 'pending';
-    const taskCount = chain.tasks?.length || 0;
+        const taskCount = (chain.tasks && chain.tasks.length) ? chain.tasks.length : 0;
     const currentIndex = chain.current_task_index || 0;
     
     // Create progress steps
@@ -17496,9 +17497,9 @@ async function createChain() {
   const steps = [];
   document.querySelectorAll('.chain-step-item').forEach((el, i) => {
     const inputs = el.querySelectorAll('input, textarea');
-    const stepName = inputs[0]?.value?.trim() || `Step ${i + 1}`;
-    const prompt = inputs[1]?.value?.trim();
-    const usePrevious = i > 0 ? (inputs[2]?.checked ?? true) : false;
+        const stepName = (inputs[0] && typeof inputs[0].value === 'string' ? inputs[0].value.trim() : '') || `Step ${i + 1}`;
+        const prompt = (inputs[1] && typeof inputs[1].value === 'string' ? inputs[1].value.trim() : '');
+        const usePrevious = i > 0 ? ((inputs[2] && typeof inputs[2].checked !== 'undefined') ? inputs[2].checked : true) : false;
     
     if (prompt) {
       steps.push({
@@ -17569,7 +17570,8 @@ async function stopChain(chainId) {
     const result = await response.json();
     
     if (result.success) {
-      addMessage('system', `✅ Chain stopped. ${result.cancelled_tasks?.length || 0} tasks cancelled.`);
+            const cancelledCount = (result && result.cancelled_tasks && result.cancelled_tasks.length) ? result.cancelled_tasks.length : 0;
+            addMessage('system', `✅ Chain stopped. ${cancelledCount} tasks cancelled.`);
       loadChains();
     } else {
       addMessage('system', `⚠️ Failed to stop chain: ${result.error || 'Unknown error'}`);
@@ -17590,7 +17592,8 @@ async function deleteChain(chainId) {
     const result = await response.json();
     
     if (result.success) {
-      addMessage('system', `✅ Chain deleted. ${result.deleted_tasks?.length || 0} tasks removed.`);
+            const deletedCount = (result && result.deleted_tasks && result.deleted_tasks.length) ? result.deleted_tasks.length : 0;
+            addMessage('system', `✅ Chain deleted. ${deletedCount} tasks removed.`);
       delete chainStore[chainId];
       renderChains();
     } else {
@@ -17967,10 +17970,12 @@ document.addEventListener('keydown', (e) => {
     closeChainTaskModal();
     document.getElementById('image-modal').classList.remove('active');
     // Close notes modals
-    if (document.getElementById('notes-fullscreen-modal')?.classList.contains('active')) {
+        const notesFullscreenModal = document.getElementById('notes-fullscreen-modal');
+        if (notesFullscreenModal && notesFullscreenModal.classList.contains('active')) {
       closeNotesFullscreen();
     }
-    if (document.getElementById('ai-process-modal')?.classList.contains('active')) {
+        const aiProcessModal = document.getElementById('ai-process-modal');
+        if (aiProcessModal && aiProcessModal.classList.contains('active')) {
       closeAIProcessModal();
     }
   }
@@ -17985,13 +17990,19 @@ document.getElementById('chain-builder-modal').addEventListener('click', (e) => 
   if (e.target.id === 'chain-builder-modal') closeChainBuilder();
 });
 
-document.getElementById('task-detail-modal')?.addEventListener('click', (e) => {
-  if (e.target.id === 'task-detail-modal') closeTaskDetailModal();
-});
+const taskDetailModal = document.getElementById('task-detail-modal');
+if (taskDetailModal) {
+    taskDetailModal.addEventListener('click', (e) => {
+        if (e.target.id === 'task-detail-modal') closeTaskDetailModal();
+    });
+}
 
-document.getElementById('chain-task-modal')?.addEventListener('click', (e) => {
-  if (e.target.id === 'chain-task-modal') closeChainTaskModal();
-});
+const chainTaskModal = document.getElementById('chain-task-modal');
+if (chainTaskModal) {
+    chainTaskModal.addEventListener('click', (e) => {
+        if (e.target.id === 'chain-task-modal') closeChainTaskModal();
+    });
+}
 
 // API Key management functions
 const API_KEY_MAP = {
@@ -18421,7 +18432,7 @@ function renderGroupedReportsList(data) {
       const projectTasks = Object.entries(data.tasks || {}).filter(([tid, t]) => 
         project.tasks && project.tasks.includes(tid)
       );
-      const taskNames = projectTasks.map(([tid, t]) => t.prompt?.substring(0, 30) + '...');
+            const taskNames = projectTasks.map(([tid, t]) => (t.prompt ? t.prompt.substring(0, 30) : '') + '...');
       const vulnCount = (project.vulndb || []).length;
       
       html += `
@@ -18598,20 +18609,23 @@ function dragTask(event, taskId) {
   event.stopPropagation();
   event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'task', taskId: taskId }));
   event.dataTransfer.effectAllowed = 'move';
-  event.target.closest('.report-task-group')?.classList.add('dragging');
+    const taskGroup = event.target.closest('.report-task-group');
+    if (taskGroup) taskGroup.classList.add('dragging');
 }
 
 function dragReport(event, reportPath, taskId) {
   event.stopPropagation();
   event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'report', reportPath: reportPath, taskId: taskId }));
   event.dataTransfer.effectAllowed = 'move';
-  event.target.closest('.report-item')?.classList.add('dragging');
+    const reportItem = event.target.closest('.report-item');
+    if (reportItem) reportItem.classList.add('dragging');
 }
 
 async function dropTaskOnProject(event, projectId) {
   event.preventDefault();
   event.stopPropagation();
-  event.target.closest('.report-project-group')?.classList.remove('drag-over');
+    const projectGroup = event.target.closest('.report-project-group');
+    if (projectGroup) projectGroup.classList.remove('drag-over');
   document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
   
   const dataStr = event.dataTransfer.getData('text/plain');
@@ -18686,7 +18700,8 @@ async function dropTaskOnProject(event, projectId) {
 async function dropTaskOnUnassigned(event) {
   event.preventDefault();
   event.stopPropagation();
-  document.getElementById('unassigned-tasks-area')?.classList.remove('drag-over');
+    const unassignedArea = document.getElementById('unassigned-tasks-area');
+    if (unassignedArea) unassignedArea.classList.remove('drag-over');
   document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
   
   const dataStr = event.dataTransfer.getData('text/plain');
@@ -18815,7 +18830,7 @@ async function createProject() {
 
 async function editProject(projectId) {
   // Load current project data
-  const project = reportsGroupedData?.projects?.[projectId];
+    const project = (reportsGroupedData && reportsGroupedData.projects) ? reportsGroupedData.projects[projectId] : null;
   if (!project) return;
   
   const modal = document.getElementById('task-modal');
@@ -19012,7 +19027,11 @@ function renderVulnDBTree(vulndb) {
   
   // Sort by severity
   const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
-  vulndb.sort((a, b) => severityOrder[a.severity?.toLowerCase() || 'info'] - severityOrder[b.severity?.toLowerCase() || 'info']);
+    vulndb.sort((a, b) => {
+        const aSeverity = (a && a.severity) ? String(a.severity).toLowerCase() : 'info';
+        const bSeverity = (b && b.severity) ? String(b.severity).toLowerCase() : 'info';
+        return severityOrder[aSeverity] - severityOrder[bSeverity];
+    });
   
   let html = '';
   vulndb.forEach(vuln => {
@@ -20082,7 +20101,8 @@ function renderEvidenceImagesPreviews() {
 // ============== TASK REPORTS EXPANSION ==============
 
 function toggleTaskReports(taskId) {
-  const task = currentDashboardData?.tasks?.find(t => t.id === taskId);
+    const tasks = (currentDashboardData && currentDashboardData.tasks) ? currentDashboardData.tasks : [];
+    const task = tasks.find(t => t.id === taskId);
   if (!task) return;
   
   const container = document.getElementById('dashboard-tasks-tree');
@@ -20141,7 +20161,8 @@ function toggleTaskReports(taskId) {
 
 function viewVulnerability(vulnId) {
   // Find in current data
-  const vuln = currentDashboardData?.vulndb?.find(v => v.id === vulnId);
+    const vulndb = (currentDashboardData && currentDashboardData.vulndb) ? currentDashboardData.vulndb : [];
+    const vuln = vulndb.find(v => v.id === vulnId);
   if (!vuln) return;
   
   // Show in modal with view mode (or open edit mode)
@@ -20443,7 +20464,7 @@ function toggleProjectInfoEdit() {
   
   if (edit.style.display === 'none') {
     // Switch to edit mode
-    const project = currentDashboardData?.project;
+        const project = currentDashboardData ? currentDashboardData.project : null;
     if (project) {
       document.getElementById('edit-project-name').value = project.name || '';
       document.getElementById('edit-project-desc').value = project.description || '';
@@ -20567,7 +20588,11 @@ async function exportVulnsToNotes() {
   
   // Sort by severity
   const severityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4 };
-  vulndb.sort((a, b) => severityOrder[a.severity?.toLowerCase() || 'info'] - severityOrder[b.severity?.toLowerCase() || 'info']);
+    vulndb.sort((a, b) => {
+        const aSeverity = (a && a.severity) ? String(a.severity).toLowerCase() : 'info';
+        const bSeverity = (b && b.severity) ? String(b.severity).toLowerCase() : 'info';
+        return severityOrder[aSeverity] - severityOrder[bSeverity];
+    });
   
   vulndb.forEach((vuln, index) => {
     markdown += `## ${index + 1}. ${vuln.title}\\n\\n`;
@@ -20751,11 +20776,11 @@ function toggleUnassignedSection() {
   if (area.style.display === 'none') {
     area.style.display = 'block';
     if (toggle) toggle.textContent = '▼';
-    header?.classList.add('expanded');
+        if (header) header.classList.add('expanded');
   } else {
     area.style.display = 'none';
     if (toggle) toggle.textContent = '▶';
-    header?.classList.remove('expanded');
+        if (header) header.classList.remove('expanded');
   }
 }
 
@@ -20891,7 +20916,7 @@ async function loadNotesTree() {
 function renderNotesTree(notes) {
   const treeEl = document.getElementById('notes-tree');
   
-  if (!notes || (!notes.folders && !notes.files) || (notes.folders?.length === 0 && notes.files?.length === 0)) {
+    if (!notes || (!notes.folders && !notes.files) || ((notes.folders ? notes.folders.length === 0 : true) && (notes.files ? notes.files.length === 0 : true))) {
     treeEl.innerHTML = '<div class="notes-tree-loading">No notes yet. Create one!</div>';
     return;
   }
@@ -22007,7 +22032,7 @@ async function handleNotesDrop(e) {
     await moveNoteToFolder(draggedNoteId, draggedNoteType, null);
   } else {
     const targetFolder = dropTarget.closest('.notes-folder');
-    const targetFolderId = targetFolder?.dataset.id;
+        const targetFolderId = (targetFolder && targetFolder.dataset) ? targetFolder.dataset.id : null;
     
     if (targetFolderId && targetFolderId !== draggedNoteId) {
       await moveNoteToFolder(draggedNoteId, draggedNoteType, targetFolderId);
@@ -22089,9 +22114,11 @@ function runNoteTaskInstantly() {
   
   // Switch to chat tab
   document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('[data-tab="chat"]')?.classList.add('active');
+    const chatTab = document.querySelector('[data-tab="chat"]');
+    if (chatTab) chatTab.classList.add('active');
   document.querySelectorAll('.sidebar-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('sidebar-chat')?.classList.add('active');
+    const sidebarChat = document.getElementById('sidebar-chat');
+    if (sidebarChat) sidebarChat.classList.add('active');
   
   // Send the message
   sendMessage();
@@ -22713,7 +22740,7 @@ async function toggleTool(toolId, enabled) {
 async function installTool(toolId) {
   const tool = toolsData.find(t => t.id === toolId);
   
-  showToolsMessage(`Installing ${tool?.name || toolId}... This may take a while.`);
+    showToolsMessage(`Installing ${(tool && tool.name) ? tool.name : toolId}... This may take a while.`);
   
   try {
     const response = await fetch(`/api/tools/install/${toolId}`, {
@@ -22959,10 +22986,11 @@ async function loadDatabaseSettings() {
 }
 
 function getDbConfig() {
+    const connectionUriEl = document.getElementById('db-connection-uri');
   return {
     enabled: false,
     connection_type: currentDbType,
-    connection_uri: document.getElementById('db-connection-uri')?.value.trim() || '',
+        connection_uri: (connectionUriEl && typeof connectionUriEl.value === 'string') ? connectionUriEl.value.trim() : '',
     host: document.getElementById('db-host').value.trim(),
     port: parseInt(document.getElementById('db-port').value) || 5432,
     database: document.getElementById('db-database').value.trim() || 'postgres',
@@ -25106,7 +25134,8 @@ async function switchChat(chatId) {
   renderChats();
   
   if (chatHistory.length === 0) {
-    addMessage('system', `💬 Switched to: ${chatsStore[chatId]?.name || 'Chat'}`, { skipSave: true });
+        const chatName = (chatsStore[chatId] && chatsStore[chatId].name) ? chatsStore[chatId].name : 'Chat';
+        addMessage('system', `💬 Switched to: ${chatName}`, { skipSave: true });
   }
 }
 
@@ -25135,8 +25164,9 @@ async function saveChatMessages() {
 
 async function renameChat(chatId) {
   const chat = chatsStore[chatId];
-  const newName = prompt('Enter new name:', chat?.name || 'Chat');
-  if (!newName || newName === chat?.name) return;
+    const existingName = (chat && chat.name) ? chat.name : 'Chat';
+    const newName = prompt('Enter new name:', existingName);
+    if (!newName || newName === existingName) return;
   
   try {
     await fetch(`/api/chats/${chatId}`, {
@@ -25483,14 +25513,18 @@ function closeScheduleModal() {
 }
 
 // Toggle recurring options visibility
-document.getElementById('schedule-recurring')?.addEventListener('change', (e) => {
-  const recurringOptions = document.getElementById('recurring-options');
-  if (e.target.checked) {
-    recurringOptions.classList.add('active');
-  } else {
-    recurringOptions.classList.remove('active');
-  }
-});
+const scheduleRecurring = document.getElementById('schedule-recurring');
+if (scheduleRecurring) {
+    scheduleRecurring.addEventListener('change', (e) => {
+        const recurringOptions = document.getElementById('recurring-options');
+        if (!recurringOptions) return;
+        if (e.target.checked) {
+            recurringOptions.classList.add('active');
+        } else {
+            recurringOptions.classList.remove('active');
+        }
+    });
+}
 
 // Set interval preset
 function setInterval(minutes) {
