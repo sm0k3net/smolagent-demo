@@ -24194,7 +24194,7 @@ function addMessage(type, content, meta = {}) {
     }
     
     // Also handle markdown-style image references to local files
-    formattedContent = formattedContent.replace(/!\\[([^\\]]*?)\\]\\(([^)]+\\.png)\\)/g, 
+        formattedContent = formattedContent.replace(/!\[([^\]]*?)\]\(([^)]+\.png)\)/g, 
       '<div class="screenshot-placeholder">📷 Screenshot saved: $2</div>');
     
     msgDiv.innerHTML = formattedContent;
