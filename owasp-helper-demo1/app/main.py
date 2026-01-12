@@ -1,4 +1,10 @@
 from __future__ import annotations
+import os
+
+# Disable Rich formatting/markup early so bracketed tool output (e.g. "[/\\s\\]")
+# cannot crash agent runs via rich.markup parsing.
+os.environ.setdefault("RICH_DISABLE", "1")
+
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -33,7 +39,6 @@ import base64
 import queue
 import threading
 import uuid
-import os
 import time
 import subprocess
 import re

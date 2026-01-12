@@ -1,4 +1,10 @@
 from __future__ import annotations
+
+import os
+
+# Prevent Rich markup parsing errors when agent/tool outputs contain brackets.
+os.environ.setdefault("RICH_DISABLE", "1")
+
 from pathlib import Path
 from smolagents import CodeAgent, OpenAIServerModel
 from app.tools.owasp_lookup import list_owasp_top10, get_owasp_item

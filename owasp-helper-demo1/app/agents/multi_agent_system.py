@@ -43,6 +43,11 @@ from datetime import datetime
 from enum import Enum
 from copy import deepcopy
 
+import os
+
+# Prevent Rich markup parsing errors when agent/tool outputs contain brackets.
+os.environ.setdefault("RICH_DISABLE", "1")
+
 from smolagents import CodeAgent, tool
 
 

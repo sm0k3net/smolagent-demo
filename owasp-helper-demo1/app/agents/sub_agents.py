@@ -23,6 +23,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+import os
+
+# Prevent Rich markup parsing errors when agent/tool outputs contain brackets.
+os.environ.setdefault("RICH_DISABLE", "1")
+
 from smolagents import CodeAgent, OpenAIServerModel, tool
 
 # Global state for sub-agent management
