@@ -142,6 +142,18 @@ class _DictProxy(MutableMapping):
             return self._data()
         return self._data().get(key, default)
 
+    # Compatibility: older code treated this as a ContextVar and called `.set()` to
+    # replace the entire dict.
+    def set(self, value) -> None:
+        state = _get_state()
+        if value is None:
+            state[self._name] = {}
+            return
+        if isinstance(value, dict):
+            state[self._name] = value
+            return
+        state[self._name] = dict(value)
+
 
 class _SetProxy:
     def __init__(self, name: str):
@@ -190,6 +202,20 @@ class _ListProxy:
             lst = []
             state[self._name] = lst
         return lst
+
+    # Compatibility: older code treated this as a ContextVar and called `.get()` / `.set()`.
+    def get(self):
+        return self._list()
+
+    def set(self, value) -> None:
+        state = _get_state()
+        if value is None:
+            state[self._name] = []
+            return
+        if isinstance(value, list):
+            state[self._name] = value
+            return
+        state[self._name] = list(value)
 
     def append(self, value) -> None:
         self._list().append(value)
