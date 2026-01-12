@@ -24313,26 +24313,26 @@ function formatContent(content) {
   text = text.replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>');
   
   // Bold and italic
-  text = text.replace(/\\*\\*\\*([^*]+)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
-  text = text.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-  text = text.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
+    text = text.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   
   // Strikethrough
   text = text.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   
   // Unordered lists
-  text = text.replace(/^[\\s]*[-*] (.+)$/gm, '<li class="md-li">$1</li>');
-  text = text.replace(/(<li class="md-li">.*<\\/li>\\n?)+/g, '<ul class="md-ul">$&</ul>');
+    text = text.replace(/^[\s]*[-*] (.+)$/gm, '<li class="md-li">$1</li>');
+    text = text.replace(/(<li class="md-li">.*<\\/li>\\n?)+/g, '<ul class="md-ul">$&</ul>');
   
   // Ordered lists
-  text = text.replace(/^[\\s]*\\d+\\. (.+)$/gm, '<li class="md-oli">$1</li>');
-  text = text.replace(/(<li class="md-oli">.*<\\/li>\\n?)+/g, '<ol class="md-ol">$&</ol>');
+    text = text.replace(/^[\s]*\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
+    text = text.replace(/(<li class="md-oli">.*<\\/li>\\n?)+/g, '<ol class="md-ol">$&</ol>');
   
   // Horizontal rule
   text = text.replace(/^---$/gm, '<hr class="md-hr">');
   
   // Links
-  text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" class="md-link">$1</a>');
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="md-link">$1</a>');
   
   // Emoji checkboxes
   text = text.replace(/✅/g, '<span class="emoji-check">✅</span>');
@@ -24344,7 +24344,7 @@ function formatContent(content) {
   });
   
   // Newlines to breaks (except within tags)
-  text = text.replace(/\\n/g, '<br>');
+    text = text.replace(/\n/g, '<br>');
   
   // Clean up excessive breaks after block elements
   text = text.replace(/(<\\/h[1-3]>)<br>/g, '$1');
