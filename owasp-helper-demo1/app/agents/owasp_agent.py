@@ -268,12 +268,14 @@ from app.tools.scanners_db import (
 # NEW: Sub-agent Task Management - orchestrate complex pentest workflows
 from app.tools.subagent_tasks import (
     create_subagent_task,
+    claim_task,
     get_pending_tasks,
     start_task,
     complete_task,
     fail_task,
     get_task_status,
     add_task_note,
+    add_task_artifact,
 )
 from app.config import get_settings, PROVIDER_CONFIGS
 
@@ -502,6 +504,19 @@ def build_owasp_agent() -> CodeAgent:
         install_system_tool,
         install_cloudflared,
         check_and_install_dependencies,
+    ])
+
+    # Sub-agent coordination tools (task DB)
+    tools.extend([
+        create_subagent_task,
+        claim_task,
+        get_pending_tasks,
+        start_task,
+        complete_task,
+        fail_task,
+        get_task_status,
+        add_task_note,
+        add_task_artifact,
     ])
     
     # Report generation tools

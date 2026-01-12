@@ -15,6 +15,7 @@ The system helps avoid context overflow by:
 
 import json
 import os
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -23,6 +24,9 @@ from smolagents import tool
 
 # Task database file
 TASKS_DB_FILE = Path("reports/agent_tasks.json")
+
+# In-process lock to reduce corruption during concurrent tool calls.
+_DB_LOCK = threading.RLock()
 
 
 class SubAgentType(str, Enum):
@@ -44,24 +48,47 @@ class TaskStatus(str, Enum):
 
 def _load_tasks_db() -> dict:
     """Load the tasks database."""
-    if TASKS_DB_FILE.exists():
-        try:
-            return json.loads(TASKS_DB_FILE.read_text(encoding='utf-8'))
-        except:
-            pass
-    return {
-        "metadata": {
-            "created_at": datetime.now().isoformat(),
-            "version": "1.0"
-        },
-        "projects": {}
-    }
+    with _DB_LOCK:
+        if TASKS_DB_FILE.exists():
+            try:
+                return json.loads(TASKS_DB_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {
+            "metadata": {
+                "created_at": datetime.now().isoformat(),
+                "version": "1.0",
+            },
+            "projects": {},
+        }
 
 
 def _save_tasks_db(db: dict):
     """Save the tasks database."""
-    TASKS_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TASKS_DB_FILE.write_text(json.dumps(db, indent=2), encoding='utf-8')
+    with _DB_LOCK:
+        TASKS_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TASKS_DB_FILE.write_text(json.dumps(db, indent=2), encoding="utf-8")
+
+
+def _recompute_project_summary(project: dict) -> None:
+    """Recompute summary counters from current task list.
+
+    This prevents counter drift when tasks are retried, completed from a
+    non-in-progress state, or updated concurrently.
+    """
+    summary = {"total": 0, "pending": 0, "in_progress": 0, "completed": 0, "failed": 0}
+    for task in project.get("tasks", []):
+        summary["total"] += 1
+        status = (task.get("status") or "").lower()
+        if status == TaskStatus.PENDING.value:
+            summary["pending"] += 1
+        elif status == TaskStatus.IN_PROGRESS.value:
+            summary["in_progress"] += 1
+        elif status == TaskStatus.COMPLETED.value:
+            summary["completed"] += 1
+        elif status == TaskStatus.FAILED.value:
+            summary["failed"] += 1
+    project["summary"] = summary
 
 
 def _get_project_tasks(project_id: str) -> dict:
@@ -164,8 +191,7 @@ def create_subagent_task(
     }
     
     project["tasks"].append(task)
-    project["summary"]["total"] += 1
-    project["summary"]["pending"] += 1
+    _recompute_project_summary(project)
     
     _save_tasks_db(db)
     
@@ -287,6 +313,11 @@ def start_task(project_id: str, task_id: str) -> str:
         if task["task_id"] == task_id:
             if task["status"] == TaskStatus.IN_PROGRESS.value:
                 return f"⚠️ Task '{task_id}' is already in progress"
+
+            # Optional: prevent two agents from picking up the same work.
+            claimed_by = task.get("claimed_by")
+            if claimed_by:
+                return f"⚠️ Task '{task_id}' is already claimed by: {claimed_by}"
             
             # Check dependencies
             completed_ids = {t["task_id"] for t in project["tasks"] if t["status"] == TaskStatus.COMPLETED.value}
@@ -297,9 +328,8 @@ def start_task(project_id: str, task_id: str) -> str:
             old_status = task["status"]
             task["status"] = TaskStatus.IN_PROGRESS.value
             task["started_at"] = datetime.now().isoformat()
-            
-            project["summary"]["pending"] = max(0, project["summary"]["pending"] - 1)
-            project["summary"]["in_progress"] += 1
+
+            _recompute_project_summary(project)
             
             _save_tasks_db(db)
             
@@ -325,10 +355,107 @@ def start_task(project_id: str, task_id: str) -> str:
 1. Execute the task as described
 2. Use appropriate tools based on agent type
 3. Save artifacts with `add_task_artifact()`
+4. Add notes with `add_task_note()`
 4. Complete with `complete_task()` when done
 """
     
     return f"❌ Task '{task_id}' not found in project '{project_id}'"
+
+
+@tool
+def claim_task(project_id: str, task_id: str, claimed_by: str) -> str:
+    """Claim a task for a specific worker/agent.
+
+    This is a concurrency helper to avoid two workers starting the same task.
+    It does not run the task; it only marks ownership.
+
+    Args:
+        project_id: The project ID
+        task_id: The task ID to claim
+        claimed_by: Identifier for the worker/agent claiming the task
+
+    Returns:
+        Confirmation or an error if already claimed.
+    """
+    db = _load_tasks_db()
+    if project_id not in db["projects"]:
+        return f"❌ Project '{project_id}' not found"
+
+    project = db["projects"][project_id]
+    for task in project.get("tasks", []):
+        if task.get("task_id") == task_id:
+            if task.get("claimed_by") and task.get("claimed_by") != claimed_by:
+                return f"⚠️ Task '{task_id}' is already claimed by: {task.get('claimed_by')}"
+
+            task["claimed_by"] = claimed_by
+            task.setdefault("notes", []).append({
+                "timestamp": datetime.now().isoformat(),
+                "note": f"CLAIMED by {claimed_by}",
+            })
+            _save_tasks_db(db)
+            return f"✅ Task '{task_id}' claimed by {claimed_by}"
+
+    return f"❌ Task '{task_id}' not found"
+
+
+@tool
+def add_task_artifact(project_id: str, task_id: str, artifact_id: str, description: str = "") -> str:
+    """Attach an artifact reference (scan_id, file, finding id, etc.) to a task.
+
+    Args:
+        project_id: The project ID
+        task_id: Task to update
+        artifact_id: Identifier for the artifact (e.g., scan_id from scanners DB)
+        description: Optional human-friendly note
+
+    Returns:
+        Confirmation message.
+    """
+    if not artifact_id.strip():
+        return "❌ artifact_id is required"
+
+    db = _load_tasks_db()
+    if project_id not in db["projects"]:
+        return f"❌ Project '{project_id}' not found"
+
+    project = db["projects"][project_id]
+    for task in project.get("tasks", []):
+        if task.get("task_id") == task_id:
+            task.setdefault("artifacts", [])
+            if artifact_id not in task["artifacts"]:
+                task["artifacts"].append(artifact_id)
+            if description:
+                task.setdefault("notes", []).append({
+                    "timestamp": datetime.now().isoformat(),
+                    "note": f"ARTIFACT {artifact_id}: {description}",
+                })
+            _save_tasks_db(db)
+            return f"✅ Added artifact '{artifact_id}' to task '{task_id}'"
+
+    return f"❌ Task '{task_id}' not found"
+
+
+@tool
+def add_task_note(project_id: str, task_id: str, note: str) -> str:
+    """Add a timestamped note to a task (useful for QC and handoffs)."""
+    if not note.strip():
+        return "❌ note is required"
+
+    db = _load_tasks_db()
+    if project_id not in db["projects"]:
+        return f"❌ Project '{project_id}' not found"
+
+    project = db["projects"][project_id]
+    for task in project.get("tasks", []):
+        if task.get("task_id") == task_id:
+            task.setdefault("notes", []).append({
+                "timestamp": datetime.now().isoformat(),
+                "note": note,
+            })
+            _save_tasks_db(db)
+            return f"✅ Added note to task '{task_id}'"
+
+    return f"❌ Task '{task_id}' not found"
 
 
 @tool
@@ -370,9 +497,8 @@ def complete_task(
             
             if artifacts_created:
                 task["artifacts"].extend([a.strip() for a in artifacts_created.split(",") if a.strip()])
-            
-            project["summary"]["in_progress"] = max(0, project["summary"]["in_progress"] - 1)
-            project["summary"]["completed"] += 1
+
+            _recompute_project_summary(project)
             
             _save_tasks_db(db)
             
@@ -427,14 +553,13 @@ def fail_task(project_id: str, task_id: str, error_message: str, retry: bool = F
                     "timestamp": datetime.now().isoformat(),
                     "note": f"RETRY: {error_message}"
                 })
-                project["summary"]["in_progress"] = max(0, project["summary"]["in_progress"] - 1)
-                project["summary"]["pending"] += 1
+                task.pop("claimed_by", None)
             else:
                 task["status"] = TaskStatus.FAILED.value
                 task["completed_at"] = datetime.now().isoformat()
                 task["error"] = error_message
-                project["summary"]["in_progress"] = max(0, project["summary"]["in_progress"] - 1)
-                project["summary"]["failed"] += 1
+
+            _recompute_project_summary(project)
             
             _save_tasks_db(db)
             
@@ -494,6 +619,7 @@ def get_task_status(project_id: str, task_id: str = "") -> str:
 **Error**: {task.get('error') or 'None'}
 
 **Artifacts**: {', '.join(task['artifacts']) or 'None'}
+**Claimed By**: {task.get('claimed_by') or 'Unclaimed'}
 """
         return f"❌ Task '{task_id}' not found"
     

@@ -352,6 +352,12 @@ You are the orchestrator of a multi-agent penetration testing team. You coordina
 5. QC Agent does final review
 6. You deliver the final report
 
+## Concurrency & QC Hygiene (Task DB):
+- Break work into discrete tasks via `create_subagent_task(project_id, title, description, priority)`
+- Prevent duplicate work by claiming before starting: `claim_task(project_id, task_id, claimed_by)`
+- Track execution: `start_task(...)` → `add_task_note(...)` / `add_task_artifact(...)` → `complete_task(...)` or `fail_task(...)`
+- Use `get_task_status(...)` to monitor claimed/active tasks and avoid collisions
+
 ## Important:
 - Check `get_project_status()` frequently to monitor progress
 - All agents share context via the shared memory system
@@ -533,6 +539,10 @@ Review and validate ALL findings from other agents. You are the gatekeeper of qu
 - Is the finding reproducible?
 - Is the remediation advice correct?
 - Are references and CVEs accurate?
+
+## Review Traceability:
+- For each reviewed item, record a short note in the task DB via `add_task_note(project_id, task_id, note)`
+- If there is supporting evidence stored as an artifact, attach it to the task via `add_task_artifact(project_id, task_id, artifact_id, description)`
 
 ## Commands:
 - `review_pending_findings()` - Get findings awaiting validation
