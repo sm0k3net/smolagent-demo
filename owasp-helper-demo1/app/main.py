@@ -24322,11 +24322,11 @@ function formatContent(content) {
   
   // Unordered lists
     text = text.replace(/^[\s]*[-*] (.+)$/gm, '<li class="md-li">$1</li>');
-    text = text.replace(/(<li class="md-li">.*<\\/li>\\n?)+/g, '<ul class="md-ul">$&</ul>');
+    text = text.replace(/(<li class="md-li">.*<\/li>\n?)+/g, '<ul class="md-ul">$&</ul>');
   
   // Ordered lists
     text = text.replace(/^[\s]*\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
-    text = text.replace(/(<li class="md-oli">.*<\\/li>\\n?)+/g, '<ol class="md-ol">$&</ol>');
+    text = text.replace(/(<li class="md-oli">.*<\/li>\n?)+/g, '<ol class="md-ol">$&</ol>');
   
   // Horizontal rule
   text = text.replace(/^---$/gm, '<hr class="md-hr">');
@@ -24347,10 +24347,10 @@ function formatContent(content) {
     text = text.replace(/\n/g, '<br>');
   
   // Clean up excessive breaks after block elements
-  text = text.replace(/(<\\/h[1-3]>)<br>/g, '$1');
-  text = text.replace(/(<\\/ul>)<br>/g, '$1');
-  text = text.replace(/(<\\/ol>)<br>/g, '$1');
-  text = text.replace(/(<\\/pre>)<br>/g, '$1');
+    text = text.replace(/(<\/h[1-3]>)<br>/g, '$1');
+    text = text.replace(/(<\/ul>)<br>/g, '$1');
+    text = text.replace(/(<\/ol>)<br>/g, '$1');
+    text = text.replace(/(<\/pre>)<br>/g, '$1');
   text = text.replace(/(<hr[^>]*>)<br>/g, '$1');
   
   return text;
