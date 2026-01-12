@@ -505,19 +505,6 @@ def build_owasp_agent() -> CodeAgent:
         install_cloudflared,
         check_and_install_dependencies,
     ])
-
-    # Sub-agent coordination tools (task DB)
-    tools.extend([
-        create_subagent_task,
-        claim_task,
-        get_pending_tasks,
-        start_task,
-        complete_task,
-        fail_task,
-        get_task_status,
-        add_task_note,
-        add_task_artifact,
-    ])
     
     # Report generation tools
     tools.extend([
@@ -681,12 +668,14 @@ def build_owasp_agent() -> CodeAgent:
     # Use these to delegate tasks and track progress without context overflow
     tools.extend([
         create_subagent_task,      # Create task for scanner/validator/qc/reporter
+        claim_task,                # Avoid duplicate work by claiming tasks
         get_pending_tasks,         # See what needs to be done
         start_task,                # Begin working on a task
         complete_task,             # Mark task done with results
         fail_task,                 # Mark task failed
         get_task_status,           # Check progress
         add_task_note,             # Add notes to tasks
+        add_task_artifact,         # Attach scan IDs / evidence references
     ])
     
     # Add DefectDojo tools only if configured
