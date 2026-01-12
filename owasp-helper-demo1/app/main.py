@@ -16654,6 +16654,10 @@ let durationInterval = null;
 let attachedFiles = [];
 let sessionId = 'default';  // Match currentChatId for consistency
 
+// ============== CHAT MANAGEMENT (must be defined early) ==============
+let currentChatId = 'default';
+let chatsStore = {};
+
 let chatHistory = [];
 let currentReport = { html: null, markdown: null };
 
@@ -16713,15 +16717,20 @@ function setupWebSocketHandlers() {
   };
 }
 
+// Initialize WebSocket early so later UI-binding errors can't prevent connection
+setTimeout(connectWebSocket, 0);
+
 
 // Task store for UI
 let taskStore = {};
 let taskRefreshInterval = null;
 
 // Sidebar toggle
-sidebarToggle.onclick = () => {
-  sidebar.classList.toggle('expanded');
-};
+if (sidebarToggle && sidebar) {
+    sidebarToggle.onclick = () => {
+        sidebar.classList.toggle('expanded');
+    };
+}
 
 // =============================================
 // Notification and Modal Utilities
@@ -16865,15 +16874,17 @@ let isResizing = false;
 let startX = 0;
 let startWidth = 0;
 
-sidebarResize.addEventListener('mousedown', (e) => {
-  if (!sidebar.classList.contains('expanded')) return;
-  isResizing = true;
-  startX = e.clientX;
-  startWidth = parseInt(getComputedStyle(sidebar).width, 10);
-  sidebarResize.classList.add('dragging');
-  document.body.style.cursor = 'ew-resize';
-  document.body.style.userSelect = 'none';
-});
+if (sidebarResize && sidebar) {
+    sidebarResize.addEventListener('mousedown', (e) => {
+        if (!sidebar.classList.contains('expanded')) return;
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = parseInt(getComputedStyle(sidebar).width, 10);
+        sidebarResize.classList.add('dragging');
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+    });
+}
 
 document.addEventListener('mousemove', (e) => {
   if (!isResizing) return;
@@ -16889,7 +16900,7 @@ document.addEventListener('mousemove', (e) => {
 document.addEventListener('mouseup', () => {
   if (isResizing) {
     isResizing = false;
-    sidebarResize.classList.remove('dragging');
+        if (sidebarResize) sidebarResize.classList.remove('dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
   }
@@ -24962,8 +24973,6 @@ themeToggleBtn.onclick = () => {
 };
 
 // ============== CHAT MANAGEMENT ==============
-let currentChatId = 'default';
-let chatsStore = {};
 
 async function loadChats() {
   try {
@@ -25845,7 +25854,7 @@ window.openAIProcessModalFromFullscreen = openAIProcessModalFromFullscreen;
 window.onFullscreenNoteChange = onFullscreenNoteChange;
 
 // Initialize connection
-connectWebSocket();
+// (Initialized near top of script)
 </script>
 </body>
 </html>
