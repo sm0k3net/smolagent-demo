@@ -135,7 +135,11 @@ class _DictProxy(MutableMapping):
     def __len__(self) -> int:
         return len(self._data())
 
-    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+    # Compatibility: older code treated this as a ContextVar and called `.get()` with
+    # no args to fetch the whole dict.
+    def get(self, key: Any = None, default: Any = None) -> Any:  # type: ignore[override]
+        if key is None:
+            return self._data()
         return self._data().get(key, default)
 
 
@@ -156,6 +160,17 @@ class _SetProxy:
 
     def update(self, values) -> None:
         self._set().update(values)
+
+    # Compatibility: older code treated this as a ContextVar and called `.get()`.
+    def get(self):
+        return self._set()
+
+    def set(self, value) -> None:
+        state = _get_state()
+        state[self._name] = set(value) if value is not None else set()
+
+    def copy(self):
+        return set(self._set())
 
     def __iter__(self):
         return iter(self._set())
