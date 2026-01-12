@@ -437,7 +437,16 @@ def add_task_artifact(project_id: str, task_id: str, artifact_id: str, descripti
 
 @tool
 def add_task_note(project_id: str, task_id: str, note: str) -> str:
-    """Add a timestamped note to a task (useful for QC and handoffs)."""
+    """Add a timestamped note to a task (useful for QC and handoffs).
+
+    Args:
+        project_id: The project ID.
+        task_id: The task ID.
+        note: The note text to append.
+
+    Returns:
+        Confirmation message.
+    """
     if not note.strip():
         return "❌ note is required"
 
@@ -658,42 +667,15 @@ def get_task_status(project_id: str, task_id: str = "") -> str:
     return result
 
 
-@tool
-def add_task_note(project_id: str, task_id: str, note: str) -> str:
-    """Add a note to a task for tracking progress or issues.
-    
-    Args:
-        project_id: The project ID
-        task_id: The task ID
-        note: The note to add
-        
-    Returns:
-        Confirmation
-    """
-    db = _load_tasks_db()
-    
-    if project_id not in db["projects"]:
-        return f"❌ Project '{project_id}' not found"
-    
-    for task in db["projects"][project_id]["tasks"]:
-        if task["task_id"] == task_id:
-            task["notes"].append({
-                "timestamp": datetime.now().isoformat(),
-                "note": note
-            })
-            _save_tasks_db(db)
-            return f"📝 Note added to task '{task_id}'"
-    
-    return f"❌ Task '{task_id}' not found"
-
-
 # Export all tools
 __all__ = [
     'create_subagent_task',
+    'claim_task',
     'get_pending_tasks',
     'start_task',
     'complete_task',
     'fail_task',
     'get_task_status',
-    'add_task_note'
+    'add_task_note',
+    'add_task_artifact',
 ]
