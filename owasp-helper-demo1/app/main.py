@@ -1904,6 +1904,13 @@ class APIKeyUpdate(BaseModel):
     service: str
     api_key: str
 
+class PenDocSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    auto_submit: Optional[bool] = None
+    base_url: Optional[str] = None
+    project_id: Optional[str] = None
+    folder_id: Optional[str] = None
+
 class ProviderUpdate(BaseModel):
     provider: str  # "deepseek" or "openrouter"
     model: str
@@ -2294,6 +2301,58 @@ async def import_api_keys(keys: Dict[str, str]):
             os.environ[key] = value
     save_api_keys_to_file()
     return JSONResponse({"success": True, "imported": len(keys)})
+
+
+# ============== PENDOC INTEGRATION ENDPOINTS ==============
+
+@app.get("/api/pendoc/settings")
+async def get_pendoc_settings():
+    from app.tools.pendoc_tool import load_pendoc_settings, get_pendoc_api_token
+
+    settings = load_pendoc_settings()
+    has_token = bool(get_pendoc_api_token())
+    return JSONResponse({
+        "success": True,
+        "settings": settings,
+        "has_token": has_token,
+    })
+
+
+@app.post("/api/pendoc/settings")
+async def update_pendoc_settings(update: PenDocSettingsUpdate):
+    from app.tools.pendoc_tool import load_pendoc_settings, save_pendoc_settings
+
+    settings = load_pendoc_settings()
+    payload = update.model_dump(exclude_unset=True)
+    for k, v in payload.items():
+        settings[k] = v
+    save_pendoc_settings(settings)
+    return JSONResponse({"success": True, "settings": settings})
+
+
+@app.post("/api/pendoc/test")
+async def test_pendoc_connection():
+    from app.tools.pendoc_tool import load_pendoc_settings, pendoc_test_connection
+
+    settings = load_pendoc_settings()
+    ok, msg, profile = pendoc_test_connection(base_url=settings.get("base_url"))
+    if not ok:
+        return JSONResponse({"success": False, "message": msg}, status_code=400)
+    return JSONResponse({"success": True, "message": msg, "profile": profile})
+
+
+@app.get("/api/pendoc/projects")
+async def list_pendoc_projects():
+    from app.tools.pendoc_tool import get_pendoc_config, pendoc_list_projects
+
+    cfg, err = get_pendoc_config()
+    if err or not cfg:
+        return JSONResponse({"success": False, "message": err or "PenDoc not configured"}, status_code=400)
+
+    ok, msg, projects = pendoc_list_projects(cfg)
+    if not ok:
+        return JSONResponse({"success": False, "message": msg}, status_code=400)
+    return JSONResponse({"success": True, "projects": projects})
 
 # ============== PROVIDER SETTINGS ENDPOINTS ==============
 
@@ -15390,6 +15449,89 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
               </p>
             </div>
           </div>
+
+                    <!-- PenDoc Integration Section -->
+                    <div class="settings-section">
+                        <div class="settings-section-title">📝 PenDoc Integration</div>
+                        <p style="font-size: 0.8rem; color: var(--gray-400); line-height: 1.5; margin-bottom: 15px;">
+                            Push findings into a PenDoc project during testing.
+                            Configure the API token, verify connectivity, then select a target project.
+                        </p>
+
+                        <div style="display: flex; align-items: center; gap: 12px; background: var(--dark); border-radius: 8px; padding: 12px 15px; margin-bottom: 15px;">
+                            <div id="pendoc-indicator" style="width: 8px; height: 8px; border-radius: 50%; background: var(--gray-600); flex-shrink: 0;"></div>
+                            <span id="pendoc-status-text" style="font-size: 0.8rem; color: var(--gray-300);">Not connected</span>
+                        </div>
+
+                        <div style="background: var(--dark); border-radius: 8px; padding: 15px;">
+                            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 12px;">
+                                <div>
+                                    <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">PenDoc API Token</label>
+                                    <input type="password" id="pendoc-api-token" placeholder="x-api-token" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                                </div>
+                                <div style="display: flex; align-items: end;">
+                                    <button class="btn btn-primary" style="width: 100%;" onclick="savePenDocToken()">
+                                        Save Token
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                                <div>
+                                    <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">API Base URL</label>
+                                    <input type="text" id="pendoc-base-url" placeholder="https://…/functions/v1/api" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Folder ID (optional)</label>
+                                    <input type="text" id="pendoc-folder-id" placeholder="Folder ID" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                                <button class="btn" style="background: rgba(255,255,255,0.1);" onclick="testPenDocConnection()">Test Connection</button>
+                                <button class="btn" style="background: rgba(255,255,255,0.1);" onclick="loadPenDocProjects()">Refresh Projects</button>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                                <div>
+                                    <label style="font-size: 0.75rem; color: var(--gray-400); margin-bottom: 4px; display: block;">Project</label>
+                                    <select id="pendoc-project" style="width: 100%; padding: 8px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--gray-200); font-size: 0.85rem;">
+                                        <option value="">Select a project...</option>
+                                    </select>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+                                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                                            <span style="font-size: 0.8rem; color: var(--gray-300);">Enable PenDoc</span>
+                                            <label class="toggle-switch" style="position: relative; display: inline-block; width: 48px; height: 24px; flex-shrink: 0;">
+                                                <input type="checkbox" id="pendoc-enabled-toggle" style="opacity: 0; width: 0; height: 0;">
+                                                <span class="toggle-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--gray-600); transition: .3s; border-radius: 24px;"></span>
+                                            </label>
+                                        </div>
+                                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                                            <span style="font-size: 0.8rem; color: var(--gray-300);">Auto-submit findings</span>
+                                            <label class="toggle-switch" style="position: relative; display: inline-block; width: 48px; height: 24px; flex-shrink: 0;">
+                                                <input type="checkbox" id="pendoc-auto-submit-toggle" style="opacity: 0; width: 0; height: 0;">
+                                                <span class="toggle-slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--gray-600); transition: .3s; border-radius: 24px;"></span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 10px;">
+                                <button class="btn btn-primary" style="flex: 1;" onclick="savePenDocSettings()">Save PenDoc Settings</button>
+                            </div>
+
+                            <div id="pendoc-message" style="margin-top: 10px; padding: 10px; border-radius: 6px; font-size: 0.8rem; display: none;"></div>
+                        </div>
+
+                        <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                            <p style="font-size: 0.75rem; color: var(--gray-500); line-height: 1.5;">
+                                <strong>Note:</strong> The token is stored locally via the app's API key store as <code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px;">PENDOC_API_TOKEN</code>.
+                            </p>
+                        </div>
+                    </div>
           
           <div class="settings-section">
             <div class="settings-section-title">ℹ️ About</div>
@@ -18388,6 +18530,7 @@ function switchSettingsSubtab(subtab) {
     checkTunnelStatus();
     checkProxyStatus();
     loadAgentMaxSteps();
+        loadPenDocSettings();
   } else if (subtab === 'tools') {
     loadToolsList();
   }
@@ -22710,6 +22853,192 @@ async function loadAgentMaxSteps() {
   } catch (error) {
     console.error('Failed to load agent max steps:', error);
   }
+}
+
+// ============== PENDOC INTEGRATION ==============
+
+function showPenDocMessage(message, isError = false) {
+    const msgEl = document.getElementById('pendoc-message');
+    if (!msgEl) return;
+    msgEl.textContent = message;
+    msgEl.style.display = 'block';
+    msgEl.style.background = isError ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+    msgEl.style.color = isError ? '#ef4444' : '#10b981';
+
+    setTimeout(() => {
+        msgEl.style.display = 'none';
+    }, 5000);
+}
+
+function updatePenDocStatus(connected, text) {
+    const indicator = document.getElementById('pendoc-indicator');
+    const statusText = document.getElementById('pendoc-status-text');
+    if (!indicator || !statusText) return;
+
+    if (connected) {
+        indicator.style.background = '#10b981';
+        indicator.style.boxShadow = '0 0 8px rgba(16, 185, 129, 0.5)';
+        statusText.textContent = text || 'Connected';
+        statusText.style.color = '#10b981';
+    } else {
+        indicator.style.background = 'var(--gray-600)';
+        indicator.style.boxShadow = 'none';
+        statusText.textContent = text || 'Not connected';
+        statusText.style.color = 'var(--gray-300)';
+    }
+}
+
+async function loadPenDocSettings() {
+    try {
+        const [settingsResp, keysResp] = await Promise.all([
+            fetch('/api/pendoc/settings'),
+            fetch('/api/keys')
+        ]);
+        const settingsData = await settingsResp.json();
+        const keysData = await keysResp.json();
+
+        if (settingsData.success && settingsData.settings) {
+            const s = settingsData.settings;
+            document.getElementById('pendoc-enabled-toggle').checked = !!s.enabled;
+            document.getElementById('pendoc-auto-submit-toggle').checked = !!s.auto_submit;
+            document.getElementById('pendoc-base-url').value = s.base_url || '';
+            document.getElementById('pendoc-folder-id').value = s.folder_id || '';
+
+            // Project selection will be populated from API; set the stored value as a fallback.
+            const storedProjectId = s.project_id || '';
+            const projectSelect = document.getElementById('pendoc-project');
+            if (projectSelect) {
+                projectSelect.dataset.storedValue = storedProjectId;
+            }
+        }
+
+        const hasToken = !!(keysData && keysData['PENDOC_API_TOKEN'] && keysData['PENDOC_API_TOKEN'] !== '');
+        updatePenDocStatus(false, hasToken ? 'Token set (not tested)' : 'Token not set');
+
+        // If enabled and token exists, attempt to load projects (without forcing a connection test)
+        const enabled = document.getElementById('pendoc-enabled-toggle')?.checked;
+        if (enabled && hasToken) {
+            await loadPenDocProjects();
+        }
+    } catch (error) {
+        console.error('Failed to load PenDoc settings:', error);
+    }
+}
+
+async function savePenDocToken() {
+    const token = document.getElementById('pendoc-api-token').value.trim();
+    if (!token) {
+        showPenDocMessage('Please enter a PenDoc API token', true);
+        return;
+    }
+    try {
+        const resp = await fetch('/api/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service: 'PENDOC_API_TOKEN', api_key: token })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showPenDocMessage('PenDoc token saved');
+            document.getElementById('pendoc-api-token').value = '';
+            updatePenDocStatus(false, 'Token set (not tested)');
+        } else {
+            showPenDocMessage(data.error || 'Failed to save token', true);
+        }
+    } catch (error) {
+        showPenDocMessage('Failed to save token: ' + error.message, true);
+    }
+}
+
+async function savePenDocSettings() {
+    const payload = {
+        enabled: document.getElementById('pendoc-enabled-toggle').checked,
+        auto_submit: document.getElementById('pendoc-auto-submit-toggle').checked,
+        base_url: document.getElementById('pendoc-base-url').value.trim(),
+        project_id: document.getElementById('pendoc-project').value || '',
+        folder_id: document.getElementById('pendoc-folder-id').value.trim() || ''
+    };
+
+    try {
+        const resp = await fetch('/api/pendoc/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showPenDocMessage('PenDoc settings saved');
+        } else {
+            showPenDocMessage(data.message || 'Failed to save PenDoc settings', true);
+        }
+    } catch (error) {
+        showPenDocMessage('Failed to save PenDoc settings: ' + error.message, true);
+    }
+}
+
+async function testPenDocConnection() {
+    updatePenDocStatus(false, 'Testing connection...');
+    try {
+        // Persist base URL before testing
+        await fetch('/api/pendoc/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_url: document.getElementById('pendoc-base-url').value.trim() })
+        });
+
+        const resp = await fetch('/api/pendoc/test', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            const name = data.profile?.display_name || data.profile?.first_name || 'User';
+            updatePenDocStatus(true, `Connected as ${name}`);
+            showPenDocMessage('PenDoc connection successful');
+            await loadPenDocProjects();
+        } else {
+            updatePenDocStatus(false, 'Connection failed');
+            showPenDocMessage(data.message || 'PenDoc connection failed', true);
+        }
+    } catch (error) {
+        updatePenDocStatus(false, 'Connection failed');
+        showPenDocMessage('PenDoc connection failed: ' + error.message, true);
+    }
+}
+
+async function loadPenDocProjects() {
+    const select = document.getElementById('pendoc-project');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Loading projects...</option>';
+
+    try {
+        const resp = await fetch('/api/pendoc/projects');
+        const data = await resp.json();
+
+        if (!data.success) {
+            select.innerHTML = '<option value="">(Failed to load projects)</option>';
+            showPenDocMessage(data.message || 'Failed to load projects', true);
+            return;
+        }
+
+        const projects = data.projects || [];
+        select.innerHTML = '<option value="">Select a project...</option>';
+
+        for (const p of projects) {
+            const opt = document.createElement('option');
+            const pid = p.id || p.project_id || p.uuid || '';
+            const pname = p.name || p.title || pid;
+            opt.value = pid;
+            opt.textContent = pname;
+            select.appendChild(opt);
+        }
+
+        const stored = select.dataset.storedValue || '';
+        if (stored) {
+            select.value = stored;
+        }
+    } catch (error) {
+        select.innerHTML = '<option value="">(Failed to load projects)</option>';
+        showPenDocMessage('Failed to load projects: ' + error.message, true);
+    }
 }
 
 // ============== TOOLS MANAGEMENT ==============

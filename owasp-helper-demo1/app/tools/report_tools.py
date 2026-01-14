@@ -843,6 +843,158 @@ def add_finding_to_report(
     except Exception as e:
         # Non-critical - don't fail if VulnDB sync fails
         print(f"[report_tools] VulnDB sync warning: {e}")
+
+    # Optional: Auto-submit to PenDoc if configured.
+    try:
+        from .pendoc_tool import (
+            get_pendoc_config,
+            pendoc_create_file,
+            pendoc_create_vulnerability,
+        )
+
+        cfg, cfg_err = get_pendoc_config()
+        if cfg and cfg.enabled and cfg.auto_submit and (cfg.project_id or "").strip():
+            project_id = cfg.project_id.strip()
+
+            def _norm_sev(s: str) -> str:
+                s2 = (s or "info").strip().lower()
+                mapping = {
+                    "informational": "info",
+                    "information": "info",
+                    "info": "info",
+                    "low": "low",
+                    "medium": "medium",
+                    "med": "medium",
+                    "high": "high",
+                    "critical": "critical",
+                }
+                return mapping.get(s2, "info")
+
+            def _likelihood_from_sev(sev: str) -> str:
+                if sev in {"critical", "high"}:
+                    return "high"
+                if sev == "medium":
+                    return "medium"
+                return "low"
+
+            def _as_float(v: str | None) -> float | None:
+                if not v:
+                    return None
+                try:
+                    return float(str(v).strip())
+                except Exception:
+                    return None
+
+            sev = _norm_sev(finding.get("severity", "info"))
+
+            # Build a rich HTML description using the local finding fields.
+            evidence_text = (finding.get("evidence") or "").strip()
+            steps_text = (finding.get("steps_to_reproduce") or "").strip()
+            refs_text = (finding.get("references") or "").strip()
+
+            # Include recent tool outputs as context (truncated).
+            artifacts = []
+            try:
+                artifacts = list(_get_report_artifacts_list())
+            except Exception:
+                artifacts = []
+
+            tool_norm = (finding.get("tool_used") or "").strip().lower()
+            tool_snippets: list[str] = []
+            if tool_norm:
+                for a in reversed(artifacts):
+                    if a.get("type") == "tool_output" and (a.get("tool_name") or "").strip().lower() in tool_norm:
+                        raw = str(a.get("data") or "")
+                        if raw.strip():
+                            snippet = raw[:8000]
+                            if len(raw) > 8000:
+                                snippet += "\n... [truncated]"
+                            tool_snippets.append(
+                                f"<h4>Tool Output: {a.get('tool_name','')}</h4><pre>{snippet}</pre>"
+                            )
+                            break
+
+            affected = (finding.get("affected_component") or "").strip()
+            affected_assets = [affected] if affected else []
+
+            detailed_html = "".join([
+                f"<h3>Description</h3><p>{(finding.get('description') or '').strip()}</p>",
+                f"<h3>Impact</h3><p>{(finding.get('impact') or '').strip()}</p>",
+                f"<h3>Affected Component</h3><p>{affected or 'N/A'}</p>",
+                f"<h3>Evidence</h3><pre>{evidence_text or 'N/A'}</pre>",
+                f"<h3>Steps to Reproduce</h3><pre>{steps_text or 'N/A'}</pre>",
+                f"<h3>References</h3><pre>{refs_text or 'N/A'}</pre>",
+                "".join(tool_snippets),
+            ])
+
+            # Create an artifact note in PenDoc (best-effort).
+            file_id = None
+            try:
+                md = (
+                    f"# Evidence: {finding.get('title','Finding')}\n\n"
+                    f"**Severity:** {finding.get('severity','')}\n\n"
+                    f"## Description\n{(finding.get('description') or '').strip()}\n\n"
+                    f"## Impact\n{(finding.get('impact') or '').strip()}\n\n"
+                    f"## Affected Component\n{affected or 'N/A'}\n\n"
+                    f"## Evidence\n```\n{evidence_text or 'N/A'}\n```\n\n"
+                    f"## Steps to Reproduce\n```\n{steps_text or 'N/A'}\n```\n\n"
+                    f"## Command\n```\n{(finding.get('command_used') or '').strip() or 'N/A'}\n```\n\n"
+                    f"## References\n```\n{refs_text or 'N/A'}\n```\n"
+                )
+                ok_f, _, fdata = pendoc_create_file(
+                    cfg,
+                    project_id=project_id,
+                    name=f"Evidence - {finding.get('title','Finding')}"[:120],
+                    content=md[:50000],
+                    file_type="note",
+                    folder_id=cfg.folder_id,
+                )
+                if ok_f and isinstance(fdata, dict):
+                    file_id = fdata.get("id")
+            except Exception:
+                file_id = None
+
+            cvss_val = _as_float(str(finding.get("cvss_score") or "").strip())
+            payload = {
+                "project_id": project_id,
+                "title": finding.get("title") or "Untitled Finding",
+                "description": (finding.get("description") or "").strip()[:2000],
+                "severity": sev,
+                "likelihood": _likelihood_from_sev(sev),
+                "cvss_score": cvss_val,
+                "owasp_category": (finding.get("owasp_category") or "").strip() or None,
+                "tool": (finding.get("tool_used") or "").strip() or None,
+                "affected_assets": affected_assets,
+                "execution_command": (finding.get("command_used") or "").strip() or None,
+                "detailed_description": detailed_html + (f"<p><strong>Related File ID:</strong> {file_id}</p>" if file_id else ""),
+                "remediation": (finding.get("remediation") or "").strip() or None,
+            }
+
+            # Drop null/empty optional fields to match stricter API validators.
+            payload = {k: v for k, v in payload.items() if v not in (None, "")}
+
+            ok_v, msg_v, vdata = pendoc_create_vulnerability(cfg, payload)
+            finding.setdefault("external_submissions", {})
+            finding["external_submissions"]["pendoc"] = {
+                "success": bool(ok_v),
+                "message": msg_v,
+                "project_id": project_id,
+                "vulnerability": vdata if isinstance(vdata, dict) else None,
+                "file_id": file_id,
+            }
+        elif cfg_err:
+            # Only log configuration errors to avoid noisy output.
+            pass
+    except Exception as e:
+        # Never fail report creation because of external integration issues.
+        try:
+            finding.setdefault("external_submissions", {})
+            finding["external_submissions"]["pendoc"] = {
+                "success": False,
+                "message": f"PenDoc submission error: {e}",
+            }
+        except Exception:
+            pass
     
     return f"✅ Finding #{finding['id']} added: [{severity}] {title}"
 
