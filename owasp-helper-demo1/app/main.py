@@ -78,6 +78,7 @@ import asyncio
 import time
 import threading
 import json
+import queue
 
 import subprocess
 import re
@@ -958,7 +959,7 @@ def cleanup_old_activity_states():
 # =========================
 
 _PROJECT_NAME_RE = re.compile(
-    r"(?:^|\b)(?:for\s+project|project\s*[:=])\s*(?:\"([^\"]+)\"|'([^']+)'|([A-Za-z0-9._-]{1,64}))\b",
+    r"(?:^|\b)(?:for\s+project|project\s*[:=])\s*(?:\"([^\"]+)\"|'([^']+)'|([^\r\n]{1,128}))",
     re.IGNORECASE,
 )
 
@@ -970,6 +971,20 @@ def _extract_project_name(text: str) -> str | None:
     if not m:
         return None
     name = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+    if not name:
+        return None
+
+    # If unquoted, trim common trailing clauses (keeps names like "Demo Project1" intact).
+    lowered = name.lower()
+    for stop in [" against ", " target ", " on ", " at ", " using ", " with ", " and "]:
+        idx = lowered.find(stop)
+        if idx != -1:
+            name = name[:idx].strip()
+            break
+
+    name = name.strip().strip("\"' ").rstrip(".,;:")
+    if len(name) > 64:
+        name = name[:64].rstrip()
     return name or None
 
 
@@ -1314,9 +1329,17 @@ def load_chats_from_file():
     global chats_store
     if os.path.exists(CHATS_FILE):
         try:
-            with open(CHATS_FILE, 'r', encoding='utf-8') as f:
-                chats_store = json.load(f)
+            # If the file is empty/whitespace, treat it as no saved chats.
+            if os.path.getsize(CHATS_FILE) == 0:
+                chats_store = {}
+            else:
+                raw = Path(CHATS_FILE).read_text(encoding="utf-8").strip()
+                if not raw:
+                    chats_store = {}
+                else:
+                    chats_store = json.loads(raw)
         except Exception as e:
+            # Corrupted chat file; reset to defaults.
             print(f"Error loading chats: {e}")
             chats_store = {}
     
@@ -3390,8 +3413,12 @@ class ChatSaveRequest(BaseModel):
     messages: list[dict]
 
 @app.post("/api/chats/{chat_id}/save")
-async def save_chat_bulk(chat_id: str, request: ChatSaveRequest):
+async def save_chat_bulk(chat_id: str, request: ChatSaveRequest | None = None):
     """Bulk save all messages for a chat (used by beforeunload)."""
+    if request is None:
+        # Some browsers/extensions can send an empty body during unload.
+        return JSONResponse({"success": True})
+
     if chat_id not in chats_store:
         chats_store[chat_id] = {
             "name": f"Chat {chat_id}",
@@ -3401,7 +3428,7 @@ async def save_chat_bulk(chat_id: str, request: ChatSaveRequest):
         }
     
     # Replace all messages
-    chats_store[chat_id]["messages"] = request.messages
+    chats_store[chat_id]["messages"] = request.messages or []
     chats_store[chat_id]["updated_at"] = datetime.now().isoformat()
     
     # Keep only last 500 messages
