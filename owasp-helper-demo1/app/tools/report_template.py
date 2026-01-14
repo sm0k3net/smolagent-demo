@@ -129,6 +129,61 @@ REPORT_TEMPLATE_HTML = '''<!DOCTYPE html>
             font-size: 1.1rem;
             font-weight: 600;
         }
+
+        /* Tools Table */
+        .tools-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid var(--neutral-200);
+            border-radius: 10px;
+            overflow: hidden;
+            background: white;
+        }
+        .tools-table thead th {
+            text-align: left;
+            font-size: 0.85rem;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            color: var(--neutral-600);
+            background: var(--neutral-50);
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--neutral-200);
+        }
+        .tools-table td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--neutral-200);
+            vertical-align: top;
+        }
+        .tools-table tr:last-child td { border-bottom: none; }
+
+        /* Artifacts collapse */
+        details.artifact-details {
+            border: 1px solid var(--neutral-200);
+            border-radius: 10px;
+            background: white;
+            overflow: hidden;
+        }
+        details.artifact-details + details.artifact-details { margin-top: 0.75rem; }
+        summary.artifact-summary {
+            cursor: pointer;
+            padding: 0.85rem 1rem;
+            font-weight: 600;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            background: var(--neutral-50);
+            border-bottom: 1px solid var(--neutral-200);
+        }
+        summary.artifact-summary::-webkit-details-marker { display: none; }
+        .artifact-summary-meta {
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: var(--neutral-500);
+            white-space: nowrap;
+        }
+        details.artifact-details .artifact-card { border: none; box-shadow: none; margin: 0; }
         
         /* Executive Summary */
         .executive-summary { 

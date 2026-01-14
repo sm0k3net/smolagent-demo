@@ -756,44 +756,66 @@ def add_finding_to_report(
         "references": references or ""
     }
 
-    # If the agent forgot to provide evidence/screenshots, try to auto-attach the latest
-    # report screenshot so the finding has at least one visual artifact.
+    # If the agent forgot to provide evidence, try to attach a TOOL OUTPUT snippet (preferred)
+    # and only attach screenshots when they are exploitation-grade.
     try:
-        has_evidence_text = bool((evidence or "").strip())
+        has_evidence_text = bool((finding.get("evidence") or "").strip())
         has_steps = bool((steps_to_reproduce or "").strip())
-        needs_screenshot = not bool(finding.get("screenshots"))
-        if needs_screenshot:
-            artifacts = list(_get_report_artifacts_list())
-            chosen = None
+        sev = (severity or "Info").strip().title()
+        tool_used_norm = (tool_used or "").strip().lower()
 
-            # Prefer exploitation screenshots when available.
-            for artifact in reversed(artifacts):
-                if artifact.get("type") == "screenshot" and artifact.get("data") and artifact.get("screenshot_type") == "exploitation":
-                    chosen = artifact
+        artifacts = list(_get_report_artifacts_list())
+
+        def _latest_tool_output_for(tool_key: str) -> dict | None:
+            key = (tool_key or "").strip().lower()
+            if not key:
+                return None
+            for a in reversed(artifacts):
+                if a.get("type") == "tool_output" and (a.get("tool_name") or "").strip().lower() == key:
+                    if a.get("data"):
+                        return a
+            return None
+
+        # Prefer tool-output evidence over screenshots for scanner-derived findings.
+        if not has_evidence_text:
+            primary_tool = ""
+            for candidate in ["sqlmap", "nikto", "nuclei", "gobuster", "whatweb", "curl", "zaproxy", "xsser"]:
+                if candidate in tool_used_norm:
+                    primary_tool = candidate
                     break
 
-            # Fallback to the latest screenshot of any type.
-            if not chosen:
-                for artifact in reversed(artifacts):
-                    if artifact.get("type") == "screenshot" and artifact.get("data"):
-                        chosen = artifact
-                        break
+            a = _latest_tool_output_for(primary_tool) if primary_tool else None
+            if a:
+                raw = str(a.get("data") or "")
+                snippet = raw[:4000]
+                if len(raw) > 4000:
+                    snippet += "\n... [truncated in finding evidence; see full artifact in Artifacts section]"
+
+                finding["evidence"] = (
+                    f"Artifact: {a.get('filename', 'tool_output')}\n"
+                    f"Tool: {a.get('tool_name', primary_tool)}\n\n"
+                    f"--- BEGIN TOOL OUTPUT SNIPPET ---\n{snippet}\n--- END TOOL OUTPUT SNIPPET ---"
+                )
+                has_evidence_text = True
+
+        # Only auto-attach exploitation screenshots for meaningful severities.
+        should_auto_attach_screenshot = sev in {"Critical", "High", "Medium"}
+        scanner_like = any(x in tool_used_norm for x in ("nikto", "nuclei", "gobuster", "whatweb"))
+        if should_auto_attach_screenshot and not scanner_like and not finding.get("screenshots"):
+            chosen = None
+            for a in reversed(artifacts):
+                if a.get("type") == "screenshot" and a.get("data") and a.get("screenshot_type") == "exploitation":
+                    chosen = a
+                    break
 
             if chosen:
                 finding.setdefault("screenshots", [])
                 finding["screenshots"].append({
                     "url": chosen.get("url", ""),
                     "data": chosen.get("data", ""),
-                    "caption": chosen.get("description", "Auto-attached screenshot"),
+                    "caption": chosen.get("description", "Exploitation evidence"),
                     "timestamp": chosen.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
-
-                # Add a short evidence hint only if the agent provided no evidence text.
-                if not has_evidence_text:
-                    finding["evidence"] = (
-                        "Auto-attached screenshot from current session artifacts. "
-                        "Provide explicit PoC output/payloads for stronger evidence."
-                    )
 
         # If steps are missing, add a lightweight placeholder to improve report readability.
         if not has_steps:
@@ -2400,7 +2422,7 @@ def generate_html_report() -> str:
         severity_counts
     )
     
-    # Build tools HTML with cards for better presentation
+    # Build tools HTML (structured table)
     all_tools = data.get("tools", set()) | session_tools
     tool_details = data.get("tool_details", {})
     
@@ -2413,16 +2435,38 @@ def generate_html_report() -> str:
         "playwright": "🎭", "wapiti": "🐺", "zaproxy": "⚡", "feroxbuster": "🦊"
     }
     
-    tools_html = ""
+    tool_purpose = {
+        "nmap": "Network discovery / service enumeration",
+        "nikto": "Web server misconfiguration / known checks",
+        "nuclei": "Template-based vulnerability scanning",
+        "sqlmap": "SQL injection detection / exploitation",
+        "gobuster": "Content discovery / directory brute force",
+        "dirb": "Content discovery",
+        "whatweb": "Web tech fingerprinting",
+        "zaproxy": "DAST baseline scan",
+        "xsser": "XSS scanning / fuzzing",
+        "curl": "HTTP validation / manual PoCs",
+        "playwright": "Browser automation / screenshots",
+        "subfinder": "Subdomain discovery",
+        "amass": "Attack surface mapping",
+        "ffuf": "Fuzzing / content discovery",
+        "hydra": "Authentication brute force",
+    }
+
+    tools_rows = ""
     for t in sorted(all_tools):
-        icon = tool_icons.get(t.lower(), "🛠️")
+        t_key = (t or "").strip().lower()
+        icon = tool_icons.get(t_key, "🛠️")
         safe_tool_name = sanitize_html(t)
-        tools_html += f'''
-        <div class="tool-card">
-            <div class="tool-icon">{icon}</div>
-            <div class="tool-name">{safe_tool_name}</div>
-        </div>
-        '''
+        safe_purpose = sanitize_html(tool_purpose.get(t_key, "Security testing tool"))
+        tools_rows += f"<tr><td>{icon} {safe_tool_name}</td><td>{safe_purpose}</td></tr>"
+
+    tools_html = f'''
+    <table class="tools-table">
+        <thead><tr><th>Tool</th><th>Purpose</th></tr></thead>
+        <tbody>{tools_rows}</tbody>
+    </table>
+    ''' if tools_rows else ""
     
     # Build recon data section
     recon_data = data.get("recon_data", {})
@@ -2645,16 +2689,58 @@ def generate_html_report() -> str:
         </div>
         '''
     
-    # Build general references
-    references_list_html = """
-        <li><a href="https://owasp.org/Top10/">OWASP Top 10 (2021)</a></li>
-        <li><a href="https://owasp.org/www-project-web-security-testing-guide/">OWASP Web Security Testing Guide (WSTG)</a></li>
-        <li><a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP Application Security Verification Standard (ASVS)</a></li>
-        <li><a href="https://owasp.org/API-Security/">OWASP API Security Top 10</a></li>
-        <li><a href="https://cwe.mitre.org/">CWE - Common Weakness Enumeration</a></li>
-        <li><a href="https://nvd.nist.gov/">NIST National Vulnerability Database</a></li>
-        <li><a href="https://www.first.org/cvss/calculator/3.1">CVSS v3.1 Calculator</a></li>
-    """
+    # Build general references (dynamic based on actual report content)
+    def _build_general_references(findings: list[dict]) -> str:
+        items: list[str] = []
+
+        # Always include methodology standards.
+        items.extend([
+            '<li><a href="https://owasp.org/www-project-web-security-testing-guide/" target="_blank">OWASP Web Security Testing Guide (WSTG)</a></li>',
+            '<li><a href="https://owasp.org/www-project-application-security-verification-standard/" target="_blank">OWASP ASVS</a></li>',
+            '<li><a href="https://www.pentest-standard.org/" target="_blank">PTES (Penetration Testing Execution Standard)</a></li>',
+            '<li><a href="https://owasp.org/Top10/" target="_blank">OWASP Top 10 (2021)</a></li>',
+            '<li><a href="https://cwe.mitre.org/" target="_blank">CWE - Common Weakness Enumeration</a></li>',
+            '<li><a href="https://nvd.nist.gov/" target="_blank">NIST National Vulnerability Database (NVD)</a></li>',
+            '<li><a href="https://www.first.org/cvss/calculator/3.1" target="_blank">CVSS v3.1 Calculator</a></li>',
+        ])
+
+        # Add OWASP categories actually used.
+        seen_owasp: set[str] = set()
+        seen_cwe: set[str] = set()
+        seen_cves: set[str] = set()
+
+        cve_re = re.compile(r"\bCVE-\d{4}-\d{4,7}\b")
+        for f in findings:
+            owasp = (f.get("owasp_category") or "").strip()
+            if owasp and owasp != "N/A" and owasp not in seen_owasp:
+                seen_owasp.add(owasp)
+                cat_id = owasp.split(":")[0] if ":" in owasp else owasp
+                if cat_id.replace("-", "").isalnum():
+                    items.append(f'<li><a href="https://owasp.org/Top10/{sanitize_html(cat_id)}/" target="_blank">OWASP Top 10 - {sanitize_html(owasp)}</a></li>')
+
+            cwe = (f.get("cwe_id") or "").strip()
+            if cwe and cwe != "N/A" and cwe not in seen_cwe:
+                cwe_num = cwe.replace("CWE-", "").replace("cwe-", "")
+                if cwe_num.isdigit():
+                    seen_cwe.add(cwe)
+                    items.append(f'<li><a href="https://cwe.mitre.org/data/definitions/{cwe_num}.html" target="_blank">{sanitize_html(cwe)}</a></li>')
+
+            refs = (f.get("references") or "") + "\n" + (f.get("evidence") or "")
+            for m in cve_re.findall(refs):
+                if m not in seen_cves:
+                    seen_cves.add(m)
+                    items.append(f'<li><a href="https://nvd.nist.gov/vuln/detail/{sanitize_html(m)}" target="_blank">{sanitize_html(m)}</a></li>')
+
+        # Deduplicate while preserving order.
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for it in items:
+            if it not in seen:
+                seen.add(it)
+                deduped.append(it)
+        return "\n".join(deduped)
+
+    references_list_html = _build_general_references(data.get("findings", []))
     
     # Build artifacts section - only include "website" screenshots and tool outputs
     # Exploitation screenshots are embedded in findings
@@ -2678,16 +2764,15 @@ def generate_html_report() -> str:
                 safe_url = sanitize_url(artifact.get("url", "N/A"))
                 # Base64 data is safe as it only contains alphanumeric and +/=
                 artifacts_html += f'''
-                <div class="artifact-card">
-                    <div class="artifact-header screenshot">
-                        <span>📸 {safe_desc}</span>
-                        <span style="font-size: 0.8rem; opacity: 0.8;">{safe_timestamp}</span>
+                <details class="artifact-details">
+                    <summary class="artifact-summary screenshot">📸 {safe_desc} <span class="artifact-summary-meta">{safe_timestamp}</span></summary>
+                    <div class="artifact-card">
+                        <div class="artifact-body">
+                            <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{safe_desc}" onclick="window.open(this.src)">
+                            <div class="artifact-meta">URL: {safe_url}</div>
+                        </div>
                     </div>
-                    <div class="artifact-body">
-                        <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{safe_desc}" onclick="window.open(this.src)">
-                        <div class="artifact-meta">URL: {safe_url}</div>
-                    </div>
-                </div>
+                </details>
                 '''
             elif artifact.get("type") == "tool_output":
                 # Truncate very long outputs in HTML, but provide download
@@ -2710,17 +2795,16 @@ def generate_html_report() -> str:
                 safe_timestamp = sanitize_html(artifact.get("timestamp", ""))
                 
                 artifacts_html += f'''
-                <div class="artifact-card">
-                    <div class="artifact-header tool-output">
-                        <span>📄 {safe_filename}</span>
-                        <span style="font-size: 0.8rem; opacity: 0.8;">{safe_tool_name}</span>
+                <details class="artifact-details">
+                    <summary class="artifact-summary tool-output">📄 {safe_filename} <span class="artifact-summary-meta">{safe_tool_name}</span></summary>
+                    <div class="artifact-card">
+                        <div class="artifact-body">
+                            <pre>{safe_display_data}</pre>
+                            <div class="artifact-meta">{safe_description} | {safe_timestamp}</div>
+                            <a class="download-btn" href="data:{mime};base64,{encoded_data}" download="{safe_filename}">📥 Download {safe_filename}</a>
+                        </div>
                     </div>
-                    <div class="artifact-body">
-                        <pre>{safe_display_data}</pre>
-                        <div class="artifact-meta">{safe_description} | {safe_timestamp}</div>
-                        <a class="download-btn" href="data:{mime};base64,{encoded_data}" download="{safe_filename}">📥 Download {safe_filename}</a>
-                    </div>
-                </div>
+                </details>
                 '''
         
         artifacts_section = f'''

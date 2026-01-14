@@ -4052,17 +4052,20 @@ async def get_project_scanners_db(project_id: str):
             
             for scan in scans:
                 total_scans += 1
+                raw_status = scan.get("status") or "pending"
+                # scanners_db.py uses 'pending_validation' - treat it as pending for UI
+                normalized_status = "pending" if raw_status in ("pending", "pending_validation") else raw_status
                 scan_summary = {
                     "scan_id": scan.get("scan_id", ""),
                     "target": scan.get("target", ""),
                     "findings_count": scan.get("findings_count", 0),
-                    "status": scan.get("status", "pending"),
+                    "status": normalized_status,
                     "timestamp": scan.get("timestamp", "")
                 }
                 scan_groups[group_name].append(scan_summary)
                 
                 # Count pending validations
-                if scan.get("status") == "pending":
+                if normalized_status == "pending":
                     pending_validations += scan.get("findings_count", 0)
         
         return JSONResponse({
@@ -27037,6 +27040,21 @@ The report should be comprehensive and professional, suitable for executive stak
                             set_current_project_id(proj_id or tid)
                         except ImportError:
                             pass
+
+                        # Enforce scanner tool usage for pentest-like tasks (ensures Scanners DB gets populated).
+                        run_prompt = prompt
+                        try:
+                            if str(task_label_value).startswith("pentest"):
+                                run_prompt += """
+
+[SCANNERS DATABASE ENFORCEMENT]
+- Do NOT run scanners via python_interpreter.
+- Use the dedicated tools: whatweb_scan, nikto_scan, gobuster_scan/dirb_scan/ffuf_scan, nuclei_scan, sqlmap_scan/sqlmap_dump, zap_baseline_scan.
+- These tools auto-store full raw outputs into the Project Dashboard → Scanners Database.
+- Only promote validated items into final report findings.
+"""
+                        except Exception:
+                            pass
                         
                         task_store[tid].status = TaskStatus.running
                         task_store[tid].started_at = datetime.now()
@@ -27052,7 +27070,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         last_tool_args = {}
                         last_tool_started_at = None
                         
-                        for event in task_agent.run(prompt, stream=True):
+                        for event in task_agent.run(run_prompt, stream=True):
                             # Check for cancellation
                             if task_store[tid].status == TaskStatus.cancelled:
                                 return
@@ -27308,6 +27326,21 @@ The report should be comprehensive and professional, suitable for executive stak
                     "chat_id": request_chat_id,
                     "task_id": request_task_id
                 }))
+
+                # Enforce scanner tool usage for pentest-like tasks (ensures Scanners DB gets populated).
+                run_prompt = captured_full_message
+                try:
+                    if getattr(captured_task_label, 'value', '').startswith("pentest"):
+                        run_prompt += """
+
+[SCANNERS DATABASE ENFORCEMENT]
+- Do NOT run scanners via python_interpreter.
+- Use the dedicated tools: whatweb_scan, nikto_scan, gobuster_scan/dirb_scan/ffuf_scan, nuclei_scan, sqlmap_scan/sqlmap_dump, zap_baseline_scan.
+- These tools auto-store full raw outputs into the Project Dashboard → Scanners Database.
+- Only promote validated items into final report findings.
+"""
+                except Exception:
+                    pass
                 
                 # Queue for thread-safe communication between agent thread and async handler
                 event_queue = queue.Queue()
@@ -27355,7 +27388,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         last_tool_name = ""  # Track last tool for result categorization
                         last_tool_args = {}  # Track last tool args for persistence
                         
-                        for event in task_agent.run(captured_full_message, stream=True):
+                        for event in task_agent.run(run_prompt, stream=True):
                             # Check for cancellation via active_sessions
                             if active_sessions.get(request_task_id):
                                 # Clean up and exit
