@@ -755,6 +755,42 @@ def add_finding_to_report(
         "command_used": command_used or "",
         "references": references or ""
     }
+
+    # If the agent forgot to provide evidence/screenshots, try to auto-attach the latest
+    # report screenshot so the finding has at least one visual artifact.
+    try:
+        has_evidence_text = bool((evidence or "").strip())
+        has_steps = bool((steps_to_reproduce or "").strip())
+        if not has_evidence_text:
+            artifacts = _get_report_artifacts_list()
+            latest_screenshot = None
+            for artifact in reversed(list(artifacts)):
+                if artifact.get("type") == "screenshot" and artifact.get("data"):
+                    latest_screenshot = artifact
+                    break
+            if latest_screenshot:
+                finding.setdefault("screenshots", [])
+                finding["screenshots"].append({
+                    "url": latest_screenshot.get("url", ""),
+                    "data": latest_screenshot.get("data", ""),
+                    "caption": latest_screenshot.get("description", "Auto-attached screenshot"),
+                    "timestamp": latest_screenshot.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                # Add a short evidence hint so reviewers know why a screenshot appears.
+                finding["evidence"] = (
+                    "Auto-attached screenshot from current session artifacts. "
+                    "Provide explicit PoC output/payloads for stronger evidence."
+                )
+
+        # If steps are missing, add a lightweight placeholder to improve report readability.
+        if not has_steps:
+            finding["steps_to_reproduce"] = (
+                "1. Navigate to the affected component\n"
+                "2. Perform the described action/input\n"
+                "3. Observe the behavior described in Evidence"
+            )
+    except Exception:
+        pass
     
     _CURRENT_REPORT_DATA["findings"].append(finding)
     
@@ -4084,7 +4120,40 @@ def ensure_project(name: str, description: str = "", color: str = "#22c55e") -> 
 
     Returns: A confirmation message containing the project ID.
     """
+    try:
+        project_id, created = ensure_project_id(
+            name=name,
+            description=description,
+            color=color,
+            add_current_task=True,
+        )
+        if created:
+            return f"✅ Project '{name}' created (ID: {project_id})."
+        return f"✅ Project '{name}' exists (ID: {project_id})."
+    except Exception as e:
+        # Fallback to older behavior if something unexpected happens
+        try:
+            return create_project(name=name, description=description, color=color, add_current_task=True)
+        except Exception:
+            return f"❌ Failed to ensure project '{name}': {e}"
+
+
+def ensure_project_id(
+    name: str,
+    description: str = "",
+    color: str = "#22c55e",
+    add_current_task: bool = True,
+) -> tuple[str, bool]:
+    """Ensure a project exists and return its project_id.
+
+    This is a non-tool helper intended for server-side enforcement (e.g., when the
+    user says "for project X" but the agent forgets to call ensure_project()).
+
+    Returns:
+        (project_id, created)
+    """
     import json
+    import uuid
     from pathlib import Path
 
     reports_dir = Path("data/reports")
@@ -4093,38 +4162,58 @@ def ensure_project(name: str, description: str = "", color: str = "#22c55e") -> 
 
     if index_file.exists():
         try:
-            index = json.loads(index_file.read_text())
+            index = json.loads(index_file.read_text(encoding="utf-8"))
         except Exception:
             index = {"reports": [], "tasks": {}, "projects": {}}
     else:
         index = {"reports": [], "tasks": {}, "projects": {}}
 
+    current_task_id = _CURRENT_TASK_ID.get()
+
+    # Find existing (case-insensitive exact match)
     for pid, proj in index.get("projects", {}).items():
         if proj.get("name", "").lower() == name.lower():
-            # Associate current task to the existing project when possible
-            try:
-                _CURRENT_PROJECT_ID.set(pid)
-                current_task_id = _CURRENT_TASK_ID.get()
-                if current_task_id:
-                    proj.setdefault("tasks", [])
-                    if current_task_id not in proj["tasks"]:
-                        proj["tasks"].append(current_task_id)
-                        # Also stamp task -> project mapping
-                        index.setdefault("tasks", {}).setdefault(current_task_id, {
-                            "prompt": "Current task",
-                            "label": "general",
-                            "created_at": datetime.now().isoformat(),
-                            "project_id": pid,
-                            "reports": []
-                        })
-                        index["tasks"][current_task_id]["project_id"] = pid
-                        index_file.write_text(json.dumps(index, indent=2))
-            except Exception:
-                pass
-            return f"✅ Project '{name}' exists (ID: {pid})."
+            _CURRENT_PROJECT_ID.set(pid)
+            if add_current_task and current_task_id:
+                proj.setdefault("tasks", [])
+                if current_task_id not in proj["tasks"]:
+                    proj["tasks"].append(current_task_id)
+                index.setdefault("tasks", {}).setdefault(current_task_id, {
+                    "prompt": "Current task",
+                    "label": "general",
+                    "created_at": datetime.now().isoformat(),
+                    "project_id": pid,
+                    "reports": [],
+                })
+                index["tasks"][current_task_id]["project_id"] = pid
+                index_file.write_text(json.dumps(index, indent=2), encoding="utf-8")
+            return pid, False
 
-    # Not found: create and associate
-    return create_project(name=name, description=description, color=color, add_current_task=True)
+    # Create new
+    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+    index.setdefault("projects", {})[project_id] = {
+        "id": project_id,
+        "name": name,
+        "description": description,
+        "color": color,
+        "created_at": datetime.now().isoformat(),
+        "tasks": [],
+    }
+    _CURRENT_PROJECT_ID.set(project_id)
+
+    if add_current_task and current_task_id:
+        index["projects"][project_id]["tasks"].append(current_task_id)
+        index.setdefault("tasks", {}).setdefault(current_task_id, {
+            "prompt": "Current task",
+            "label": "general",
+            "created_at": datetime.now().isoformat(),
+            "project_id": project_id,
+            "reports": [],
+        })
+        index["tasks"][current_task_id]["project_id"] = project_id
+
+    index_file.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    return project_id, True
 
 
 def set_current_task_id(task_id: str, project_id: str = None):

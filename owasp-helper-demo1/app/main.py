@@ -12,10 +12,51 @@ from pydantic import BaseModel
 from enum import Enum
 from app.agents.owasp_agent import build_owasp_agent, build_model
 from app.tools.report_tools import (
-    enable_report_mode, disable_report_mode, get_report_status,
-    generate_html_report, generate_markdown_report,
-    is_report_mode_enabled, get_report_data, add_recon_data,
-    track_tool_usage, get_session_tools, set_current_task_id
+    enable_report_mode,
+    disable_report_mode,
+    get_report_status,
+    add_finding_to_report,
+    add_scope_item,
+    set_executive_summary,
+    set_conclusion,
+    add_screenshot_to_report,
+    add_screenshot_to_finding,
+    add_tool_output_to_report,
+    generate_html_report,
+    generate_markdown_report,
+    generate_pdf_report,
+    import_zap_alerts_to_findings,
+    import_nikto_findings,
+    add_recon_data,
+    add_bulk_scope,
+    get_recon_summary,
+    add_dns_record,
+    add_service_discovery,
+    add_technology_stack,
+    add_network_topology,
+    record_tool_used,
+    get_note_content,
+    list_available_notes,
+    insert_note_content_to_report,
+    create_note,
+    update_note,
+    create_note_folder,
+    create_project,
+    add_task_to_project,
+    list_projects,
+    save_pentest_session,
+    restore_pentest_session,
+    modify_finding,
+    remove_finding,
+    list_current_findings,
+    update_executive_summary,
+    update_conclusion,
+    is_report_mode_enabled,
+    get_report_data,
+    track_tool_usage,
+    get_session_tools,
+    set_current_task_id,
+    ensure_project_id,
 )
 # VectorDB-based semantic memory
 from app.tools.memory_tools import (
@@ -34,18 +75,18 @@ from app.config import (
     PROVIDER_CONFIGS
 )
 import asyncio
-import json
-import base64
-import queue
-import threading
-import uuid
 import time
+
 import subprocess
 import re
+
+
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Literal, List
 import socket
+
+
 
 # Database storage support (optional)
 try:
@@ -54,6 +95,8 @@ try:
     from psycopg2.extras import RealDictCursor
     HAS_PSYCOPG2 = True
 except ImportError:
+
+
     HAS_PSYCOPG2 = False
     psycopg2 = None
     # Try to install psycopg2-binary automatically
@@ -66,6 +109,8 @@ except ImportError:
         from psycopg2 import sql
         from psycopg2.extras import RealDictCursor
         HAS_PSYCOPG2 = True
+
+
         print("[Database] psycopg2-binary installed successfully!")
     except Exception as install_error:
         print(f"[Database] Could not auto-install psycopg2-binary: {install_error}")
@@ -904,9 +949,57 @@ def cleanup_old_activity_states():
         
         for task_id in tasks_to_remove:
             del activity_state_store[task_id]
-        
-        if tasks_to_remove:
-            print(f"[ActivityState] Cleaned up {len(tasks_to_remove)} old activity states")
+
+
+# =========================
+# Prompt Parsing + Debug Log
+# =========================
+
+_PROJECT_NAME_RE = re.compile(
+    r"(?:^|\b)(?:for\s+project|project\s*[:=])\s*(?:\"([^\"]+)\"|'([^']+)'|([A-Za-z0-9._-]{1,64}))\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_project_name(text: str) -> str | None:
+    if not text:
+        return None
+    m = _PROJECT_NAME_RE.search(text)
+    if not m:
+        return None
+    name = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+    return name or None
+
+
+def _extract_target(text: str) -> str | None:
+    if not text:
+        return None
+    # Prefer explicit URLs
+    m = re.search(r"https?://[^\s)\]]+", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(0).strip()
+    # Fallback: domain-ish token
+    m = re.search(r"\b([A-Za-z0-9.-]+\.[A-Za-z]{2,})(/[^\s]*)?\b", text)
+    if m:
+        return (m.group(0) or "").strip()
+    return None
+
+
+def _write_task_debug_log(task_id: str, event: dict) -> None:
+    """Append a JSONL debug entry for a task.
+
+    Stored at: data/logs/agent_runs/<task_id>.jsonl
+    """
+    try:
+        import json as _json
+        log_dir = Path("data/logs/agent_runs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{task_id}.jsonl"
+        payload = {"task_id": task_id, "ts": time.time(), **(event or {})}
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
 
 
 def cleanup_old_task_store():
@@ -26868,6 +26961,21 @@ The report should be comprehensive and professional, suitable for executive stak
                     try:
                         # Set current task/project ID for report tools
                         set_current_task_id(tid, proj_id)
+
+                        # If user specified a project name but no project_id was passed, enforce creation/selection.
+                        if not proj_id:
+                            project_name = _extract_project_name(prompt)
+                            if project_name:
+                                set_current_task_id(tid)
+                                proj_id, created = ensure_project_id(project_name, add_current_task=True)
+                                set_current_task_id(tid, proj_id)
+                                _write_task_debug_log(tid, {
+                                    "event": "project_resolved",
+                                    "mode": "background",
+                                    "project_name": project_name,
+                                    "project_id": proj_id,
+                                    "created": bool(created),
+                                })
                         
                         # Set current project ID for Scanners Database auto-storage
                         try:
@@ -26901,6 +27009,14 @@ The report should be comprehensive and professional, suitable for executive stak
                                     tool_count += 1
                                     if hasattr(tc, 'name'):
                                         all_outputs.append(f"🔧 Tool: {tc.name}")
+                                        _write_task_debug_log(tid, {
+                                            "event": "tool_call",
+                                            "mode": "background",
+                                            "tool_name": getattr(tc, 'name', None),
+                                            "tool_args_preview": str(getattr(tc, 'arguments', None))[:2000],
+                                            "tool_count": tool_count,
+                                            "step_count": step_count,
+                                        })
                             
                             # Collect tool results - preserve full base64 image data
                             if hasattr(event, 'tool_result') and event.tool_result:
@@ -26910,6 +27026,15 @@ The report should be comprehensive and professional, suitable for executive stak
                                     all_outputs.append(f"📤 Result: {result_str}")
                                 else:
                                     all_outputs.append(f"📤 Result: {result_str[:2000]}")
+
+                                _write_task_debug_log(tid, {
+                                    "event": "tool_result",
+                                    "mode": "background",
+                                    "result_len": len(result_str),
+                                    "result_preview": result_str[:2000],
+                                    "tool_count": tool_count,
+                                    "step_count": step_count,
+                                })
                             
                             # Collect final output
                             if hasattr(event, 'output') and event.output is not None:
@@ -26937,11 +27062,24 @@ The report should be comprehensive and professional, suitable for executive stak
                         task_store[tid].status = TaskStatus.completed
                         task_store[tid].completed_at = datetime.now()
                         task_store[tid].result = "\\n\\n".join(result_parts) if result_parts else "Task completed successfully"
+
+                        _write_task_debug_log(tid, {
+                            "event": "complete",
+                            "mode": "background",
+                            "tool_count": tool_count,
+                            "step_count": step_count,
+                        })
                         
                     except Exception as e:
                         task_store[tid].status = TaskStatus.failed
                         task_store[tid].error = str(e)
                         task_store[tid].completed_at = datetime.now()
+
+                        _write_task_debug_log(tid, {
+                            "event": "error",
+                            "mode": "background",
+                            "error": str(e),
+                        })
                 
                 # Pass task_id and prompt as arguments to prevent closure issues
                 threading.Thread(target=run_background_task, args=(task_id, full_message, project_id), daemon=True).start()
@@ -26972,14 +27110,49 @@ The report should be comprehensive and professional, suitable for executive stak
                 # Use captured variables for this request
                 request_chat_id = captured_chat_id
                 request_task_id = captured_task_id
-                
+
+                # Resolve project association from prompt if present.
+                resolved_project_id = project_id
+                project_name = _extract_project_name(captured_msg_content) or _extract_project_name(captured_full_message)
+                if project_name:
+                    # Bind task id first so project association can include this task.
+                    set_current_task_id(request_task_id)
+                    resolved_project_id, created = ensure_project_id(project_name, add_current_task=True)
+                    _write_task_debug_log(request_task_id, {
+                        "event": "project_resolved",
+                        "mode": "realtime",
+                        "project_name": project_name,
+                        "project_id": resolved_project_id,
+                        "created": bool(created),
+                    })
+
                 # Set current task ID for report tools to use
-                set_current_task_id(request_task_id, project_id)
-                
+                set_current_task_id(request_task_id, resolved_project_id)
+
+                # For pentest-like tasks (or when a project is specified), enable report mode proactively.
+                should_enable_report = bool(project_name) or captured_report_mode or getattr(captured_task_label, 'value', '').startswith("pentest")
+                if should_enable_report:
+                    try:
+                        target = _extract_target(captured_msg_content) or _extract_target(captured_full_message) or ""
+                        report_title = project_name or (f"Pentest - {target}" if target else "Pentest Report")
+                        enable_report_mode(title=report_title, target=target or "(target not parsed)")
+                        _write_task_debug_log(request_task_id, {
+                            "event": "report_mode_enabled",
+                            "mode": "realtime",
+                            "title": report_title,
+                            "target": target,
+                        })
+                    except Exception as e:
+                        _write_task_debug_log(request_task_id, {
+                            "event": "report_mode_enable_failed",
+                            "mode": "realtime",
+                            "error": str(e),
+                        })
+
                 # Set current project ID for Scanners Database auto-storage
                 try:
                     from app.tools.pentest_tools import set_current_project_id
-                    set_current_project_id(project_id or request_task_id)
+                    set_current_project_id(resolved_project_id or request_task_id)
                 except ImportError:
                     pass
                 
@@ -27071,12 +27244,21 @@ The report should be comprehensive and professional, suitable for executive stak
                     """Run agent in thread and put events in queue."""
                     try:
                         # Initialize context for this thread
-                        set_current_task_id(request_task_id)
+                        set_current_task_id(request_task_id, resolved_project_id)
+
+                        _write_task_debug_log(request_task_id, {
+                            "event": "agent_thread_start",
+                            "mode": "realtime",
+                            "project_id": resolved_project_id,
+                            "project_name": project_name,
+                            "task_label": getattr(captured_task_label, 'value', str(captured_task_label)),
+                            "target_type": captured_target_type,
+                        })
                         
                         # Set project ID for this thread
                         try:
                             from app.tools.pentest_tools import set_current_project_id
-                            set_current_project_id(project_id or request_task_id)
+                            set_current_project_id(resolved_project_id or request_task_id)
                         except ImportError:
                             pass
                         
@@ -27124,6 +27306,15 @@ The report should be comprehensive and professional, suitable for executive stak
                                     last_tool_name = tool_name  # Remember for result categorization
                                     tool_args = getattr(tool_call, 'arguments', {})
                                     last_tool_args = tool_args
+
+                                    _write_task_debug_log(request_task_id, {
+                                        "event": "tool_call",
+                                        "mode": "realtime",
+                                        "tool_name": tool_name,
+                                        "tool_args_preview": str(tool_args)[:2000],
+                                        "tool_count": tool_count,
+                                        "step_count": step_count,
+                                    })
                                     
                                     # Save tool call step to persistence
                                     task_persistence.add_step(request_task_id, TaskStep(
@@ -27203,11 +27394,26 @@ The report should be comprehensive and professional, suitable for executive stak
                             if hasattr(event, 'observations') and event.observations:
                                 obs = str(event.observations)[:200]
                                 full_obs = str(event.observations)
+
+                                duration_ms = (time.time() - step_start_time) * 1000
+                                is_screenshot = ('SCREENSHOT_IMAGE_DATA:' in full_obs) or ('base64,' in full_obs)
+
+                                _write_task_debug_log(request_task_id, {
+                                    "event": "tool_result",
+                                    "mode": "realtime",
+                                    "tool_name": last_tool_name,
+                                    "tool_args_preview": str(last_tool_args)[:2000],
+                                    "result_len": len(full_obs),
+                                    "result_preview": full_obs[:2000],
+                                    "is_screenshot": bool(is_screenshot),
+                                    "duration_ms": duration_ms,
+                                    "tool_count": tool_count,
+                                    "step_count": step_count,
+                                })
                                 
                                 # Auto-capture tool output to artifacts if report mode enabled
                                 try:
                                     from app.tools.report_tools import auto_capture_tool_output
-                                    duration_ms = (time.time() - step_start_time) * 1000
                                     auto_capture_tool_output(last_tool_name, last_tool_args, full_obs, duration_ms)
                                 except Exception:
                                     pass  # Don't fail on capture errors
@@ -27237,6 +27443,14 @@ The report should be comprehensive and professional, suitable for executive stak
                             # Check for planning steps
                             if hasattr(event, 'plan') and event.plan:
                                 plan = str(event.plan)[:300]
+
+                                _write_task_debug_log(request_task_id, {
+                                    "event": "plan",
+                                    "mode": "realtime",
+                                    "plan_preview": plan,
+                                    "step_count": step_count,
+                                    "tool_count": tool_count,
+                                })
                                 
                                 # Save thought/planning step to persistence
                                 task_persistence.add_step(request_task_id, TaskStep(
@@ -27278,6 +27492,13 @@ The report should be comprehensive and professional, suitable for executive stak
                         )
                         
                         # Signal completion
+                        _write_task_debug_log(request_task_id, {
+                            "event": "complete",
+                            "mode": "realtime",
+                            "tool_count": tool_count,
+                            "step_count": step_count,
+                            "duration_ms": int((time.time() - start_time) * 1000),
+                        })
                         event_queue.put({
                             "type": "complete",
                             "result": final_result if final_result else "Task completed",
@@ -27303,6 +27524,12 @@ The report should be comprehensive and professional, suitable for executive stak
                         
                     except Exception as e:
                         error_msg = str(e)
+
+                        _write_task_debug_log(request_task_id, {
+                            "event": "error",
+                            "mode": "realtime",
+                            "error": error_msg,
+                        })
                         
                         # Detect context overflow / JSON parsing errors
                         if "Expecting value" in error_msg or "JSONDecodeError" in error_msg:
