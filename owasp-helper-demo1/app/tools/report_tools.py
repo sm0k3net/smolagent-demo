@@ -848,13 +848,39 @@ def add_finding_to_report(
     try:
         from .pendoc_tool import (
             get_pendoc_config,
+            pendoc_add_vulnerability_comment,
             pendoc_create_file,
+            pendoc_create_folder,
             pendoc_create_vulnerability,
         )
 
         cfg, cfg_err = get_pendoc_config()
         if cfg and cfg.enabled and cfg.auto_submit and (cfg.project_id or "").strip():
             project_id = cfg.project_id.strip()
+
+            # Maintain per-report PenDoc state to dedupe uploads.
+            pendoc_state = _CURRENT_REPORT_DATA.get("pendoc_state")
+            if not isinstance(pendoc_state, dict):
+                pendoc_state = {}
+                _CURRENT_REPORT_DATA["pendoc_state"] = pendoc_state
+
+            uploaded_files = pendoc_state.get("uploaded_files")
+            if not isinstance(uploaded_files, dict):
+                uploaded_files = {}
+                pendoc_state["uploaded_files"] = uploaded_files
+
+            session_folder_id = (cfg.folder_id or "").strip() or pendoc_state.get("folder_id")
+            if not session_folder_id:
+                try:
+                    from datetime import datetime
+
+                    folder_name = f"Scan Artifacts - {_CURRENT_REPORT_DATA.get('title','Report')[:60]} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                    ok_folder, _, folder = pendoc_create_folder(cfg, project_id=project_id, name=folder_name)
+                    if ok_folder and isinstance(folder, dict) and folder.get("id"):
+                        session_folder_id = str(folder.get("id"))
+                        pendoc_state["folder_id"] = session_folder_id
+                except Exception:
+                    session_folder_id = None
 
             def _norm_sev(s: str) -> str:
                 s2 = (s or "info").strip().lower()
@@ -887,6 +913,34 @@ def add_finding_to_report(
 
             sev = _norm_sev(finding.get("severity", "info"))
 
+            def _guess_pendoc_owasp_category() -> str:
+                # PenDoc uses coarse categories: web/api/mobile/ai.
+                text = " ".join([
+                    (finding.get("title") or ""),
+                    (finding.get("description") or ""),
+                    (finding.get("affected_component") or ""),
+                    (finding.get("tool_used") or ""),
+                ]).lower()
+                if "/api" in text or " api " in f" {text} " or "swagger" in text:
+                    return "api"
+                if "android" in text or "ios" in text or "mobile" in text:
+                    return "mobile"
+                if "llm" in text or "prompt" in text or "ai" in text:
+                    return "ai"
+                return "web"
+
+            raw_owasp = (finding.get("owasp_category") or "").strip()
+            raw_owasp_l = raw_owasp.lower()
+            pendoc_owasp_category: str | None = None
+            pendoc_owasp_item: str | None = None
+            if raw_owasp_l in {"web", "api", "mobile", "ai"}:
+                pendoc_owasp_category = raw_owasp_l
+            elif raw_owasp and raw_owasp.upper() != "N/A":
+                pendoc_owasp_category = _guess_pendoc_owasp_category()
+                pendoc_owasp_item = raw_owasp
+            else:
+                pendoc_owasp_category = _guess_pendoc_owasp_category()
+
             # Build a rich HTML description using the local finding fields.
             evidence_text = (finding.get("evidence") or "").strip()
             steps_text = (finding.get("steps_to_reproduce") or "").strip()
@@ -915,7 +969,11 @@ def add_finding_to_report(
                             break
 
             affected = (finding.get("affected_component") or "").strip()
-            affected_assets = [affected] if affected else []
+            affected_assets: list[str] = []
+            if affected:
+                # Allow comma/newline separated assets.
+                parts = [p.strip() for p in affected.replace("\n", ",").split(",") if p.strip()]
+                affected_assets = parts[:50]
 
             detailed_html = "".join([
                 f"<h3>Description</h3><p>{(finding.get('description') or '').strip()}</p>",
@@ -927,34 +985,121 @@ def add_finding_to_report(
                 "".join(tool_snippets),
             ])
 
-            # Create an artifact note in PenDoc (best-effort).
-            file_id = None
+            # Upload scanner/tool outputs as PenDoc evidence files (deduped per report).
+            uploaded_artifact_file_ids: list[str] = []
+            try:
+                for a in artifacts:
+                    if a.get("type") != "tool_output":
+                        continue
+                    raw = str(a.get("data") or "")
+                    if not raw.strip():
+                        continue
+
+                    tool_name = (a.get("tool_name") or "tool").strip() or "tool"
+                    filename = (a.get("filename") or "").strip()
+                    key = f"tool_output:{filename or tool_name}:{a.get('timestamp') or ''}"
+
+                    existing = uploaded_files.get(key)
+                    if isinstance(existing, dict) and existing.get("id"):
+                        uploaded_artifact_file_ids.append(str(existing.get("id")))
+                        continue
+
+                    name = filename or f"Scanner Output - {tool_name}"
+                    ok_f, _, fobj = pendoc_create_file(
+                        cfg,
+                        project_id=project_id,
+                        name=name[:200],
+                        content=raw[:200000],
+                        file_type="evidence",
+                        mime_type="text/plain",
+                        folder_id=session_folder_id,
+                    )
+                    if ok_f and isinstance(fobj, dict) and fobj.get("id"):
+                        uploaded_files[key] = {"id": str(fobj.get("id")), "name": name}
+                        uploaded_artifact_file_ids.append(str(fobj.get("id")))
+            except Exception:
+                pass
+
+            # Upload screenshots attached to the finding (if present).
+            uploaded_screenshot_file_ids: list[str] = []
+            try:
+                screenshots = finding.get("screenshots")
+                if isinstance(screenshots, list):
+                    for idx, s in enumerate(screenshots[:10]):
+                        if not isinstance(s, dict):
+                            continue
+                        data = (s.get("data") or "").strip()
+                        if not data:
+                            continue
+                        caption = (s.get("caption") or s.get("description") or "Screenshot").strip()
+                        ts = (s.get("timestamp") or "").strip()
+                        key = f"screenshot:{finding.get('id')}:{idx}:{ts}"
+
+                        existing = uploaded_files.get(key)
+                        if isinstance(existing, dict) and existing.get("id"):
+                            uploaded_screenshot_file_ids.append(str(existing.get("id")))
+                            continue
+
+                        # Prefer a data URL if already present.
+                        content = data
+                        mime = "image/png"
+                        if data.startswith("data:image/"):
+                            try:
+                                mime = data.split(";", 1)[0].split(":", 1)[1]
+                            except Exception:
+                                mime = "image/png"
+                        else:
+                            content = f"data:image/png;base64,{data}"
+
+                        name = f"Screenshot - {finding.get('title','Finding')[:80]} - {idx+1}.png"
+                        ok_f, _, fobj = pendoc_create_file(
+                            cfg,
+                            project_id=project_id,
+                            name=name[:200],
+                            content=content,
+                            file_type="evidence",
+                            mime_type=mime,
+                            folder_id=session_folder_id,
+                        )
+                        if ok_f and isinstance(fobj, dict) and fobj.get("id"):
+                            uploaded_files[key] = {"id": str(fobj.get("id")), "name": name, "caption": caption}
+                            uploaded_screenshot_file_ids.append(str(fobj.get("id")))
+            except Exception:
+                pass
+
+            # Create a per-finding evidence summary file.
+            evidence_summary_file_id: str | None = None
             try:
                 md = (
                     f"# Evidence: {finding.get('title','Finding')}\n\n"
                     f"**Severity:** {finding.get('severity','')}\n\n"
+                    f"## Affected Assets\n" + "\n".join([f"- {x}" for x in (affected_assets or ['N/A'])]) + "\n\n"
                     f"## Description\n{(finding.get('description') or '').strip()}\n\n"
                     f"## Impact\n{(finding.get('impact') or '').strip()}\n\n"
-                    f"## Affected Component\n{affected or 'N/A'}\n\n"
                     f"## Evidence\n```\n{evidence_text or 'N/A'}\n```\n\n"
                     f"## Steps to Reproduce\n```\n{steps_text or 'N/A'}\n```\n\n"
                     f"## Command\n```\n{(finding.get('command_used') or '').strip() or 'N/A'}\n```\n\n"
-                    f"## References\n```\n{refs_text or 'N/A'}\n```\n"
+                    f"## References\n```\n{refs_text or 'N/A'}\n```\n\n"
+                    f"## Uploaded Artifact File IDs\n" + "\n".join([f"- {x}" for x in uploaded_artifact_file_ids]) + "\n\n"
+                    f"## Uploaded Screenshot File IDs\n" + "\n".join([f"- {x}" for x in uploaded_screenshot_file_ids]) + "\n"
                 )
-                ok_f, _, fdata = pendoc_create_file(
+                ok_f, _, fobj = pendoc_create_file(
                     cfg,
                     project_id=project_id,
-                    name=f"Evidence - {finding.get('title','Finding')}"[:120],
-                    content=md[:50000],
-                    file_type="note",
-                    folder_id=cfg.folder_id,
+                    name=f"Evidence Summary - {finding.get('title','Finding')}"[:120],
+                    content=md[:200000],
+                    file_type="evidence",
+                    mime_type="text/markdown",
+                    folder_id=session_folder_id,
                 )
-                if ok_f and isinstance(fdata, dict):
-                    file_id = fdata.get("id")
+                if ok_f and isinstance(fobj, dict) and fobj.get("id"):
+                    evidence_summary_file_id = str(fobj.get("id"))
             except Exception:
-                file_id = None
+                evidence_summary_file_id = None
 
             cvss_val = _as_float(str(finding.get("cvss_score") or "").strip())
+            if cvss_val is not None and not (0.0 <= cvss_val <= 10.0):
+                cvss_val = None
             payload = {
                 "project_id": project_id,
                 "title": finding.get("title") or "Untitled Finding",
@@ -962,25 +1107,59 @@ def add_finding_to_report(
                 "severity": sev,
                 "likelihood": _likelihood_from_sev(sev),
                 "cvss_score": cvss_val,
-                "owasp_category": (finding.get("owasp_category") or "").strip() or None,
+                "owasp_category": pendoc_owasp_category,
+                "owasp_item": pendoc_owasp_item,
                 "tool": (finding.get("tool_used") or "").strip() or None,
                 "affected_assets": affected_assets,
                 "execution_command": (finding.get("command_used") or "").strip() or None,
-                "detailed_description": detailed_html + (f"<p><strong>Related File ID:</strong> {file_id}</p>" if file_id else ""),
+                "detailed_description": detailed_html + "".join([
+                    "<h3>PenDoc Evidence</h3>",
+                    (f"<p><strong>Evidence Summary File ID:</strong> {evidence_summary_file_id}</p>" if evidence_summary_file_id else ""),
+                    ("<p><strong>Artifact File IDs:</strong> " + ", ".join(uploaded_artifact_file_ids) + "</p>" if uploaded_artifact_file_ids else ""),
+                    ("<p><strong>Screenshot File IDs:</strong> " + ", ".join(uploaded_screenshot_file_ids) + "</p>" if uploaded_screenshot_file_ids else ""),
+                ]),
                 "remediation": (finding.get("remediation") or "").strip() or None,
+                "status": "open",
             }
 
             # Drop null/empty optional fields to match stricter API validators.
             payload = {k: v for k, v in payload.items() if v not in (None, "")}
 
             ok_v, msg_v, vdata = pendoc_create_vulnerability(cfg, payload)
+
+            # Add a comment linking evidence file IDs (best-effort).
+            comment_obj = None
+            try:
+                if ok_v and isinstance(vdata, dict) and vdata.get("id"):
+                    ids = []
+                    if evidence_summary_file_id:
+                        ids.append(f"Evidence Summary: {evidence_summary_file_id}")
+                    if uploaded_artifact_file_ids:
+                        ids.append("Artifacts: " + ", ".join(uploaded_artifact_file_ids))
+                    if uploaded_screenshot_file_ids:
+                        ids.append("Screenshots: " + ", ".join(uploaded_screenshot_file_ids))
+                    if ids:
+                        ok_c, _, cobj = pendoc_add_vulnerability_comment(
+                            cfg,
+                            vulnerability_id=str(vdata.get("id")),
+                            content="PenDoc evidence uploaded by smolagent:\n" + "\n".join(ids),
+                            comment_type="annotation",
+                        )
+                        if ok_c and isinstance(cobj, dict):
+                            comment_obj = cobj
+            except Exception:
+                comment_obj = None
+
             finding.setdefault("external_submissions", {})
             finding["external_submissions"]["pendoc"] = {
                 "success": bool(ok_v),
                 "message": msg_v,
                 "project_id": project_id,
                 "vulnerability": vdata if isinstance(vdata, dict) else None,
-                "file_id": file_id,
+                "evidence_summary_file_id": evidence_summary_file_id,
+                "artifact_file_ids": uploaded_artifact_file_ids,
+                "screenshot_file_ids": uploaded_screenshot_file_ids,
+                "comment": comment_obj,
             }
         elif cfg_err:
             # Only log configuration errors to avoid noisy output.
