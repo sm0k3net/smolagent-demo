@@ -211,13 +211,19 @@ def browse_page(url: str, wait_for: str | None = None, timeout: int = 30000) -> 
 
 
 @tool
-def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/screenshots") -> str:
+def take_screenshot(
+    url: str,
+    full_page: bool = False,
+    output_dir: str = "/tmp/screenshots",
+    screenshot_type: str = "website",
+) -> str:
     """Take a screenshot of a webpage and return the image data. Auto-installs Playwright if needed.
 
     Args:
         url: The URL to screenshot.
         full_page: Whether to capture the full scrollable page (default False).
         output_dir: Directory to save screenshots (default /tmp/screenshots).
+        screenshot_type: Screenshot type stored in the report when report mode is enabled (website|exploitation).
     Returns: Screenshot information including base64 data for display and file path.
     """
     # Use auto-install version to ensure Playwright and browser are ready
@@ -271,7 +277,12 @@ def take_screenshot(url: str, full_page: bool = False, output_dir: str = "/tmp/s
                 from app.tools.report_tools import _REPORT_MODE_ENABLED, _add_screenshot_to_report_internal
                 if _REPORT_MODE_ENABLED.get():
                     description = f"Screenshot: {title}" if title else f"Screenshot of {url}"
-                    _add_screenshot_to_report_internal(url=url, base64_data=base64_data, description=description)
+                    _add_screenshot_to_report_internal(
+                        url=url,
+                        base64_data=base64_data,
+                        description=description,
+                        screenshot_type=screenshot_type or "website",
+                    )
             except:
                 pass  # Continue even if report integration fails
             

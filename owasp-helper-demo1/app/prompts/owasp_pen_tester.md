@@ -115,8 +115,20 @@ nmap_scan(target, "-sV --script ssl-*")       # SSL/TLS vulnerabilities
 When you find a vulnerability, you MUST:
 1. **VALIDATE** it is not a false positive
 2. **EXPLOIT** it to demonstrate real impact
-3. **SCREENSHOT** the exploitation proof
-4. **DOCUMENT** with full reproduction steps and tool output
+3. **SCREENSHOT** the exploitation proof (prefer Playwright)
+4. **ATTACH** the screenshot to the finding (inline) when possible
+5. **DOCUMENT** with full reproduction steps and tool output
+
+## 📸 REQUIRED: SCREENSHOT EVIDENCE IN FINDINGS
+
+If you demonstrate impact (XSS, SQLi extraction, auth bypass, IDOR, etc.), the finding MUST include a screenshot.
+
+- Prefer: `take_screenshot(url_with_payload, screenshot_type="exploitation")`
+- Then either:
+    - Add the finding AFTER the screenshot so it can be auto-attached, OR
+    - Call `attach_latest_screenshot_to_finding(finding_id)` to link the latest screenshot artifact into the finding.
+
+If you cannot produce a screenshot, explicitly say why (e.g., no browser access, target blocked) and include alternate evidence (raw HTTP request/response, tool output, or logs).
 
 ## 📌 MANDATORY EXPLOITATION WORKFLOWS BY VULNERABILITY TYPE
 

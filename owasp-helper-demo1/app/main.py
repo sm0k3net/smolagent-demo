@@ -26892,11 +26892,10 @@ Response: (Look at the data, find the actual task_id, then use it)
 
 [IMPORTANT - REPORT MODE IS ENABLED]
 After completing your security assessment, you MUST generate a professional report:
-1. First call enable_report_mode() with proper title and target
-2. For each vulnerability found, call add_finding_to_report() with complete details
-3. Call set_executive_summary() with a management-level overview
-4. Call set_conclusion() with prioritized recommendations
-5. Finally call generate_html_report() to produce the final HTML report
+1. Ensure findings are recorded via add_finding_to_report() with complete details
+2. Call set_executive_summary() with a management-level overview
+3. Call set_conclusion() with prioritized recommendations
+4. Finally call generate_html_report() to produce the final HTML report
 The report should be comprehensive and professional, suitable for executive stakeholders."""
             
             # Handle background task
@@ -26957,7 +26956,7 @@ The report should be comprehensive and professional, suitable for executive stak
                 }))
                 
                 # Run task in background thread with captured task_id and separate agent
-                def run_background_task(tid, prompt, proj_id=None):
+                def run_background_task(tid, prompt, proj_id=None, prompt_raw: str | None = None, task_label_value: str = ""):
                     try:
                         # Set current task/project ID for report tools
                         set_current_task_id(tid, proj_id)
@@ -26976,6 +26975,28 @@ The report should be comprehensive and professional, suitable for executive stak
                                     "project_id": proj_id,
                                     "created": bool(created),
                                 })
+
+                        # For pentest-like tasks (or when a project is specified), enable report mode proactively.
+                        try:
+                            project_name = _extract_project_name(prompt_raw or prompt)
+                            should_enable_report = bool(project_name) or str(task_label_value).startswith("pentest")
+                            if should_enable_report:
+                                target = _extract_target(prompt_raw or prompt) or ""
+                                report_title = project_name or (f"Pentest - {target}" if target else "Pentest Report")
+                                set_current_task_id(tid, proj_id)
+                                enable_report_mode(title=report_title, target=target or "(target not parsed)")
+                                _write_task_debug_log(tid, {
+                                    "event": "report_mode_enabled",
+                                    "mode": "background",
+                                    "title": report_title,
+                                    "target": target,
+                                })
+                        except Exception as e:
+                            _write_task_debug_log(tid, {
+                                "event": "report_mode_enable_failed",
+                                "mode": "background",
+                                "error": str(e),
+                            })
                         
                         # Set current project ID for Scanners Database auto-storage
                         try:
@@ -26994,6 +27015,9 @@ The report should be comprehensive and professional, suitable for executive stak
                         tool_count = 0
                         final_result = None
                         all_outputs = []  # Collect all meaningful outputs
+                        last_tool_name = ""
+                        last_tool_args = {}
+                        last_tool_started_at = None
                         
                         for event in task_agent.run(prompt, stream=True):
                             # Check for cancellation
@@ -27002,6 +27026,7 @@ The report should be comprehensive and professional, suitable for executive stak
                             
                             step_count += 1
                             event_type = type(event).__name__
+                            step_start_time = time.time()
                             
                             # Collect tool calls and their results
                             if hasattr(event, 'tool_calls') and event.tool_calls:
@@ -27009,6 +27034,9 @@ The report should be comprehensive and professional, suitable for executive stak
                                     tool_count += 1
                                     if hasattr(tc, 'name'):
                                         all_outputs.append(f"🔧 Tool: {tc.name}")
+                                        last_tool_name = getattr(tc, 'name', '') or ''
+                                        last_tool_args = getattr(tc, 'arguments', {}) or {}
+                                        last_tool_started_at = time.time()
                                         _write_task_debug_log(tid, {
                                             "event": "tool_call",
                                             "mode": "background",
@@ -27021,6 +27049,17 @@ The report should be comprehensive and professional, suitable for executive stak
                             # Collect tool results - preserve full base64 image data
                             if hasattr(event, 'tool_result') and event.tool_result:
                                 result_str = str(event.tool_result)
+
+                                # Auto-capture tool output to artifacts if report mode enabled
+                                try:
+                                    from app.tools.report_tools import auto_capture_tool_output
+                                    duration_ms = 0
+                                    if last_tool_started_at:
+                                        duration_ms = (time.time() - last_tool_started_at) * 1000
+                                    auto_capture_tool_output(last_tool_name, last_tool_args, result_str, duration_ms)
+                                except Exception:
+                                    pass
+
                                 # Keep full data for screenshots, truncate others
                                 if 'SCREENSHOT_IMAGE_DATA:' in result_str or 'base64,' in result_str:
                                     all_outputs.append(f"📤 Result: {result_str}")
@@ -27082,7 +27121,7 @@ The report should be comprehensive and professional, suitable for executive stak
                         })
                 
                 # Pass task_id and prompt as arguments to prevent closure issues
-                threading.Thread(target=run_background_task, args=(task_id, full_message, project_id), daemon=True).start()
+                threading.Thread(target=run_background_task, args=(task_id, full_message, project_id, msg_content, task_label.value), daemon=True).start()
                 continue  # Don't block, move to next message
             
             # Classify the task for real-time tasks too

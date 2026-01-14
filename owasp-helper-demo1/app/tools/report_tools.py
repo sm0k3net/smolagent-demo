@@ -761,26 +761,39 @@ def add_finding_to_report(
     try:
         has_evidence_text = bool((evidence or "").strip())
         has_steps = bool((steps_to_reproduce or "").strip())
-        if not has_evidence_text:
-            artifacts = _get_report_artifacts_list()
-            latest_screenshot = None
-            for artifact in reversed(list(artifacts)):
-                if artifact.get("type") == "screenshot" and artifact.get("data"):
-                    latest_screenshot = artifact
+        needs_screenshot = not bool(finding.get("screenshots"))
+        if needs_screenshot:
+            artifacts = list(_get_report_artifacts_list())
+            chosen = None
+
+            # Prefer exploitation screenshots when available.
+            for artifact in reversed(artifacts):
+                if artifact.get("type") == "screenshot" and artifact.get("data") and artifact.get("screenshot_type") == "exploitation":
+                    chosen = artifact
                     break
-            if latest_screenshot:
+
+            # Fallback to the latest screenshot of any type.
+            if not chosen:
+                for artifact in reversed(artifacts):
+                    if artifact.get("type") == "screenshot" and artifact.get("data"):
+                        chosen = artifact
+                        break
+
+            if chosen:
                 finding.setdefault("screenshots", [])
                 finding["screenshots"].append({
-                    "url": latest_screenshot.get("url", ""),
-                    "data": latest_screenshot.get("data", ""),
-                    "caption": latest_screenshot.get("description", "Auto-attached screenshot"),
-                    "timestamp": latest_screenshot.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "url": chosen.get("url", ""),
+                    "data": chosen.get("data", ""),
+                    "caption": chosen.get("description", "Auto-attached screenshot"),
+                    "timestamp": chosen.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
-                # Add a short evidence hint so reviewers know why a screenshot appears.
-                finding["evidence"] = (
-                    "Auto-attached screenshot from current session artifacts. "
-                    "Provide explicit PoC output/payloads for stronger evidence."
-                )
+
+                # Add a short evidence hint only if the agent provided no evidence text.
+                if not has_evidence_text:
+                    finding["evidence"] = (
+                        "Auto-attached screenshot from current session artifacts. "
+                        "Provide explicit PoC output/payloads for stronger evidence."
+                    )
 
         # If steps are missing, add a lightweight placeholder to improve report readability.
         if not has_steps:
@@ -1354,6 +1367,69 @@ def add_screenshot_to_finding(
             return f"✅ Screenshot attached to finding #{finding_id}: {caption}"
     
     return f"⚠️ Finding #{finding_id} not found. Available IDs: {[f.get('id') for f in findings]}"
+
+
+@tool
+def attach_latest_screenshot_to_finding(
+    finding_id: int,
+    preferred_type: str = "exploitation",
+    caption: str | None = None,
+) -> str:
+    """Attach the latest report screenshot artifact to an existing finding.
+
+    This avoids forcing the agent to parse base64 out of tool output. The screenshot must
+    already exist in report artifacts (e.g., via Playwright `take_screenshot()` when
+    report mode is enabled).
+
+    Args:
+        finding_id: The ID of the finding to attach the screenshot to.
+        preferred_type: Prefer a screenshot with this `screenshot_type` (default: exploitation).
+        caption: Optional caption override.
+    Returns: Confirmation or a warning message.
+    """
+    global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA, _REPORT_ARTIFACTS
+
+    if not _REPORT_MODE_ENABLED.get():
+        return "Report mode is not enabled. Use enable_report_mode() first."
+
+    findings = _CURRENT_REPORT_DATA.get("findings", [])
+    target_finding = None
+    for f in findings:
+        if f.get("id") == finding_id:
+            target_finding = f
+            break
+    if not target_finding:
+        return f"⚠️ Finding #{finding_id} not found. Available IDs: {[f.get('id') for f in findings]}"
+
+    artifacts = list(_REPORT_ARTIFACTS)
+    chosen = None
+
+    if preferred_type:
+        for a in reversed(artifacts):
+            if a.get("type") == "screenshot" and a.get("data") and a.get("screenshot_type") == preferred_type:
+                chosen = a
+                break
+
+    if not chosen:
+        for a in reversed(artifacts):
+            if a.get("type") == "screenshot" and a.get("data"):
+                chosen = a
+                break
+
+    if not chosen:
+        return "⚠️ No screenshot artifacts found to attach. Take a screenshot first."
+
+    if "screenshots" not in target_finding:
+        target_finding["screenshots"] = []
+
+    target_finding["screenshots"].append({
+        "url": chosen.get("url", ""),
+        "data": chosen.get("data", ""),
+        "caption": caption or chosen.get("description", "Screenshot"),
+        "timestamp": chosen.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+    return f"✅ Attached latest screenshot to finding #{finding_id}"
 
 
 @tool
