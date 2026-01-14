@@ -77,6 +77,7 @@ from app.config import (
 import asyncio
 import time
 import threading
+import json
 
 import subprocess
 import re
@@ -26087,6 +26088,9 @@ async def send_initial_state(ws: WebSocket, chat_id: str):
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
+
+    chat_id: str | None = None
+    registered_chat_id: str | None = None
     
     # We don't know the chat_id yet, so we can't register it immediately.
     # We'll register it when we receive the first message or if the client sends an init message.
@@ -26111,8 +26115,9 @@ async def ws_endpoint(ws: WebSocket):
             chat_id = msg_data.get("chat_id", "default")
             
             # Register connection for this chat_id to enable background updates
-            if chat_id:
+            if chat_id and chat_id != registered_chat_id:
                 await register_connection(chat_id, ws)
+                registered_chat_id = chat_id
                 # Restore state for any running tasks
                 await send_initial_state(ws, chat_id)
             
@@ -27782,11 +27787,13 @@ The report should be comprehensive and professional, suitable for executive stak
             
     except WebSocketDisconnect:
         # Remove this ws from active_connections using safe unregister
-        await unregister_connection(chat_id)
+        if registered_chat_id:
+            await unregister_connection(registered_chat_id)
         return
     except Exception as e:
         # Remove this ws from active_connections using safe unregister
-        await unregister_connection(chat_id)
+        if registered_chat_id:
+            await unregister_connection(registered_chat_id)
         try:
             await ws.send_text(json.dumps({"type": "final", "content": f"Error: {e}"}))
         except:
