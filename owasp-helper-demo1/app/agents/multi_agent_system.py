@@ -832,6 +832,78 @@ Track status with get_finding_status("{finding.id}")
 
 
 @tool
+def get_finding_status(finding_id: str) -> str:
+    """Get detailed status and metadata for a specific finding.
+
+    Args:
+        finding_id: Finding identifier (e.g., "FIND-ABC12345").
+
+    Returns:
+        Human-readable status/details, or not-found message.
+    """
+    ctx = get_shared_context()
+
+    finding = next((f for f in ctx.findings if f.id == finding_id), None)
+    if not finding:
+        known_ids_preview = ", ".join([f.id for f in ctx.findings[:10]])
+        suffix = f" Known IDs (first 10): {known_ids_preview}" if known_ids_preview else " No findings recorded yet."
+        return f"Finding {finding_id} not found.{suffix}"
+
+    validated_at = finding.validated_at.isoformat() if finding.validated_at else "N/A"
+    discovered_at = finding.discovered_at.isoformat() if finding.discovered_at else "N/A"
+
+    evidence_preview = finding.evidence[:800] + ("..." if len(finding.evidence) > 800 else "")
+    proof_preview = finding.exploitation_proof[:800] + ("..." if len(finding.exploitation_proof) > 800 else "")
+    command_preview = finding.command_used[:300] + ("..." if len(finding.command_used) > 300 else "")
+
+    refs = "\n".join([f"  • {r}" for r in finding.references]) if finding.references else "  (none)"
+
+    return f"""=== FINDING STATUS ===
+
+ID: {finding.id}
+Title: {finding.title}
+Severity: {finding.severity}
+Status: {finding.status.value}
+
+Affected Component: {finding.affected_component}
+OWASP: {finding.owasp_category or 'N/A'}
+CWE: {finding.cwe_id or 'N/A'}
+CVSS: {finding.cvss_score if finding.cvss_score is not None else 'N/A'}
+
+Discovered By: {finding.discovered_by}
+Discovered At: {discovered_at}
+Tool Used: {finding.tool_used or 'N/A'}
+Command Used: {command_preview or 'N/A'}
+
+Validated By: {finding.validated_by or 'N/A'}
+Validated At: {validated_at}
+Validation Notes: {finding.validation_notes or 'N/A'}
+
+Exploited: {'Yes' if finding.exploited else 'No'}
+Exploited By: {finding.exploited_by or 'N/A'}
+Exploitation Proof (preview):
+{proof_preview or 'N/A'}
+
+Evidence (preview):
+{evidence_preview or 'N/A'}
+
+Steps To Reproduce:
+{finding.steps_to_reproduce or 'N/A'}
+
+Impact:
+{finding.impact or 'N/A'}
+
+Remediation:
+{finding.remediation or 'N/A'}
+
+References:
+{refs}
+
+======================
+"""
+
+
+@tool
 def get_recon_data() -> str:
     """Get all reconnaissance data collected by the OSINT/Recon agent.
     
@@ -1089,6 +1161,32 @@ def compile_final_report() -> str:
         Confirmation and path to generated report.
     """
     ctx = get_shared_context()
+
+    # Prevent premature reporting: require QC review completion and zero pending findings.
+    if not ctx.phases_completed.get("quality_control_review"):
+        pending_count = len(ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION))
+        return (
+            "Cannot generate report: Quality Control review phase not complete. "
+            "Run dispatch_qc_agent_review() (or mark_phase_complete(\"quality_control_review\")) first. "
+            f"Pending findings: {pending_count}"
+        )
+
+    pending = ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION)
+    if pending:
+        ids = ", ".join([f.id for f in pending[:20]])
+        more = f" (+{len(pending) - 20} more)" if len(pending) > 20 else ""
+        return (
+            "Cannot generate report: there are findings still pending validation. "
+            f"Pending IDs: {ids}{more}. Use get_pending_findings() and validate_finding()."
+        )
+
+    required_phases = ["reconnaissance", "vulnerability_scanning"]
+    incomplete = [p for p in required_phases if not ctx.phases_completed.get(p)]
+    if incomplete:
+        return (
+            "Cannot generate report: required testing phases are not complete: "
+            f"{', '.join(incomplete)}. Ensure coverage before reporting."
+        )
     validated = ctx.get_validated_findings()
     
     if not validated:
@@ -1352,6 +1450,7 @@ def get_agent_tools(role: AgentRole) -> list:
     # Common context tools for all agents
     context_tools = [
         get_project_status,
+        get_finding_status,
         get_recon_data,
         get_agent_activity_log,
         save_tool_output,
@@ -1646,6 +1745,26 @@ def dispatch_reporting_agent() -> str:
     Returns:
         Report generation results.
     """
+    ctx = get_shared_context()
+
+    if not ctx.project_id:
+        return "No active project. Initialize first with initialize_pentest_project(title, target, scope)."
+
+    if not ctx.phases_completed.get("quality_control_review"):
+        return (
+            "Reporting is blocked: Quality Control review phase not complete. "
+            "Run dispatch_qc_agent_review() (or mark_phase_complete(\"quality_control_review\")) first."
+        )
+
+    pending = ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION)
+    if pending:
+        ids = ", ".join([f.id for f in pending[:20]])
+        more = f" (+{len(pending) - 20} more)" if len(pending) > 20 else ""
+        return (
+            "Reporting is blocked: findings are still pending validation. "
+            f"Pending IDs: {ids}{more}. Use get_pending_findings() and validate_finding()."
+        )
+
     task = """Compile the final penetration test report.
 
 1. Get all validated findings with get_validated_findings_for_report()

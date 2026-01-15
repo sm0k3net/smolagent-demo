@@ -4233,45 +4233,62 @@ The new hierarchical system provides a **Project Manager** orchestration model w
 #### Project Lifecycle
 ```python
 # Initialize a new pentest project with shared context
-project_id = initialize_pentest_project(
+# NOTE: The hierarchical system uses a single active shared context (no project_id parameter
+# passed to tools after initialization).
+project_info = initialize_pentest_project(
+    title="Security Assessment - Target Corp",
     target="https://target.com",
-    project_name="Security Assessment - Target Corp",
-    scope=["target.com", "*.target.com", "api.target.com"]
+    scope="target.com, *.target.com, api.target.com"
 )
 
 # Check project status at any time
-get_project_status(project_id)
+get_project_status()
 ```
 
 #### Shared Context Management
 ```python
 # Recon data - any agent can submit and retrieve
-submit_recon_data(project_id, data_type="subdomains", data=["sub1.target.com", "sub2.target.com"])
-submit_recon_data(project_id, data_type="technologies", data=["WordPress 6.0", "PHP 8.1", "nginx"])
-submit_recon_data(project_id, data_type="open_ports", data={"target.com": [80, 443, 22]})
-recon = get_recon_data(project_id, data_type="subdomains")
+submit_recon_data(data_type="subdomains", items="sub1.target.com\nsub2.target.com")
+submit_recon_data(data_type="technologies", items="WordPress 6.0\nPHP 8.1\nnginx")
+submit_recon_data(data_type="ports", items="target.com:80\ntarget.com:443\ntarget.com:22")
+recon = get_recon_data()
 
 # Findings - submit as discovered
-submit_finding(project_id, 
-    finding_type="sqli",
-    severity="high",
+submit_finding(
     title="SQL Injection in login form",
-    description="The login parameter is vulnerable to SQL injection",
-    url="https://target.com/login",
-    evidence="sqlmap output showing injectable",
-    source_agent="vuln_scanner"
+    severity="High",
+    description="The login parameter appears vulnerable to SQL injection allowing attacker-controlled SQL execution.",
+    evidence="[PASTE RAW TOOL OUTPUT OR REQUEST/RESPONSE PROOF HERE]",
+    affected_component="https://target.com/login",
+    remediation="Use parameterized queries/prepared statements and server-side input validation; add WAF rules as defense-in-depth.",
+    owasp_category="A03:2021 Injection",
+    cwe_id="CWE-89",
+    references="https://owasp.org/Top10/A03_2021-Injection/",
+    source_agent="vulnerability_scanner",
+    tool_used="sqlmap",
+    command_used="sqlmap -u https://target.com/login --data 'username=foo&password=bar' --batch",
+    steps_to_reproduce="1. Send login request with payload\n2. Observe error/time-based behavior\n3. Confirm with sqlmap",
+    impact="Possible authentication bypass and data extraction.",
+    cvss_score="9.8"
 )
 
 # Validation workflow
-pending = get_pending_findings(project_id)  # Get unvalidated findings
-validate_finding(project_id, finding_id="F-001", validated=True, notes="Confirmed exploitable")
-mark_finding_exploited(project_id, finding_id="F-001", exploit_details="Dumped admin credentials")
+pending = get_pending_findings()  # Get unvalidated findings
+
+# Approve/reject (QC)
+validate_finding(finding_id="FIND-XXXXXXXX", approved=True, notes="Confirmed exploitable")
+
+# Track a specific finding through the pipeline
+get_finding_status("FIND-XXXXXXXX")
+
+# Mark exploitation proof (Exploitation agent)
+mark_finding_exploited(finding_id="FIND-XXXXXXXX", exploitation_proof="Dumped admin credentials")
 
 # Store tool output as evidence
-save_tool_output(project_id, tool_name="sqlmap", output="full sqlmap output...", target_url="...")
+save_tool_output(tool_name="sqlmap", output="full sqlmap output...")
 
 # QC can add notes at any phase
-add_qc_note(project_id, phase="scanning", note="Missing CORS testing - add this")
+add_qc_note(note="Missing CORS testing - add this")
 ```
 
 #### Sub-Agent Dispatchers
@@ -4280,40 +4297,40 @@ add_qc_note(project_id, phase="scanning", note="Missing CORS testing - add this"
 # Each agent works within shared context automatically
 
 # Phase 1: OSINT & Reconnaissance
-dispatch_recon_agent(project_id, focus="full")  # or "passive", "subdomains", "ports"
+dispatch_recon_agent(target="https://target.com")
 
 # Phase 2: Vulnerability Scanning  
-dispatch_vuln_scanner_agent(project_id, focus="comprehensive")  # or "web", "injection"
+dispatch_vuln_scanner_agent(target="https://target.com")
 
 # Phase 3: Manual Testing (business logic, auth bypass, etc.)
-dispatch_manual_tester_agent(project_id, focus=["authentication", "authorization", "business_logic"])
+dispatch_manual_tester_agent(target="https://target.com")
 
 # Phase 4: Exploitation (validate & exploit high/critical findings)
-dispatch_exploitation_agent(project_id, target_severities=["critical", "high"])
+dispatch_exploitation_agent()
 
 # Quality Control review at any phase
-dispatch_qc_agent_review(project_id, phase="scanning")
+dispatch_qc_agent_review()
 
 # Phase 5: Report Compilation
-dispatch_reporting_agent(project_id)
+dispatch_reporting_agent()
 
 # Phase 6: Final QC Review
-dispatch_qc_final_review(project_id)
+dispatch_qc_final_review()
 ```
 
 #### Report Workflow
 ```python
 # Get validated findings ready for report
-findings = get_validated_findings_for_report(project_id)
+findings = get_validated_findings_for_report()
 
 # Compile the final report (done by reporting sub-agent)
-compile_final_report(project_id)
+compile_final_report()
 
 # QC reviews the report
-issues = review_final_report(project_id)  # Returns any issues found
+issues = review_final_report()  # Returns any issues found
 
 # Approve if no issues
-approve_final_report(project_id)
+approve_final_report()
 ```
 
 #### Full Orchestration (Automated)
@@ -4322,9 +4339,7 @@ approve_final_report(project_id)
 # This handles the entire workflow with QC at each phase
 run_full_pentest_orchestration(
     target="https://target.com",
-    project_name="Complete Security Assessment",
-    scope=["target.com", "*.target.com"],
-    comprehensive=True
+    title="Complete Security Assessment"
 )
 ```
 
