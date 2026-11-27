@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import base64
 import html as html_module
 from datetime import datetime
 from smolagents import tool
@@ -25,6 +26,18 @@ def sanitize_html(text: str) -> str:
         text = str(text)
     return html_module.escape(text)
 
+
+def _safe_png_data(value: object) -> str | None:
+    """Validate a bounded PNG before placing it in an HTML data URL."""
+    if not isinstance(value, str) or len(value) > 7_000_000:
+        return None
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (ValueError, base64.binascii.Error):
+        return None
+    if len(decoded) > 5_000_000 or not decoded.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    return base64.b64encode(decoded).decode("ascii")
 
 def sanitize_url(url: str) -> str:
     """Sanitize URL to prevent javascript: and data: XSS attacks.
@@ -305,9 +318,13 @@ def save_task_output_as_report(output: str, tool_name: str, target: str, file_ex
     
     # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    target_safe = target.replace("/", "_").replace(":", "_").replace(".", "-").replace(" ", "_")[:50]
+    target_safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(target))[:50] or "target"
+    tool_safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(tool_name))[:48] or "tool"
+    extension = str(file_ext).lower().lstrip(".")
+    if not re.fullmatch(r"[a-z0-9]{1,8}", extension):
+        extension = "txt"
     report_id = uuid.uuid4().hex[:8]
-    filename = f"{tool_name}_{target_safe}_{timestamp}_{report_id}.{file_ext}"
+    filename = f"{tool_safe}_{target_safe}_{timestamp}_{report_id}.{extension}"
     file_path = reports_dir / filename
     
     # Save the output to file
@@ -2438,9 +2455,12 @@ def _build_finding_screenshots_html(screenshots: list) -> str:
     for screenshot in screenshots:
         safe_caption = sanitize_html(screenshot.get("caption", "Screenshot"))
         safe_url = sanitize_html(screenshot.get("url", ""))
+        safe_image = _safe_png_data(screenshot.get("data"))
+        if not safe_image:
+            continue
         html += f'''
         <div class="finding-screenshot">
-            <img src="data:image/png;base64,{screenshot.get("data", "")}" alt="{safe_caption}">
+            <img src="data:image/png;base64,{safe_image}" alt="{safe_caption}">
             <div class="finding-screenshot-caption">
                 {sanitize_html(screenshot.get("caption", "Exploitation evidence"))} - {safe_url}
             </div>
@@ -2934,7 +2954,8 @@ def generate_html_report() -> str:
     # Build findings HTML with improved structure
     findings_html = ""
     for f in sorted(data.get("findings", []), key=lambda x: ["Critical", "High", "Medium", "Low", "Info"].index(x.get("severity", "Info"))):
-        sev_class = f.get("severity", "Info").lower()
+        severity_value = f.get("severity", "Info")
+        sev_class = severity_value.lower() if severity_value in {"Critical", "High", "Medium", "Low", "Info"} else "info"
         
         # Build steps to reproduce HTML (already sanitized in helper)
         steps_html = _build_finding_steps_html(f.get("steps_to_reproduce", ""))
@@ -2984,7 +3005,7 @@ def generate_html_report() -> str:
         findings_html += f'''
         <div class="finding">
             <div class="finding-header {sev_class}">
-                <span class="finding-title">#{f['id']}: {safe_title}</span>
+                <span class="finding-title">#{sanitize_html(str(f.get('id', '')))}: {safe_title}</span>
                 <span class="tag">{safe_severity}</span>
                 <span class="tag">{safe_owasp}</span>
                 {f'<span class="tag">{safe_cwe}</span>' if f.get("cwe_id") and f["cwe_id"] != "N/A" else ""}
@@ -3093,13 +3114,15 @@ def generate_html_report() -> str:
                 safe_desc = sanitize_html(artifact.get("description", "Screenshot"))
                 safe_timestamp = sanitize_html(artifact.get("timestamp", ""))
                 safe_url = sanitize_url(artifact.get("url", "N/A"))
-                # Base64 data is safe as it only contains alphanumeric and +/=
+                safe_image = _safe_png_data(artifact.get("data"))
+                if not safe_image:
+                    continue
                 artifacts_html += f'''
                 <details class="artifact-details">
                     <summary class="artifact-summary screenshot">📸 {safe_desc} <span class="artifact-summary-meta">{safe_timestamp}</span></summary>
                     <div class="artifact-card">
                         <div class="artifact-body">
-                            <img src="data:image/png;base64,{artifact.get("data", "")}" alt="{safe_desc}" onclick="window.open(this.src)">
+                            <img src="data:image/png;base64,{safe_image}" alt="{safe_desc}" onclick="window.open(this.src)">
                             <div class="artifact-meta">URL: {safe_url}</div>
                         </div>
                     </div>
@@ -3116,7 +3139,7 @@ def generate_html_report() -> str:
                 # Create data URL for download - raw data is base64 encoded (safe)
                 import base64
                 encoded_data = base64.b64encode(output_data.encode()).decode()
-                mime_types = {"xml": "application/xml", "json": "application/json", "csv": "text/csv", "text": "text/plain", "html": "text/html"}
+                mime_types = {"xml": "application/xml", "json": "application/json", "csv": "text/csv", "text": "text/plain", "html": "application/octet-stream"}
                 mime = mime_types.get(artifact.get("format", "text"), "text/plain")
                 
                 # Sanitize metadata
@@ -4359,97 +4382,54 @@ def create_note_folder(folder_name: str) -> str:
 
 
 def _markdown_to_html(text: str) -> str:
-    """Convert basic markdown to HTML for note content."""
-    import re
-    
-    # Process line by line
-    lines = text.split('\n')
-    html_lines = []
-    in_list = False
-    in_code_block = False
-    
-    for line in lines:
-        # Code blocks
-        if line.strip().startswith('```'):
-            if in_code_block:
-                html_lines.append('</pre>')
-                in_code_block = False
+    """Render a small safe Markdown subset; raw HTML is always escaped."""
+    import html
+    from urllib.parse import urlparse
+
+    def inline(value: str) -> str:
+        value = html.escape(value, quote=True)
+        value = re.sub(r"`([^`]+)`", r"<code>\1</code>", value)
+        value = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", value)
+        value = re.sub(r"\*(.+?)\*", r"<em>\1</em>", value)
+        def link(match):
+            label, destination = match.group(1), html.unescape(match.group(2)).strip()
+            if urlparse(destination).scheme.lower() not in ("http", "https", "mailto"):
+                return label
+            return f'<a href="{html.escape(destination, quote=True)}" rel="noopener noreferrer">{label}</a>'
+        return re.sub(r"\[([^]]+)\]\(([^)]+)\)", link, value)
+
+    output: list[str] = []
+    in_code = False
+    code_lines: list[str] = []
+    for raw_line in text.splitlines():
+        if raw_line.strip().startswith("```"):
+            if in_code:
+                output.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+                code_lines = []
+                in_code = False
             else:
-                html_lines.append('<pre style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; overflow-x: auto;">')
-                in_code_block = True
+                in_code = True
             continue
-        
-        if in_code_block:
-            html_lines.append(line)
+        if in_code:
+            code_lines.append(raw_line)
             continue
-        
-        # Headers
-        if line.startswith('#### '):
-            html_lines.append(f'<h4>{line[5:]}</h4>')
-            continue
-        if line.startswith('### '):
-            html_lines.append(f'<h3>{line[4:]}</h3>')
-            continue
-        if line.startswith('## '):
-            html_lines.append(f'<h2>{line[3:]}</h2>')
-            continue
-        if line.startswith('# '):
-            html_lines.append(f'<h1>{line[2:]}</h1>')
-            continue
-        
-        # Horizontal rule
-        if line.strip() in ['---', '***', '___']:
-            html_lines.append('<hr>')
-            continue
-        
-        # Lists
-        if re.match(r'^[-*+]\s', line.strip()):
-            if not in_list:
-                html_lines.append('<ul>')
-                in_list = True
-            content = re.sub(r'^[-*+]\s', '', line.strip())
-            html_lines.append(f'<li>{content}</li>')
-            continue
-        elif re.match(r'^\d+\.\s', line.strip()):
-            if not in_list:
-                html_lines.append('<ol>')
-                in_list = True
-            content = re.sub(r'^\d+\.\s', '', line.strip())
-            html_lines.append(f'<li>{content}</li>')
-            continue
+        heading = re.match(r"^(#{1,4})\s+(.*)$", raw_line)
+        if heading:
+            level = len(heading.group(1))
+            output.append(f"<h{level}>{inline(heading.group(2))}</h{level}>")
+        elif re.match(r"^\s*[-*+]\s+", raw_line):
+            output.append("<p>• " + inline(re.sub(r"^\s*[-*+]\s+", "", raw_line)) + "</p>")
+        elif re.match(r"^\s*\d+\.\s+", raw_line):
+            output.append("<p>" + inline(re.sub(r"^\s*\d+\.\s+", "", raw_line)) + "</p>")
+        elif raw_line.strip() in ("---", "***", "___"):
+            output.append("<hr>")
+        elif raw_line.strip():
+            output.append("<p>" + inline(raw_line) + "</p>")
         else:
-            if in_list:
-                html_lines.append('</ul>' if html_lines[-2].startswith('<ul>') or '<li>' in html_lines[-1] else '</ol>')
-                in_list = False
-        
-        # Bold and italic
-        line = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', line)
-        line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-        line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
-        line = re.sub(r'__(.+?)__', r'<strong>\1</strong>', line)
-        line = re.sub(r'_(.+?)_', r'<em>\1</em>', line)
-        
-        # Inline code
-        line = re.sub(r'`(.+?)`', r'<code style="background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 3px;">\1</code>', line)
-        
-        # Links
-        line = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2" target="_blank">\1</a>', line)
-        
-        # Empty line = paragraph break
-        if line.strip() == '':
-            html_lines.append('<br>')
-        else:
-            html_lines.append(f'<p>{line}</p>' if not line.startswith('<') else line)
-    
-    # Close any open list
-    if in_list:
-        html_lines.append('</ul>')
-    if in_code_block:
-        html_lines.append('</pre>')
-    
-    return '\n'.join(html_lines)
-
-
+            output.append("<br>")
+    if in_code:
+        output.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+    return "\n".join(output)
 # ============== PROJECT MANAGEMENT TOOLS ==============
 
 @tool

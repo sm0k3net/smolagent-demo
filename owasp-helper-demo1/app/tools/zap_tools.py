@@ -10,6 +10,7 @@ This module provides tools to interact with OWASP ZAP via its API for:
 """
 
 import os
+import secrets
 import time
 import json
 import subprocess
@@ -19,7 +20,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 from smolagents import tool
 
 # ZAP API configuration - can be overridden via environment variables
-ZAP_API_KEY = os.environ.get("ZAP_API_KEY", "owasp-helper-zap-key")
+ZAP_API_KEY = os.environ.get("ZAP_API_KEY") or secrets.token_urlsafe(32)
 ZAP_HOST = os.environ.get("ZAP_HOST", "127.0.0.1")
 ZAP_PORT = int(os.environ.get("ZAP_PORT", "8080"))
 ZAP_BASE_URL = f"http://{ZAP_HOST}:{ZAP_PORT}"
@@ -89,7 +90,7 @@ def zap_start_daemon(
     
     # Check if ZAP is already running
     if _check_zap_running():
-        return f"✅ ZAP is already running at {ZAP_BASE_URL}\nAPI Key: {ZAP_API_KEY}"
+        return f"✅ ZAP is already running at {ZAP_BASE_URL}\nAPI key is configured (value redacted)."
     
     # Set configuration
     if api_key:
@@ -105,7 +106,7 @@ def zap_start_daemon(
             "docker", "run", "-d",
             "--name", "zap-daemon",
             "-u", "zap",
-            "-p", f"{port}:{port}",
+            "-p", f"127.0.0.1:{port}:{port}",
             "-e", f"ZAP_PORT={port}",
             "--memory", memory,
             ZAP_DOCKER_IMAGE,
@@ -126,7 +127,7 @@ def zap_start_daemon(
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
-                return f"❌ Failed to start ZAP Docker container: {result.stderr}"
+                return "❌ Failed to start ZAP Docker container. Check Docker logs locally; output is redacted."
             
             container_id = result.stdout.strip()[:12]
             
@@ -140,7 +141,7 @@ def zap_start_daemon(
 📋 Connection Details:
    Host: {ZAP_HOST}
    Port: {ZAP_PORT}
-   API Key: {ZAP_API_KEY}
+   API Key: [configured; value redacted]
    Container ID: {container_id}
    
 🔗 API URL: {ZAP_BASE_URL}
@@ -158,7 +159,7 @@ def zap_start_daemon(
         except subprocess.TimeoutExpired:
             return "❌ Timeout starting ZAP Docker container"
         except Exception as e:
-            return f"❌ Error starting ZAP: {str(e)}"
+            return "❌ Error starting ZAP. Check local logs; output is redacted."
     else:
         return """❌ Local ZAP installation not supported via this tool.
         

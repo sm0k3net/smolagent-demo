@@ -23,6 +23,7 @@ import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
+from app.security import validate_storage_id
 from enum import Enum
 
 
@@ -286,12 +287,12 @@ class TaskPersistenceManager:
         self._load_interrupted_tasks()
 
     def _get_task_file(self, task_id: str) -> Path:
-        """Get path to task state file."""
-        return self.data_dir / f"{task_id}.json"
+        """Get path to task state file using a validated opaque ID."""
+        return self.data_dir / f"{validate_storage_id(task_id)}.json"
 
     def _get_steps_file(self, task_id: str) -> Path:
-        """Get path to task steps file."""
-        return self.data_dir / f"{task_id}_steps.json"
+        """Get path to task steps file using a validated opaque ID."""
+        return self.data_dir / f"{validate_storage_id(task_id)}_steps.json"
 
     def _load_interrupted_tasks(self):
         """Load all interrupted/running tasks on startup."""

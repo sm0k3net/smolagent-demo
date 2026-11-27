@@ -1,15 +1,15 @@
 """Playwright browser automation tools for real human-like interaction."""
 from __future__ import annotations
+
 import base64
-import tempfile
 import os
-import subprocess
-import sys
+from importlib.util import find_spec
+
 from smolagents import tool
 
 # Import proxy config
 try:
-    from app.tools.pentest_tools import get_proxy_url, _proxy_config
+    from app.tools.pentest_tools import _proxy_config, get_proxy_url
 except ImportError:
     def get_proxy_url():
         return None
@@ -43,57 +43,16 @@ def _launch_browser(playwright_instance, headless: bool = True):
 
 def _check_playwright_installed() -> tuple[bool, str | None]:
     """Check if Playwright is installed and browser is available."""
-    try:
-        from playwright.sync_api import sync_playwright
-        return True, None
-    except ImportError:
+    if find_spec("playwright") is None:
         return False, "Playwright not installed"
-
-
-def _install_playwright_package() -> tuple[bool, str]:
-    """Install playwright package via pip."""
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', 'playwright'],
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-        if result.returncode == 0:
-            return True, "Playwright package installed successfully"
-        return False, f"Failed to install playwright: {result.stderr}"
-    except Exception as e:
-        return False, f"Error installing playwright: {e}"
-
-
-def _install_browser(browser: str = "chromium") -> tuple[bool, str]:
-    """Install Playwright browser binaries."""
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'playwright', 'install', browser],
-            capture_output=True,
-            text=True,
-            timeout=300  # Browser downloads can take time
-        )
-        if result.returncode == 0:
-            return True, f"{browser} browser installed successfully"
-        return False, f"Failed to install {browser}: {result.stderr}"
-    except Exception as e:
-        return False, f"Error installing browser: {e}"
+    return True, None
 
 
 def _ensure_playwright_ready() -> tuple[bool, str]:
-    """Ensure Playwright and Chromium are ready to use. Auto-installs if needed."""
-    # Check if playwright package is installed
+    """Check Playwright/Chromium readiness without downloading software at runtime."""
     installed, _ = _check_playwright_installed()
     if not installed:
-        print("📦 Installing Playwright package...")
-        success, msg = _install_playwright_package()
-        if not success:
-            return False, msg
-        print(f"✅ {msg}")
-    
-    # Try to launch browser to check if it's installed
+        return False, "Playwright is not installed. Install dependencies and run: python -m playwright install chromium"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -101,30 +60,18 @@ def _ensure_playwright_ready() -> tuple[bool, str]:
             browser.close()
         return True, "Playwright ready"
     except Exception as e:
-        error_msg = str(e)
-        if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
-            print("📦 Installing Chromium browser...")
-            success, msg = _install_browser("chromium")
-            if success:
-                print(f"✅ {msg}")
-                return True, "Playwright and Chromium installed successfully"
-            return False, msg
-        return False, f"Playwright error: {e}"
-
+        return False, f"Playwright/Chromium unavailable; install with `python -m playwright install chromium`. Details: {e}"
 
 def _get_playwright_with_auto_install():
-    """Get Playwright sync API, auto-installing if needed."""
-    ready, msg = _ensure_playwright_ready()
+    """Compatibility helper that checks readiness but never installs software."""
+    ready, message = _ensure_playwright_ready()
     if not ready:
-        return None, msg
-    
+        return None, message
     try:
         from playwright.sync_api import sync_playwright
         return sync_playwright, None
     except ImportError:
-        return None, "Failed to import playwright after installation"
-
-
+        return None, "Playwright is not installed; install it explicitly in the environment."
 def _get_playwright():
     """Get Playwright sync API or return None with error."""
     installed, error = _check_playwright_installed()
@@ -274,7 +221,10 @@ def take_screenshot(
             
             # Auto-add to report if report mode is enabled
             try:
-                from app.tools.report_tools import _REPORT_MODE_ENABLED, _add_screenshot_to_report_internal
+                from app.tools.report_tools import (
+                    _REPORT_MODE_ENABLED,
+                    _add_screenshot_to_report_internal,
+                )
                 if _REPORT_MODE_ENABLED.get():
                     description = f"Screenshot: {title}" if title else f"Screenshot of {url}"
                     _add_screenshot_to_report_internal(

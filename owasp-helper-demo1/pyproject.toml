@@ -2,8 +2,11 @@
 name = "pentest-systems-assistant"
 version = "0.2.0"
 description = "AI-powered penetration testing assistant with OSINT, scanning tools, browser automation, and professional reporting."
-authors = [ { name = "Your Name" } ]
+authors = [{ name = "sm0k3net" }]
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["owasp", "security-testing", "pentesting", "smolagents"]
 requires-python = ">=3.10"
 dependencies = [
   "fastapi",
@@ -17,14 +20,18 @@ dependencies = [
   "orjson",
   "rich",
   "openai",
-  "playwright"
+  "playwright",
+  "python-multipart"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-requests"]
 browser = ["playwright"]
-pdf = ["weasyprint"]
 
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*"]

@@ -8,6 +8,7 @@ os.environ.setdefault("RICH_DISABLE", "1")
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
+from app.security import LocalOrBasicAuthMiddleware, resolve_allowed_path
 from pydantic import BaseModel
 from enum import Enum
 from app.agents.owasp_agent import build_owasp_agent, build_model
@@ -98,28 +99,9 @@ try:
     from psycopg2.extras import RealDictCursor
     HAS_PSYCOPG2 = True
 except ImportError:
-
-
     HAS_PSYCOPG2 = False
     psycopg2 = None
-    # Try to install psycopg2-binary automatically
-    try:
-        import subprocess
-        import sys
-        print("[Database] psycopg2 not found, attempting to install psycopg2-binary...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "psycopg2-binary", "-q"])
-        import psycopg2
-        from psycopg2 import sql
-        from psycopg2.extras import RealDictCursor
-        HAS_PSYCOPG2 = True
-
-
-        print("[Database] psycopg2-binary installed successfully!")
-    except Exception as install_error:
-        print(f"[Database] Could not auto-install psycopg2-binary: {install_error}")
-        print("[Database] To enable database features, run: pip install psycopg2-binary")
-
-
+    print("[Database] psycopg2 is not installed; database features are disabled. Install psycopg2-binary explicitly to enable them.")
 class DatabaseStorage:
     """PostgreSQL/Supabase storage backend for command history and agent memory."""
     
@@ -850,7 +832,8 @@ class TaskChain(BaseModel):
     current_task_index: int = 0
 
 
-app = FastAPI(title="Pentest.Systems Assistant")
+app = FastAPI(title="OWASP Helper")
+app.add_middleware(LocalOrBasicAuthMiddleware)
 agent = None  # Global agent kept for startup but each task gets its own instance
 startup_lock = asyncio.Lock()
 # Note: Tasks now use dedicated agent instances for true parallel execution
@@ -3163,148 +3146,19 @@ async def toggle_tool(tool_id: str, request: Request):
 
 @app.post("/api/tools/install/{tool_id}")
 async def install_tool(tool_id: str):
-    """Install a tool (runs installation command)."""
-    import subprocess
-    
-    if tool_id not in TOOLS_REGISTRY:
-        return JSONResponse({
-            "success": False,
-            "message": f"Unknown tool: {tool_id}"
-        }, status_code=404)
-    
-    tool_info = TOOLS_REGISTRY[tool_id]
-    install_cmd = tool_info.get("install_cmd", "")
-    
-    if not install_cmd:
-        return JSONResponse({
-            "success": False,
-            "message": f"No installation command defined for {tool_info['name']}"
-        })
-    
-    # Special handling for go install commands
-    if install_cmd.startswith("go install"):
-        try:
-            result = subprocess.run(
-                install_cmd.split(),
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            if result.returncode == 0:
-                # For nuclei, also download templates after installation
-                extra_msg = ""
-                if tool_id == "nuclei":
-                    nuclei_path = _find_binary_path("nuclei")
-                    if nuclei_path:
-                        try:
-                            template_result = subprocess.run(
-                                [nuclei_path, "-update-templates"],
-                                capture_output=True,
-                                text=True,
-                                timeout=300
-                            )
-                            if template_result.returncode == 0:
-                                extra_msg = "\nNuclei templates also downloaded successfully."
-                            else:
-                                extra_msg = "\nNote: Templates download may have had issues. Run 'nuclei -update-templates' manually."
-                        except:
-                            extra_msg = "\nNote: Please run 'nuclei -update-templates' to download templates."
-                
-                return JSONResponse({
-                    "success": True,
-                    "message": f"{tool_info['name']} installed successfully{extra_msg}",
-                    "output": result.stdout
-                })
-            else:
-                return JSONResponse({
-                    "success": False,
-                    "message": f"Installation failed",
-                    "error": result.stderr
-                })
-        except subprocess.TimeoutExpired:
-            return JSONResponse({
-                "success": False,
-                "message": "Installation timed out"
-            })
-        except Exception as e:
-            return JSONResponse({
-                "success": False,
-                "message": f"Error: {str(e)}"
-            })
-    
-    # For pip install commands
-    elif install_cmd.startswith("pip install"):
-        try:
-            result = subprocess.run(
-                install_cmd.split(),
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            if result.returncode == 0:
-                return JSONResponse({
-                    "success": True,
-                    "message": f"{tool_info['name']} installed successfully"
-                })
-            else:
-                return JSONResponse({
-                    "success": False,
-                    "message": f"Installation failed: {result.stderr}"
-                })
-        except Exception as e:
-            return JSONResponse({
-                "success": False,
-                "message": f"Error: {str(e)}"
-            })
-    
-    # For other commands, return the command for user to run manually
+    """Return trusted manual install instructions; never execute installers at runtime."""
+    tool_info = TOOLS_REGISTRY.get(tool_id)
+    if not tool_info:
+        return JSONResponse({"success": False, "message": "Unknown tool"}, status_code=404)
+    command = tool_info.get("install_cmd", "")
+    if not command:
+        return JSONResponse({"success": False, "message": "No installation command is defined"})
     return JSONResponse({
         "success": False,
-        "message": f"Manual installation required",
-        "install_cmd": install_cmd,
-        "instructions": f"Run this command to install {tool_info['name']}: {install_cmd}"
+        "message": "Runtime installation is disabled. Review and run installation instructions manually in a trusted environment.",
+        "install_cmd": command,
+        "instructions": f"Install {tool_info['name']} manually from its trusted source.",
     })
-
-
-def _find_binary_path(binary_name: str) -> str | None:
-    """Find binary path, checking system PATH and Go installation directories."""
-    import shutil
-    import os
-    import glob
-    
-    # First check standard PATH
-    path = shutil.which(binary_name)
-    if path:
-        return path
-    
-    # Check Go bin directories for Go-installed tools
-    go_paths = [
-        os.path.expanduser('~/go/bin'),
-        '/root/go/bin',
-        '/usr/local/go/bin',
-    ]
-    
-    # Also check GOPATH/bin and GOBIN if set
-    gopath = os.environ.get('GOPATH')
-    if gopath:
-        go_paths.insert(0, os.path.join(gopath, 'bin'))
-    
-    gobin = os.environ.get('GOBIN')
-    if gobin:
-        go_paths.insert(0, gobin)
-    
-    # Expand /home/*/go/bin pattern using glob
-    home_go_bins = glob.glob('/home/*/go/bin')
-    go_paths.extend(home_go_bins)
-    
-    for go_path in go_paths:
-        tool_path = os.path.join(go_path, binary_name)
-        if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
-            return tool_path
-    
-    return None
-
-
 @app.get("/api/tools/check/{tool_id}")
 async def check_tool_installed(tool_id: str):
     """Check if a specific tool is installed."""
@@ -5078,15 +4932,12 @@ async def get_reports(grouped: bool = True):
 @app.get("/api/reports/view")
 async def view_report(path: str):
     """View report content."""
-    file_path = Path(path)
-    
-    if not file_path.exists():
-        return JSONResponse({"error": "Report not found"}, status_code=404)
-    
-    # Security check - only allow files in known directories
-    allowed_parents = [REPORTS_DIR.resolve(), Path("output").resolve(), Path("reports").resolve()]
-    if not any(str(file_path.resolve()).startswith(str(p)) for p in allowed_parents if p.exists()):
+    try:
+        file_path = resolve_allowed_path(path, [REPORTS_DIR, Path("output"), Path("reports")])
+    except (ValueError, OSError, PermissionError):
         return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not file_path.is_file():
+        return JSONResponse({"error": "Report not found"}, status_code=404)
     
     try:
         content = file_path.read_text(encoding='utf-8', errors='replace')
@@ -5103,11 +4954,12 @@ async def download_report(path: str):
     """Download a report file."""
     from fastapi.responses import FileResponse
     
-    file_path = Path(path)
-    
-    if not file_path.exists():
+    try:
+        file_path = resolve_allowed_path(path, [REPORTS_DIR, Path("output"), Path("reports")])
+    except (ValueError, OSError, PermissionError):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not file_path.is_file():
         return JSONResponse({"error": "Report not found"}, status_code=404)
-    
     return FileResponse(
         path=file_path,
         filename=file_path.name,
@@ -5121,11 +4973,12 @@ async def delete_report(data: dict):
     if not path:
         return JSONResponse({"error": "Path required"}, status_code=400)
     
-    file_path = Path(path)
-    
-    if not file_path.exists():
+    try:
+        file_path = resolve_allowed_path(path, [REPORTS_DIR, Path("output"), Path("reports")])
+    except (ValueError, OSError, PermissionError):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not file_path.is_file():
         return JSONResponse({"error": "Report not found"}, status_code=404)
-    
     try:
         file_path.unlink()
         return JSONResponse({"success": True})
@@ -6709,16 +6562,24 @@ async def startup():
 @app.post("/upload")
 async def upload_file(upload: FileUpload):
     """Handle file uploads via JSON with base64 content."""
+    if len(upload.content) > 4 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Upload exceeds the 3 MiB decoded limit")
+    if not upload.filename or Path(upload.filename).name != upload.filename or len(upload.filename) > 255:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not upload.session_id or len(upload.session_id) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", upload.session_id):
+        raise HTTPException(status_code=400, detail="Invalid session_id")
     try:
-        content = base64.b64decode(upload.content).decode('utf-8')
+        decoded = base64.b64decode(upload.content, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="Invalid base64 file content")
+    try:
+        content = decoded.decode('utf-8')
         is_text = True
-    except Exception:
-        try:
-            content = base64.b64decode(upload.content)
-            content = f"[Binary file: {len(content)} bytes]"
-            is_text = False
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to decode file: {str(e)}")
+    except UnicodeDecodeError:
+        content = f"[Binary file: {len(decoded)} bytes]"
+        is_text = False
+    if len(file_store.get(upload.session_id, [])) >= 20:
+        raise HTTPException(status_code=413, detail="Too many files for this session")
     
     file_info = {
         "filename": upload.filename,

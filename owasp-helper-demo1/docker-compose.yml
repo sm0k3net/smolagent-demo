@@ -23,7 +23,7 @@ services:
     
     # Port mapping
     ports:
-      - "${PORT:-8000}:8000"
+      - "127.0.0.1:${PORT:-8000}:8000"
     
     # Environment configuration
     environment:
@@ -51,6 +51,9 @@ services:
       - DEFECTDOJO_VERIFY_SSL=${DEFECTDOJO_VERIFY_SSL:-true}
       - DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID=${DEFECTDOJO_DEFAULT_PRODUCT_TYPE_ID:-1}
       
+      # Remote access gate; set both values in the private .env file.
+      - APP_USERNAME=${APP_USERNAME:-}
+      - APP_PASSWORD=${APP_PASSWORD:-}
       # Application settings
       - ENV=${ENV:-production}
       - PROMPT_PATH=app/prompts/owasp_pen_tester.md
@@ -107,7 +110,7 @@ services:
       - with-searxng
     
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     
     volumes:
       - searxng-data:/etc/searxng
