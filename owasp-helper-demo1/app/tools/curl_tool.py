@@ -1,12 +1,15 @@
 from __future__ import annotations
+
+import os
 import shutil
 import subprocess
-import os
+from urllib.parse import urlparse
+
 from smolagents import tool
 
 # Import proxy config from pentest_tools
 try:
-    from app.tools.pentest_tools import get_proxy_url, get_proxy_env
+    from app.tools.pentest_tools import get_proxy_env, get_proxy_url
 except ImportError:
     # Fallback if import fails
     def get_proxy_url():
@@ -44,13 +47,23 @@ def curl_request(
     """
     if shutil.which("curl") is None:
         return "curl not found. Install with: sudo apt-get update && sudo apt-get install -y curl"
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return "Invalid URL: only absolute HTTP and HTTPS URLs are supported."
+    method_u = (method or "GET").upper()
+    if method_u not in {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}:
+        return "Unsupported HTTP method."
+    timeout = max(1, min(int(timeout), 120))
+    max_output_chars = max(1, min(int(max_output_chars), 250000))
 
     # Build curl command safely (no shell)
     cmd: list[str] = [
         "curl",
         "-sS",  # silent with errors
         "-L",   # follow redirects
-        "--max-time", str(int(timeout)),
+        "--max-time", str(timeout),
+        "--proto", "=http,https",
+        "--proto-redir", "=http,https",
     ]
     
     # Add proxy if configured and enabled
@@ -63,7 +76,6 @@ def curl_request(
         cmd.append("-i")
     if insecure:
         cmd.append("-k")
-    method_u = (method or "GET").upper()
     if method_u != "GET":
         cmd += ["-X", method_u]
     if headers:
@@ -79,9 +91,9 @@ def curl_request(
         if use_proxy:
             env.update(get_proxy_env())
         
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5, env=env)
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout + 5, env=env)
         out = (res.stdout or "") + (("\n[stderr]\n" + res.stderr) if res.stderr else "")
         out = out[:max(0, max_output_chars)]
         return f"[exit_code]={res.returncode}\n" + out
-    except Exception as e:  # pragma: no cover
+    except (OSError, subprocess.SubprocessError, ValueError) as e:  # pragma: no cover
         return f"curl execution error: {e}"

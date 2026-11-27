@@ -54,6 +54,7 @@ htmlcov/
 docs/
 *.md
 !README.md
+!app/prompts/*.md
 
 # Local development
 *.log
