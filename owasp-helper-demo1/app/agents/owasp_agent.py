@@ -10,6 +10,7 @@ from smolagents import CodeAgent, OpenAIServerModel
 from app.tools.owasp_lookup import list_owasp_top10, get_owasp_item
 from app.tools.classify import classify_vulnerability
 from app.tools.scenarios import generate_test_scenarios
+from app.tools.header_analysis import analyze_http_security_headers
 from app.tools.playwright_tool import (
     fetch_page_title,
     browse_page,
@@ -365,6 +366,7 @@ def build_owasp_agent() -> CodeAgent:
         get_owasp_item,
         classify_vulnerability,
         generate_test_scenarios,
+        analyze_http_security_headers,
     ]
     
     # Playwright browser automation tools
