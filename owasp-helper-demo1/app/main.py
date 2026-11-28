@@ -6769,7 +6769,7 @@ h1 {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  animation: pulse 2s infinite;
+  animation: none;
 }
 .status-badge.connected .status-dot { background: var(--success); }
 .status-badge.disconnected .status-dot { background: var(--danger); }
@@ -7037,6 +7037,17 @@ h1 {
   font-weight: 500;
   margin-left: 0.5rem;
 }
+/* Collapsed rail keeps primary navigation discoverable. */
+#sidebar:not(.expanded) .sidebar-tabs {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  border-bottom: 0;
+  background: transparent;
+}
+#sidebar:not(.expanded) .sidebar-tab { flex: 0 0 auto; min-width: 56px; padding: 0.65rem 0.2rem; }
+#sidebar:not(.expanded) .sidebar-tab .tab-label { font-size: 0.5rem; letter-spacing: 0; }
+#sidebar:not(.expanded) .sidebar-tab.active { border-bottom-color: transparent; border-left: 2px solid var(--primary); }
 /* Sidebar Tabs */
 .sidebar-tabs {
   display: none;
@@ -13957,6 +13968,19 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
   .logo-icon { width: 40px; height: 40px; }
   h1 { font-size: 1.2rem; }
 }
+/* Keyboard focus and system-level reduced-motion support. */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid #7dd3fc;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 </style>
 </head>
 <body>
@@ -14002,9 +14026,9 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
 </header>
 <div class="main-wrapper">
   <!-- Expandable Sidebar with Tabs -->
-  <div id="sidebar">
+  <div id="sidebar" class="expanded">
     <div class="sidebar-resize-handle" id="sidebar-resize"></div>
-    <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle Sidebar">
+    <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse navigation" aria-label="Collapse navigation" aria-expanded="true">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
     </button>
     
@@ -16870,7 +16894,10 @@ let taskRefreshInterval = null;
 // Sidebar toggle
 if (sidebarToggle && sidebar) {
     sidebarToggle.onclick = () => {
-        sidebar.classList.toggle('expanded');
+        const expanded = sidebar.classList.toggle('expanded');
+        sidebarToggle.setAttribute('aria-expanded', String(expanded));
+        sidebarToggle.setAttribute('aria-label', expanded ? 'Collapse navigation' : 'Expand navigation');
+        sidebarToggle.title = expanded ? 'Collapse navigation' : 'Expand navigation';
     };
 }
 

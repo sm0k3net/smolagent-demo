@@ -914,6 +914,18 @@ REPORT_TEMPLATE_HTML = '''<!DOCTYPE html>
             font-weight: 700;
         }
         
+        .report-note {
+            border-left: 3px solid var(--warning);
+            background: #fffbeb;
+            color: var(--neutral-700);
+            padding: 0.65rem 0.85rem;
+            border-radius: 0 6px 6px 0;
+            margin: 0.5rem 0 1rem;
+            font-size: 0.9rem;
+        }
+        .finding-body table { table-layout: auto; }
+        .finding-body table th { width: 22%; }
+        @page { size: A4; margin: 16mm 14mm; }
         /* Print Styles */
         @media print {
             body { background: white; font-size: 12px; }
@@ -930,6 +942,8 @@ REPORT_TEMPLATE_HTML = '''<!DOCTYPE html>
                 print-color-adjust: exact;
             }
             .finding { break-inside: avoid; }
+            .section h2, .finding h4 { break-after: avoid; }
+            .report-note { border: 1px solid #b45309; background: #fff; }
             .recon-data-list { max-height: none; }
             .artifact-body pre { max-height: none; }
             .infrastructure-table { break-inside: avoid; }

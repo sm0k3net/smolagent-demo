@@ -136,7 +136,7 @@ def test_report_approval_requires_successful_review(monkeypatch) -> None:
     assert ctx.report_reviewed is False
 
 
-def test_focused_report_needs_qc_but_not_exhaustive_phase_flags(monkeypatch) -> None:
+def test_focused_report_needs_qc_but_not_exhaustive_phase_flags(monkeypatch, tmp_path) -> None:
     ctx = mas.SharedContext(
         target="https://example.test",
         phases_completed={"quality_control_review": True},
@@ -144,19 +144,62 @@ def test_focused_report_needs_qc_but_not_exhaustive_phase_flags(monkeypatch) -> 
         tool_outputs={"test": "sensitive raw output must not be auto-included"},
     )
     monkeypatch.setattr(mas, "get_shared_context", lambda: ctx)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "reports").mkdir(parents=True)
     report_module = types.ModuleType("app.tools.report_tools")
     imported_findings: list[dict[str, object]] = []
     report_module.enable_report_mode = lambda *args: None
     report_module.add_finding_to_report = lambda **kwargs: imported_findings.append(kwargs)
     report_module.set_executive_summary = lambda *args: None
     report_module.set_conclusion = lambda *args: None
-    report_module.generate_html_report = lambda: "Report generated"
+    def generate_report():
+        (tmp_path / "data" / "reports" / "pentest_report_example.html").write_text("<html>Report generated</html>")
+        return "<!doctype html><html><body>Report generated</body></html>"
+    report_module.generate_html_report = generate_report
     report_module.add_recon_data = lambda *args: None
     monkeypatch.setitem(sys.modules, "app.tools.report_tools", report_module)
 
     result = mas.compile_final_report()
 
     assert "Status: Ready for QC final review" in result
+    assert "pentest_report_example.html" in result
+    assert ctx.report_generated is True
     assert len(imported_findings) == 1
     assert imported_findings[0]["tool_used"] == ""
+    assert imported_findings[0]["impact"] == ""
+    assert imported_findings[0]["validation_status"] == "validated"
     assert ctx.report_finding_ids == ["FIND-TEST0001"]
+
+
+def test_report_tool_output_redacts_common_credentials() -> None:
+    from app.tools.report_tools import redact_sensitive_output
+
+    output = (
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret\n"
+        "api_key=sk_test_supersecret\n"
+        "https://user:password@example.test/path"
+    )
+    redacted = redact_sensitive_output(output)
+    assert "eyJhbGciOiJIUzI1NiJ9.secret" not in redacted
+    assert "sk_test_supersecret" not in redacted
+    assert "user:password" not in redacted
+    assert redacted.count("[REDACTED]") >= 3
+
+
+def test_report_generation_failure_does_not_mark_report_ready(monkeypatch, tmp_path) -> None:
+    ctx = mas.SharedContext(target="https://example.test", phases_completed={"quality_control_review": True}, findings=[_valid_finding()])
+    monkeypatch.setattr(mas, "get_shared_context", lambda: ctx)
+    monkeypatch.chdir(tmp_path)
+    report_module = types.ModuleType("app.tools.report_tools")
+    report_module.enable_report_mode = lambda *args: None
+    report_module.add_finding_to_report = lambda **kwargs: None
+    report_module.set_executive_summary = lambda *args: None
+    report_module.set_conclusion = lambda *args: None
+    report_module.generate_html_report = lambda: "Error generating report"
+    report_module.add_recon_data = lambda *args: None
+    monkeypatch.setitem(sys.modules, "app.tools.report_tools", report_module)
+    result = mas.compile_final_report()
+    assert "Report generation failed" in result
+    assert ctx.report_generated is False
+    assert ctx.report_reviewed is False
+    assert ctx.report_path == ""
