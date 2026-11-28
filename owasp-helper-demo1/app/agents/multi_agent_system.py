@@ -801,10 +801,10 @@ def submit_finding(
         discovered_by=source_agent,
         discovered_at=datetime.now(),
         status=FindingStatus.PENDING_VALIDATION,
-        tool_used=tool_used or source_agent,  # Fallback to source_agent if not specified
+        tool_used=tool_used,  # Keep tool provenance unknown when it was not recorded
         command_used=command_used,
         steps_to_reproduce=steps_to_reproduce,
-        impact=impact or description,  # Use description as fallback for impact
+        impact=impact,  # Do not infer impact from the finding description
         cvss_score=cvss_float,
     )
 
@@ -1214,8 +1214,8 @@ def compile_final_report() -> str:
                 title=f.title,
                 severity=f.severity,
                 description=f.description,
-                # Use dedicated impact field, fallback to exploitation proof, then description
-                impact=f.impact if f.impact else (f.exploitation_proof if f.exploited else f.description),
+                # Keep impact unknown when no impact statement was recorded.
+                impact=f.impact,
                 remediation=f.remediation,
                 owasp_category=f.owasp_category,
                 cwe_id=f.cwe_id,
@@ -1227,6 +1227,8 @@ def compile_final_report() -> str:
                 cvss_score=str(f.cvss_score) if f.cvss_score else "",
                 affected_component=f.affected_component,
                 references=",".join(f.references) if f.references else "",
+                validation_status=f.status.value,
+                validation_notes=f.validation_notes,
             )
 
         # Add recon data
@@ -1264,14 +1266,27 @@ The validated findings in this report have been reviewed by Quality Control.
         set_conclusion(conclusion)
 
         # Generate report
+        from pathlib import Path
+        reports_dir = Path("data/reports")
+        existing_report_files = {item.resolve(): (item.stat().st_mtime_ns, item.stat().st_size) for item in reports_dir.glob("pentest_report_*.html")}
         report_result = generate_html_report()
-
+        if not isinstance(report_result, str) or "<html" not in report_result[:500].lower():
+            ctx.report_generated = False
+            ctx.report_reviewed = False
+            ctx.report_path = ""
+            return f"Report generation failed; it is not ready for QC review. Generator response: {str(report_result)[:500]}"
+        report_files = sorted((item for item in reports_dir.glob("pentest_report_*.html") if existing_report_files.get(item.resolve()) != (item.stat().st_mtime_ns, item.stat().st_size)), key=lambda item: item.stat().st_mtime, reverse=True)
+        if not report_files:
+            ctx.report_generated = False
+            ctx.report_reviewed = False
+            ctx.report_path = ""
+            return "Report HTML was rendered but no new saved report artifact was found; it is not ready for review."
         ctx.report_generated = True
         ctx.report_reviewed = False
         ctx.report_finding_ids = [finding.id for finding in validated]
-        ctx.report_path = "security-report.html"
+        ctx.report_path = str(report_files[0])
         ctx.mark_phase_complete("reporting", "reporting")
-        ctx.log_activity("reporting", "report_generated", "Final report compiled")
+        ctx.log_activity("reporting", "report_generated", "HTML report generated for QC review")
 
         return f"""✅ FINAL REPORT COMPILED
 
@@ -1279,8 +1294,8 @@ Title: {ctx.project_title}
 Target: {ctx.target}
 Findings: {len(validated)} validated findings
 Status: Ready for QC final review
+Artifact: {ctx.report_path}
 
-{report_result}
 
 Next: Quality Control should review with review_final_report()
 """

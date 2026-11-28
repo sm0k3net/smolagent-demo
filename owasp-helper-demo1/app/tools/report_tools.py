@@ -540,6 +540,19 @@ _AUTO_CAPTURE_TOOLS = {
 }
 
 
+def redact_sensitive_output(value: str) -> str:
+    """Redact common credentials and bearer tokens before persisting tool output."""
+    text = str(value)
+    patterns = (
+        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]"),
+        (r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\b\s*[:=]\s*)[\"']?[^\s,;\"']+", r"\1[REDACTED]"),
+        (r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@"),
+    )
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
 def auto_capture_tool_output(tool_name: str, tool_args: dict, output: str, duration_ms: float = 0):
     """Automatically capture tool output to artifacts if report mode is enabled.
     
@@ -589,7 +602,7 @@ def auto_capture_tool_output(tool_name: str, tool_args: dict, output: str, durat
         "tool_name": normalized_name,
         "filename": f"{normalized_name}_{datetime.now().strftime('%H%M%S')}.txt",
         "format": "text",
-        "data": str(output)[:50000],  # Cap at 50KB
+        "data": redact_sensitive_output(str(output)[:50000]),  # Cap and redact common credentials
         "description": f"Auto-captured output from {normalized_name}" + (f" targeting {target}" if target else ""),
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "auto_captured": True,
@@ -660,7 +673,7 @@ def enable_report_mode(
         "date": datetime.now().strftime("%Y-%m-%d"),
         "executive_summary": "",
         "scope": [target],
-        "methodology": "Testing was conducted following OWASP Testing Guide (WSTG) methodology, covering reconnaissance, vulnerability scanning, manual testing, and exploitation attempts within the defined scope.",
+        "methodology": "Assessment activities and validation status are described in this report. No methodology standard or test coverage is implied unless explicitly documented below.",
         "tools": set(),
         "findings": [],
         "conclusion": "",
@@ -726,7 +739,9 @@ def add_finding_to_report(
     tool_used: str | None = None,
     command_used: str | None = None,
     references: str | None = None,
-    cwe_id: str | None = None
+    cwe_id: str | None = None,
+    validation_status: str | None = None,
+    validation_notes: str | None = None
 ) -> str:
     """Add a security finding to the current report.
 
@@ -745,6 +760,8 @@ def add_finding_to_report(
         command_used: Exact command that was executed (e.g., 'nmap -sV -sC -p- target.com').
         references: Relevant references (newline-separated URLs or CVE IDs).
         cwe_id: CWE ID if applicable (e.g., 'CWE-89').
+        validation_status: QC disposition recorded for this finding.
+        validation_notes: QC reviewer notes describing the validation decision and limitations.
     Returns: Confirmation that finding was added.
     """
     global _REPORT_MODE_ENABLED, _CURRENT_REPORT_DATA
@@ -768,82 +785,14 @@ def add_finding_to_report(
         "affected_component": affected_component or _CURRENT_REPORT_DATA.get("target", "N/A"),
         "evidence": evidence or "",
         "steps_to_reproduce": steps_to_reproduce or "",
-        "tool_used": tool_used or "Manual Testing",
+        "tool_used": tool_used or "Not recorded",
         "command_used": command_used or "",
-        "references": references or ""
+        "references": references or "",
+        "validation_status": validation_status or "Not recorded",
+        "validation_notes": validation_notes or "No QC notes were provided."
     }
 
-    # If the agent forgot to provide evidence, try to attach a TOOL OUTPUT snippet (preferred)
-    # and only attach screenshots when they are exploitation-grade.
-    try:
-        has_evidence_text = bool((finding.get("evidence") or "").strip())
-        has_steps = bool((steps_to_reproduce or "").strip())
-        sev = (severity or "Info").strip().title()
-        tool_used_norm = (tool_used or "").strip().lower()
-
-        artifacts = list(_get_report_artifacts_list())
-
-        def _latest_tool_output_for(tool_key: str) -> dict | None:
-            key = (tool_key or "").strip().lower()
-            if not key:
-                return None
-            for a in reversed(artifacts):
-                if a.get("type") == "tool_output" and (a.get("tool_name") or "").strip().lower() == key:
-                    if a.get("data"):
-                        return a
-            return None
-
-        # Prefer tool-output evidence over screenshots for scanner-derived findings.
-        if not has_evidence_text:
-            primary_tool = ""
-            for candidate in ["sqlmap", "nikto", "nuclei", "gobuster", "whatweb", "curl", "zaproxy", "xsser"]:
-                if candidate in tool_used_norm:
-                    primary_tool = candidate
-                    break
-
-            a = _latest_tool_output_for(primary_tool) if primary_tool else None
-            if a:
-                raw = str(a.get("data") or "")
-                snippet = raw[:4000]
-                if len(raw) > 4000:
-                    snippet += "\n... [truncated in finding evidence; see full artifact in Artifacts section]"
-
-                finding["evidence"] = (
-                    f"Artifact: {a.get('filename', 'tool_output')}\n"
-                    f"Tool: {a.get('tool_name', primary_tool)}\n\n"
-                    f"--- BEGIN TOOL OUTPUT SNIPPET ---\n{snippet}\n--- END TOOL OUTPUT SNIPPET ---"
-                )
-                has_evidence_text = True
-
-        # Only auto-attach exploitation screenshots for meaningful severities.
-        should_auto_attach_screenshot = sev in {"Critical", "High", "Medium"}
-        scanner_like = any(x in tool_used_norm for x in ("nikto", "nuclei", "gobuster", "whatweb"))
-        if should_auto_attach_screenshot and not scanner_like and not finding.get("screenshots"):
-            chosen = None
-            for a in reversed(artifacts):
-                if a.get("type") == "screenshot" and a.get("data") and a.get("screenshot_type") == "exploitation":
-                    chosen = a
-                    break
-
-            if chosen:
-                finding.setdefault("screenshots", [])
-                finding["screenshots"].append({
-                    "url": chosen.get("url", ""),
-                    "data": chosen.get("data", ""),
-                    "caption": chosen.get("description", "Exploitation evidence"),
-                    "timestamp": chosen.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-
-        # If steps are missing, add a lightweight placeholder to improve report readability.
-        if not has_steps:
-            finding["steps_to_reproduce"] = (
-                "1. Navigate to the affected component\n"
-                "2. Perform the described action/input\n"
-                "3. Observe the behavior described in Evidence"
-            )
-    except Exception:
-        pass
-    
+    # Evidence and reproduction steps are kept only when explicitly supplied for this finding.
     _CURRENT_REPORT_DATA["findings"].append(finding)
     
     # Record all tools used (supports comma-separated list like "nikto, sqlmap, curl")
@@ -981,7 +930,7 @@ def add_finding_to_report(
                             if len(raw) > 8000:
                                 snippet += "\n... [truncated]"
                             tool_snippets.append(
-                                f"<h4>Tool Output: {a.get('tool_name','')}</h4><pre>{snippet}</pre>"
+                                f"<h4>Tool Output: {sanitize_html(a.get('tool_name',''))}</h4><pre>{sanitize_html(snippet)}</pre>"
                             )
                             break
 
@@ -993,12 +942,12 @@ def add_finding_to_report(
                 affected_assets = parts[:50]
 
             detailed_html = "".join([
-                f"<h3>Description</h3><p>{(finding.get('description') or '').strip()}</p>",
-                f"<h3>Impact</h3><p>{(finding.get('impact') or '').strip()}</p>",
-                f"<h3>Affected Component</h3><p>{affected or 'N/A'}</p>",
-                f"<h3>Evidence</h3><pre>{evidence_text or 'N/A'}</pre>",
-                f"<h3>Steps to Reproduce</h3><pre>{steps_text or 'N/A'}</pre>",
-                f"<h3>References</h3><pre>{refs_text or 'N/A'}</pre>",
+                f"<h3>Description</h3><p>{sanitize_html((finding.get('description') or '').strip())}</p>",
+                f"<h3>Impact</h3><p>{sanitize_html((finding.get('impact') or '').strip())}</p>",
+                f"<h3>Affected Component</h3><p>{sanitize_html(affected or 'N/A')}</p>",
+                f"<h3>Evidence</h3><pre>{sanitize_html(evidence_text or 'N/A')}</pre>",
+                f"<h3>Steps to Reproduce</h3><pre>{sanitize_html(steps_text or 'N/A')}</pre>",
+                f"<h3>References</h3><pre>{sanitize_html(refs_text or 'N/A')}</pre>",
                 "".join(tool_snippets),
             ])
 
@@ -1933,7 +1882,7 @@ def import_zap_alerts_to_findings(alerts_json: str) -> str:
                     "cwe_id": f"CWE-{alert.get('cweid')}" if alert.get('cweid') else "N/A",
                     "affected_component": alert.get('url', 'N/A'),
                     "evidence": alert.get('evidence', ''),
-                    "steps_to_reproduce": f"1. Navigate to: {alert.get('url', 'target')}\n2. ZAP detected: {name}",
+                    "steps_to_reproduce": "",
                     "tool_used": "OWASP ZAP",
                     "command_used": "",
                     "references": "\n".join(refs)
@@ -2040,7 +1989,7 @@ def import_nikto_findings(nikto_output: str, target_url: str) -> str:
                 "cwe_id": pattern_info["cwe"],
                 "affected_component": target_url,
                 "evidence": f"Detected by Nikto scan",
-                "steps_to_reproduce": f"1. Run nikto against {target_url}\n2. Observe the finding in output",
+                "steps_to_reproduce": "",
                 "tool_used": "nikto",
                 "command_used": f"nikto -h {target_url}",
                 "references": pattern_info["refs"]
@@ -2961,6 +2910,8 @@ def generate_html_report() -> str:
         steps_html = _build_finding_steps_html(f.get("steps_to_reproduce", ""))
         if steps_html:
             steps_html = f"<h4>Steps to Reproduce</h4>{steps_html}"
+        else:
+            steps_html = '<p class="report-note">Reproduction steps were not provided in the source finding.</p>'
         
         # Build command used HTML - normalize tool name for display
         command_html = ""
@@ -3001,6 +2952,8 @@ def generate_html_report() -> str:
         safe_remediation = sanitize_html(f.get('remediation', ''))
         safe_cvss = sanitize_html(str(f.get('cvss_score', 'N/A')))
         safe_tool = sanitize_html(normalize_tool_name(f.get('tool_used', 'Manual')))
+        safe_validation_status = sanitize_html(f.get('validation_status', 'Not recorded'))
+        safe_validation_notes = sanitize_html(f.get('validation_notes', 'No QC notes were provided.'))
         
         findings_html += f'''
         <div class="finding">
@@ -3018,7 +2971,7 @@ def generate_html_report() -> str:
                 <p><code>{safe_component}</code></p>
                 
                 <h4>Impact</h4>
-                <p>{safe_impact}</p>
+                <p>{safe_impact or "Not provided in the source finding."}</p>
                 
                 {evidence_html}
                 
@@ -3036,6 +2989,8 @@ def generate_html_report() -> str:
                     <tr><th>CVSS Score</th><td>{safe_cvss}</td></tr>
                     <tr><th>CWE ID</th><td>{safe_cwe}</td></tr>
                     <tr><th>Tool Used</th><td>{safe_tool}</td></tr>
+                    <tr><th>QC Validation</th><td>{safe_validation_status}</td></tr>
+                    <tr><th>Validation Notes</th><td>{safe_validation_notes}</td></tr>
                 </table>
             </div>
         </div>
