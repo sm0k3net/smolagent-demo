@@ -16892,13 +16892,15 @@ let taskStore = {};
 let taskRefreshInterval = null;
 
 // Sidebar toggle
+function setSidebarExpanded(expanded) {
+    if (!sidebar || !sidebarToggle) return;
+    sidebar.classList.toggle('expanded', expanded);
+    sidebarToggle.setAttribute('aria-expanded', String(expanded));
+    sidebarToggle.setAttribute('aria-label', expanded ? 'Collapse navigation' : 'Expand navigation');
+    sidebarToggle.title = expanded ? 'Collapse navigation' : 'Expand navigation';
+}
 if (sidebarToggle && sidebar) {
-    sidebarToggle.onclick = () => {
-        const expanded = sidebar.classList.toggle('expanded');
-        sidebarToggle.setAttribute('aria-expanded', String(expanded));
-        sidebarToggle.setAttribute('aria-label', expanded ? 'Collapse navigation' : 'Expand navigation');
-        sidebarToggle.title = expanded ? 'Collapse navigation' : 'Expand navigation';
-    };
+    sidebarToggle.onclick = () => setSidebarExpanded(!sidebar.classList.contains('expanded'));
 }
 
 // =============================================
@@ -25231,8 +25233,7 @@ async function sendMessage() {
   
   // Auto-expand sidebar when task starts (only in agent mode)
   if (currentAgentMode !== 'chat' && !sidebar.classList.contains('expanded')) {
-    sidebar.classList.add('expanded');
-    sidebarToggle.textContent = '◀';
+    setSidebarExpanded(true);
   }
   
   // In Chat mode, show stop button

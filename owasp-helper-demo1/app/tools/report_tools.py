@@ -544,7 +544,9 @@ def redact_sensitive_output(value: str) -> str:
     """Redact common credentials and bearer tokens before persisting tool output."""
     text = str(value)
     patterns = (
-        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]"),
+        (r"(?i)(authorization\s*[:=]\s*(?:bearer|basic)\s+)[^\s,;]+", r"\1[REDACTED]"),
+        (r"(?im)(\b(?:cookie|set-cookie)\s*[:=]\s*)[^\r\n]+", r"\1[REDACTED]"),
+        (r"(?i)([\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|session[_-]?id|cookie)[\"']?\s*:\s*)(\"[^\"]*\"|'[^']*')", r"\1\"[REDACTED]\""),
         (r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\b\s*[:=]\s*)[\"']?[^\s,;\"']+", r"\1[REDACTED]"),
         (r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@"),
     )

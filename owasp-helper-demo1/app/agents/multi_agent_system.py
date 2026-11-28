@@ -1196,6 +1196,12 @@ def compile_final_report() -> str:
             "exploitation and screenshots are not required.\n- " + "\n- ".join(incomplete_findings)
         )
 
+    ctx.report_generated = False
+    ctx.report_reviewed = False
+    ctx.report_path = ""
+    ctx.report_finding_ids = []
+    ctx.phases_completed["reporting"] = False
+
     try:
         # Use existing report tools
         from app.tools.report_tools import (
