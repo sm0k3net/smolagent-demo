@@ -76,35 +76,35 @@ class SharedFinding:
     affected_component: str
     discovered_by: str  # Agent that found it
     discovered_at: datetime
-    
+
     # CRITICAL: Include actual tool info for quality reports
     tool_used: str = ""  # Actual tool name (nikto, nuclei, sqlmap, etc.)
     command_used: str = ""  # Actual command that was run
     steps_to_reproduce: str = ""  # Steps to reproduce the vulnerability
     impact: str = ""  # Business/technical impact (separate from description)
-    
+
     # Validation tracking
     status: FindingStatus = FindingStatus.DISCOVERED
     validated_by: Optional[str] = None
     validated_at: Optional[datetime] = None
     validation_notes: str = ""
-    
+
     # Exploitation tracking
     exploited: bool = False
     exploitation_proof: str = ""
     exploited_by: Optional[str] = None
-    
+
     # Remediation
     remediation: str = ""
     references: List[str] = field(default_factory=list)
     owasp_category: str = ""
     cwe_id: str = ""
     cvss_score: Optional[float] = None
-    
+
     # Attachments
     screenshots: List[str] = field(default_factory=list)
     tool_outputs: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         d = asdict(self)
@@ -115,7 +115,7 @@ class SharedFinding:
         return d
 
 
-@dataclass  
+@dataclass
 class SharedContext:
     """
     Shared context/memory accessible by all agents in the multi-agent system.
@@ -127,7 +127,7 @@ class SharedContext:
     target: str = ""
     scope: List[str] = field(default_factory=list)
     started_at: Optional[datetime] = None
-    
+
     # Reconnaissance data (from OSINT/Recon agent)
     recon_data: Dict[str, Any] = field(default_factory=lambda: {
         "subdomains": [],
@@ -141,16 +141,16 @@ class SharedContext:
         "directories": [],
         "endpoints": [],
     })
-    
+
     # Findings pipeline
     findings: List[SharedFinding] = field(default_factory=list)
-    
+
     # Agent activity log
     agent_logs: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # Tool outputs (raw data for evidence)
     tool_outputs: Dict[str, str] = field(default_factory=dict)
-    
+
     # Phase tracking
     phases_completed: Dict[str, bool] = field(default_factory=lambda: {
         "reconnaissance": False,
@@ -161,34 +161,36 @@ class SharedContext:
         "reporting": False,
         "final_review": False,
     })
-    
+
     # Quality control notes
     qc_notes: List[Dict[str, str]] = field(default_factory=list)
-    
+
     # Final report status
     report_generated: bool = False
     report_path: str = ""
     report_reviewed: bool = False
-    
+    report_finding_ids: List[str] = field(default_factory=list)
+
     def add_finding(self, finding: SharedFinding) -> None:
         """Add a new finding to the pipeline."""
         self.findings.append(finding)
-        self.log_activity(finding.discovered_by, "finding_added", 
+        self.report_reviewed = False
+        self.log_activity(finding.discovered_by, "finding_added",
                          f"Added finding: {finding.title} ({finding.severity})")
-    
+
     def get_findings_by_status(self, status: FindingStatus) -> List[SharedFinding]:
         """Get all findings with a specific status."""
         return [f for f in self.findings if f.status == status]
-    
+
     def get_findings_by_agent(self, agent_name: str) -> List[SharedFinding]:
         """Get all findings discovered by a specific agent."""
         return [f for f in self.findings if f.discovered_by == agent_name]
-    
+
     def get_validated_findings(self) -> List[SharedFinding]:
         """Get all validated findings ready for reporting."""
-        return [f for f in self.findings 
+        return [f for f in self.findings
                 if f.status in (FindingStatus.VALIDATED, FindingStatus.EXPLOITED, FindingStatus.REPORTED)]
-    
+
     def log_activity(self, agent: str, action: str, details: str) -> None:
         """Log an agent activity."""
         self.agent_logs.append({
@@ -197,32 +199,32 @@ class SharedContext:
             "action": action,
             "details": details
         })
-    
+
     def add_recon_data(self, data_type: str, items: List[str], source: str) -> int:
         """Add reconnaissance data."""
         if data_type not in self.recon_data:
             self.recon_data[data_type] = []
-        
+
         existing = set(self.recon_data[data_type])
         new_items = [i for i in items if i not in existing]
         self.recon_data[data_type].extend(new_items)
-        
-        self.log_activity(source, "recon_data_added", 
+
+        self.log_activity(source, "recon_data_added",
                          f"Added {len(new_items)} {data_type} items")
         return len(new_items)
-    
+
     def add_tool_output(self, tool_name: str, output: str, agent: str) -> None:
         """Store raw tool output for evidence."""
         key = f"{tool_name}_{datetime.now().strftime('%H%M%S')}"
         self.tool_outputs[key] = output
         self.log_activity(agent, "tool_output_saved", f"Saved {tool_name} output")
-    
+
     def mark_phase_complete(self, phase: str, agent: str) -> None:
         """Mark a phase as completed."""
         if phase in self.phases_completed:
             self.phases_completed[phase] = True
             self.log_activity(agent, "phase_completed", f"Completed phase: {phase}")
-    
+
     def add_qc_note(self, note: str, reviewer: str) -> None:
         """Add a quality control note."""
         self.qc_notes.append({
@@ -230,14 +232,14 @@ class SharedContext:
             "reviewer": reviewer,
             "note": note
         })
-    
+
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of the current context state."""
         severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
         for f in self.findings:
             if f.severity in severity_counts:
                 severity_counts[f.severity] += 1
-        
+
         return {
             "project": self.project_title,
             "target": self.target,
@@ -249,7 +251,7 @@ class SharedContext:
             "phases_completed": self.phases_completed,
             "recon_items": {k: len(v) for k, v in self.recon_data.items() if v},
         }
-    
+
     def to_json(self) -> str:
         """Serialize context to JSON."""
         data = {
@@ -266,6 +268,7 @@ class SharedContext:
             "report_generated": self.report_generated,
             "report_path": self.report_path,
             "report_reviewed": self.report_reviewed,
+            "report_finding_ids": self.report_finding_ids,
         }
         return json.dumps(data, indent=2)
 
@@ -302,7 +305,7 @@ def initialize_project(title: str, target: str, scope: List[str] = None) -> Shar
             scope=scope or [target],
             started_at=datetime.now(),
         )
-        _SHARED_CONTEXT.log_activity("ProjectManager", "project_initialized", 
+        _SHARED_CONTEXT.log_activity("ProjectManager", "project_initialized",
                                      f"Started project: {title}")
         return _SHARED_CONTEXT
 
@@ -333,7 +336,7 @@ You are the orchestrator of a multi-agent penetration testing team. You coordina
 1. **OSINT/Recon Agent** - Handles reconnaissance and information gathering
 2. **Vulnerability Scanner Agent** - Runs automated vulnerability scans
 3. **Manual Tester Agent** - Performs manual security testing
-4. **Exploitation Agent** - Validates and exploits confirmed vulnerabilities
+4. **Controlled Validation Agent** - Performs additional safe validation only when authorized
 5. **Quality Control Agent** - Reviews and validates ALL findings
 6. **Reporting Agent** - Compiles the final report
 
@@ -346,11 +349,11 @@ You are the orchestrator of a multi-agent penetration testing team. You coordina
 
 ## Workflow:
 1. Call `initialize_pentest_project()` to set up shared context
-2. Dispatch agents in order: Recon → Vuln Scan → Manual Test → Exploitation
-3. After each phase, QC Agent reviews the findings
-4. Once all testing complete, Reporting Agent compiles report
-5. QC Agent does final review
-6. You deliver the final report
+2. Confirm written authorization, exact scope, exclusions, test window, and permitted techniques before dispatching active work
+3. Dispatch only relevant agents: Recon → Vuln Scan → Manual Test; request additional validation only when scope explicitly permits it
+4. After each phase, have QC review evidence and record limitations
+5. Once agreed work is complete, Reporting Agent compiles the report
+6. Require a passed QC final review before delivery
 
 ## Concurrency & QC Hygiene (Task DB):
 - Break work into discrete tasks via `create_subagent_task(project_id, title, description, priority)`
@@ -359,6 +362,9 @@ You are the orchestrator of a multi-agent penetration testing team. You coordina
 - Use `get_task_status(...)` to monitor claimed/active tasks and avoid collisions
 
 ## Important:
+- Never infer authorization from a public or discovered target; do not exceed explicit scope
+- Prefer passive and low-impact checks; stop and ask if a proposed technique or impact is unclear
+- Phase flags and agent summaries are workflow state, not proof that tools ran
 - Check `get_project_status()` frequently to monitor progress
 - All agents share context via the shared memory system
 - Never skip the Quality Control review phases
@@ -367,7 +373,7 @@ You are the orchestrator of a multi-agent penetration testing team. You coordina
     AgentRole.OSINT_RECON: """You are the OSINT/RECONNAISSANCE agent.
 
 ## Your Role:
-Perform comprehensive reconnaissance and information gathering on targets.
+Perform proportionate reconnaissance on explicitly authorized, in-scope assets.
 
 ## Your Capabilities:
 - Subdomain enumeration (subfinder, crt.sh, amass)
@@ -379,22 +385,22 @@ Perform comprehensive reconnaissance and information gathering on targets.
 - OSINT research (VirusTotal, Shodan)
 
 ## Your Responsibilities:
-1. Gather ALL available information about the target
+1. Gather only information relevant to the agreed scope and assessment objectives
 2. Store findings in shared context using `submit_recon_data()`
-3. Create Info-level findings for sensitive discoveries
+3. Do not store secrets, personal data, or other sensitive material; report only a redacted minimum when necessary
 4. Mark phase complete when done
 
 ## Output Requirements:
-- Submit ALL discovered subdomains, IPs, technologies
-- Save raw tool outputs for evidence
-- Create findings for any information disclosure issues
-- Be thorough - missing recon data affects all other phases
+- Submit only scoped subdomains, IPs, and technologies; flag out-of-scope discoveries without probing them
+- Preserve only relevant, sanitized evidence
+- Create a finding only when evidence supports a relevant security concern
+- Report scope gaps and limitations; completeness is defined by the agreed objective, not exhaustive discovery
 """,
 
     AgentRole.VULNERABILITY_SCANNER: """You are the VULNERABILITY SCANNER agent.
 
 ## Your Role:
-Run comprehensive automated vulnerability scans on targets.
+Run relevant, rate-limited automated checks on explicitly in-scope targets only.
 
 ## Your Capabilities:
 - Web vulnerability scanning (nikto, nuclei, ZAP)
@@ -405,8 +411,8 @@ Run comprehensive automated vulnerability scans on targets.
 
 ## Your Responsibilities:
 1. Review recon data from shared context to understand target
-2. Run appropriate scanners based on discovered technologies
-3. Submit ALL findings using `submit_finding()` with COMPLETE details
+2. Choose the least-impact appropriate scanners based on agreed objectives and permitted techniques
+3. Submit material findings using `submit_finding()` with evidence and uncertainty stated accurately
 4. Each finding goes to QC for validation
 5. Mark phase complete when done
 
@@ -420,33 +426,33 @@ submit_finding(
     severity="High",  # Critical, High, Medium, Low, Info
     description="Detailed multi-sentence description explaining the vulnerability, "
                 "what it means, and how it was discovered.",
-    evidence="Raw tool output or proof-of-concept showing the vulnerability",
+    evidence="Sanitized observation that supports the claim; redact secrets and personal data",
     affected_component="https://target.com/specific/path/or/endpoint",
     remediation="Specific, actionable remediation steps (2-3 sentences minimum)",
     owasp_category="A03:2021 Injection",
     cwe_id="CWE-89",
     references="https://owasp.org/..., https://cwe.mitre.org/...",
-    
-    # ⚠️ REQUIRED FOR QUALITY REPORTS:
-    tool_used="nikto",  # ACTUAL tool name: nikto, nuclei, sqlmap, nmap, etc.
-    command_used="nikto -h https://target.com -o output.txt",  # EXACT command run
-    steps_to_reproduce="1. Run nikto against target\\n2. Observe finding in output\\n3. Verify manually",
-    impact="An attacker could exploit this to... (business/technical impact)",
+
+    # Include actual tool/command only when recorded; do not invent wrapper arguments.
+    tool_used="actual tool name, if known",
+    command_used="exact command/request, if actually recorded",
+    steps_to_reproduce="safe, scoped steps; disclose validation limitations",
+    impact="Evidence-based business/technical impact; state uncertainty where applicable",
     cvss_score="7.5"  # If known
 )
 ```
 
-## DO NOT:
-- Use generic tool names like "Vulnerability Scanner" 
-- Skip the command_used field
-- Write single-sentence descriptions
-- Forget steps_to_reproduce
+## Do not:
+- Claim a scan or validation ran if its output is unavailable
+- Invent exact command lines, evidence, severity, or exploitability
+- Run broad or high-impact scans without explicit authorization
+- Access real user data, secrets, internal services, or out-of-scope assets
 """,
 
     AgentRole.MANUAL_TESTER: """You are the MANUAL TESTER agent.
 
 ## Your Role:
-Perform manual security testing that automated scanners miss.
+Perform manual security assessment within the confirmed scope and permitted techniques.
 
 ## Your Focus Areas:
 - Business logic vulnerabilities
@@ -458,56 +464,41 @@ Perform manual security testing that automated scanners miss.
 
 ## Your Responsibilities:
 1. Review recon data and scanner findings from shared context
-2. Perform manual testing based on discovered attack surface
-3. Submit findings with detailed reproduction steps using submit_finding()
+2. Perform only checks justified by the objective and permitted by the rules of engagement
+3. Submit supported findings with safe reproduction steps and honest validation limits using submit_finding()
 4. Focus on vulnerabilities scanners typically miss
 
 ## ⚠️ CRITICAL: FINDING SUBMISSION REQUIREMENTS ⚠️
 
-For HIGH-QUALITY reports, EVERY finding MUST include:
-- tool_used: "manual", "curl", "burp", "browser_devtools", etc.
-- command_used: Exact curl command, HTTP request, or steps
-- steps_to_reproduce: Numbered list of steps (1. Navigate to... 2. Enter... 3. Observe...)
-- impact: Business/technical impact explanation
-- evidence: HTTP request/response, screenshots, etc.
+For a useful report, include fields supported by the evidence:
+- tool_used and command_used only when actually recorded
+- safe, in-scope reproduction steps or a note about why validation was limited
+- evidence-based impact and a sanitized observation
+- screenshots are optional and must not contain secrets or personal data
 
 ## Important:
 - Check what scanners already found to avoid duplicates
-- Document exact steps to reproduce each finding
-- Take screenshots for evidence
+- Prefer test identities, synthetic data, and one controlled request at a time
+- Document safe reproduction steps and observed evidence; redact personal data and secrets
+- Screenshots are optional supporting evidence, not a prerequisite
 """,
 
-    AgentRole.EXPLOITATION: """You are the EXPLOITATION agent.
+    AgentRole.EXPLOITATION: """You are the CONTROLLED VALIDATION agent.
 
 ## Your Role:
-Validate and exploit confirmed vulnerabilities to demonstrate impact.
-
-## Your Capabilities:
-- SQL injection exploitation (sqlmap)
-- File inclusion exploitation
-- Command injection
-- Authentication bypass
-- CVE exploitation
-- Custom exploit development
+Review validated findings and determine whether a safe, in-scope verification can improve confidence.
 
 ## Your Responsibilities:
 1. Review validated findings from shared context
-2. Attempt safe exploitation of each vulnerability
-3. Document exploitation steps and evidence
-4. Update findings with exploitation proof
-5. Mark findings as EXPLOITED when successful
+2. Check engagement rules before any additional active request; skip if permission is absent or ambiguous
+3. Prefer passive review or a harmless, reversible check with synthetic data
+4. Record the observed result, confidence, and limitations without overstating impact
+5. Mark a finding EXPLOITED only if permitted testing actually produced that result; it is never required for reporting
 
-## ⚠️ CRITICAL: ALWAYS include in exploitation findings:
-- tool_used: "sqlmap", "curl", "metasploit", etc.
-- command_used: EXACT exploit command that was run
-- steps_to_reproduce: How to replicate the exploitation
-- evidence: Proof of successful exploitation (data extracted, shell access, etc.)
-
-## Safety Rules:
-- Only exploit VALIDATED findings
-- Do NOT delete or modify production data
-- Extract minimal proof-of-concept data
-- Document everything for the report
+## Prohibited by default:
+- No data extraction, cookie/token theft, secret or private-file access, command execution, internal/metadata access, persistence, pivoting, account takeover, destructive or load-inducing tests
+- No unreviewed exploit code or high-impact payloads
+- Stop immediately if sensitive data or unexpected impact appears; redact and notify the engagement contact
 """,
 
     AgentRole.QUALITY_CONTROL: """You are the QUALITY CONTROL agent.
@@ -519,10 +510,10 @@ Review and validate ALL findings from other agents. You are the gatekeeper of qu
 
 ### During Active Testing:
 1. Review all findings with status PENDING_VALIDATION
-2. Validate each finding by:
+2. Review the available evidence; perform an additional check only when the exact technique is in scope and permitted:
    - Checking if evidence supports the claim
    - Verifying severity is appropriate
-   - Confirming it's not a false positive
+   - Stating uncertainty if safe validation is unavailable
 3. Update finding status to VALIDATED or FALSE_POSITIVE
 4. Add validation notes explaining your decision
 
@@ -536,7 +527,7 @@ Review and validate ALL findings from other agents. You are the gatekeeper of qu
 ## Validation Criteria:
 - Is there sufficient evidence?
 - Is the severity rating accurate?
-- Is the finding reproducible?
+- Is the finding reproducible safely, or are limitations and confidence stated?
 - Is the remediation advice correct?
 - Are references and CVEs accurate?
 
@@ -548,7 +539,7 @@ Review and validate ALL findings from other agents. You are the gatekeeper of qu
 - `review_pending_findings()` - Get findings awaiting validation
 - `validate_finding(finding_id, approved, notes)` - Approve or reject
 - `review_final_report()` - Do final report review
-- `approve_report()` - Approve for delivery
+- `approve_final_report()` - Approve for delivery after a passed final review
 """,
 
     AgentRole.REPORTING: """You are the REPORTING agent.
@@ -558,11 +549,11 @@ Compile all validated findings into a professional penetration test report.
 
 ## Your Responsibilities:
 1. Wait for Quality Control to validate findings
-2. Only include VALIDATED or EXPLOITED findings
+2. Include validated findings and clearly label any evidence limitation
 3. Generate comprehensive report with:
    - Executive summary
    - Detailed findings
-   - Evidence and screenshots
+   - Sanitized evidence and validation limitations (screenshots optional)
    - Remediation guidance
    - Prioritized recommendations
 
@@ -575,7 +566,7 @@ Compile all validated findings into a professional penetration test report.
 
 ## Important:
 - Include ONLY validated findings (not false positives)
-- Check shared context for all evidence and screenshots
+- Check shared context for evidence and disclose limitations; screenshots are optional
 - Generate HTML report using existing report tools
 - Notify QC when report is ready for final review
 """
@@ -589,28 +580,28 @@ Compile all validated findings into a professional penetration test report.
 @tool
 def initialize_pentest_project(title: str, target: str, scope: str = "") -> str:
     """Initialize a new penetration test project with shared context for all agents.
-    
+
     This MUST be called at the start of any multi-agent pentest.
     It creates the shared memory space that all agents will use.
-    
+
     Args:
         title: Project title (e.g., "Security Assessment - Acme Corp").
         target: Primary target URL or domain.
         scope: Comma-separated list of in-scope targets (optional).
-        
+
     Returns:
         Confirmation with project ID and initial status.
     """
     scope_list = [s.strip() for s in scope.split(",") if s.strip()] if scope else [target]
     ctx = initialize_project(title, target, scope_list)
-    
+
     # Also enable report mode in the existing report system
     try:
         from app.tools.report_tools import enable_report_mode
         enable_report_mode(title, target)
     except Exception:
         pass
-    
+
     return f"""✅ PENTEST PROJECT INITIALIZED
 
 Project ID: {ctx.project_id}
@@ -633,29 +624,29 @@ Next Steps:
 @tool
 def get_project_status() -> str:
     """Get current status of the pentest project including all agent activities.
-    
+
     Returns:
         Comprehensive status report of the multi-agent pentest.
     """
     ctx = get_shared_context()
-    
+
     if not ctx.project_id:
         return "No active project. Call initialize_pentest_project() first."
-    
+
     summary = ctx.get_summary()
-    
+
     # Build phase status
     phase_status = []
     for phase, complete in ctx.phases_completed.items():
         icon = "✅" if complete else "⏳"
         phase_status.append(f"  {icon} {phase.replace('_', ' ').title()}")
-    
+
     # Recent activity
     recent_logs = ctx.agent_logs[-10:] if ctx.agent_logs else []
     activity_lines = []
     for log in recent_logs:
         activity_lines.append(f"  [{log['agent']}] {log['action']}: {log['details'][:50]}")
-    
+
     # Finding stats
     findings_by_status = {}
     for f in ctx.findings:
@@ -663,7 +654,7 @@ def get_project_status() -> str:
         if status_name not in findings_by_status:
             findings_by_status[status_name] = 0
         findings_by_status[status_name] += 1
-    
+
     return f"""=== PROJECT STATUS: {ctx.project_title} ===
 
 📋 PROJECT INFO:
@@ -707,28 +698,28 @@ def get_project_status() -> str:
 @tool
 def submit_recon_data(data_type: str, items: str, source_agent: str = "osint_recon") -> str:
     """Submit reconnaissance data to the shared context.
-    
+
     Used by OSINT/Recon agent to share discovered information with other agents.
-    
+
     Args:
-        data_type: Type of data - subdomains, ip_addresses, dns_records, technologies, 
+        data_type: Type of data - subdomains, ip_addresses, dns_records, technologies,
                    ports, emails, directories, endpoints.
         items: Newline-separated or comma-separated list of discovered items.
         source_agent: Name of the agent submitting (default: osint_recon).
-        
+
     Returns:
         Confirmation with count of new items added.
     """
     ctx = get_shared_context()
-    
+
     # Parse items
     if '\n' in items:
         item_list = [i.strip() for i in items.split('\n') if i.strip()]
     else:
         item_list = [i.strip() for i in items.split(',') if i.strip()]
-    
+
     count = ctx.add_recon_data(data_type, item_list, source_agent)
-    
+
     return f"✅ Added {count} new {data_type} items to shared context. Total: {len(ctx.recon_data.get(data_type, []))}"
 
 
@@ -751,17 +742,17 @@ def submit_finding(
     cvss_score: str = ""
 ) -> str:
     """Submit a finding to the shared context for Quality Control review.
-    
+
     This is the primary way for operational agents to report vulnerabilities.
     All findings go through QC validation before being included in the report.
-    
+
     CRITICAL: For high-quality reports, include ALL fields:
     - tool_used: Actual tool name (nikto, nuclei, sqlmap, nmap, etc.)
     - command_used: Exact command that was run
     - steps_to_reproduce: Numbered steps to reproduce
     - impact: Business/technical impact
     - evidence: Raw tool output or proof
-    
+
     Args:
         title: Short, descriptive title of the finding.
         severity: Critical, High, Medium, Low, or Info.
@@ -778,15 +769,15 @@ def submit_finding(
         steps_to_reproduce: Numbered steps to reproduce (e.g., "1. Navigate to URL\\n2. Enter payload").
         impact: Business/technical impact of the vulnerability.
         cvss_score: CVSS score if known (e.g., "7.5" or "9.8").
-        
+
     Returns:
         Confirmation with finding ID for tracking.
     """
     ctx = get_shared_context()
-    
+
     # Parse references
     ref_list = [r.strip() for r in references.split(',') if r.strip()] if references else []
-    
+
     # Parse CVSS score
     cvss_float = None
     if cvss_score:
@@ -794,7 +785,7 @@ def submit_finding(
             cvss_float = float(cvss_score)
         except ValueError:
             pass
-    
+
     # Create finding with ALL fields
     finding = SharedFinding(
         id=f"FIND-{uuid.uuid4().hex[:8].upper()}",
@@ -816,9 +807,9 @@ def submit_finding(
         impact=impact or description,  # Use description as fallback for impact
         cvss_score=cvss_float,
     )
-    
+
     ctx.add_finding(finding)
-    
+
     return f"""✅ FINDING SUBMITTED
 
 ID: {finding.id}
@@ -906,16 +897,16 @@ References:
 @tool
 def get_recon_data() -> str:
     """Get all reconnaissance data collected by the OSINT/Recon agent.
-    
+
     Used by other agents to understand the target's attack surface.
-    
+
     Returns:
         All collected reconnaissance data from shared context.
     """
     ctx = get_shared_context()
-    
+
     output = ["=== RECONNAISSANCE DATA ===\n"]
-    
+
     for data_type, items in ctx.recon_data.items():
         if items:
             output.append(f"\n📁 {data_type.upper()} ({len(items)} items):")
@@ -923,7 +914,7 @@ def get_recon_data() -> str:
                 output.append(f"  • {item}")
             if len(items) > 50:
                 output.append(f"  ... and {len(items) - 50} more")
-    
+
     output.append("\n===========================")
     return "\n".join(output)
 
@@ -931,20 +922,20 @@ def get_recon_data() -> str:
 @tool
 def get_pending_findings() -> str:
     """Get all findings pending Quality Control validation.
-    
+
     Used by QC agent to review findings from operational agents.
-    
+
     Returns:
         List of findings awaiting validation.
     """
     ctx = get_shared_context()
     pending = ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION)
-    
+
     if not pending:
         return "No findings pending validation."
-    
+
     output = [f"=== FINDINGS PENDING VALIDATION ({len(pending)}) ===\n"]
-    
+
     for f in pending:
         output.append(f"""
 📋 {f.id}: {f.title}
@@ -953,7 +944,7 @@ def get_pending_findings() -> str:
    Discovered by: {f.discovered_by}
    Evidence preview: {f.evidence[:200]}...
    ---""")
-    
+
     output.append("\nUse validate_finding(finding_id, approved, notes) to review each finding.")
     return "\n".join(output)
 
@@ -961,36 +952,37 @@ def get_pending_findings() -> str:
 @tool
 def validate_finding(finding_id: str, approved: bool, notes: str = "") -> str:
     """Validate or reject a finding (Quality Control only).
-    
+
     Args:
         finding_id: ID of the finding to validate.
         approved: True to validate, False to mark as false positive.
         notes: Validation notes explaining the decision.
-        
+
     Returns:
         Confirmation of validation action.
     """
     ctx = get_shared_context()
-    
+
     # Find the finding
     finding = None
     for f in ctx.findings:
         if f.id == finding_id:
             finding = f
             break
-    
+
     if not finding:
         return f"Finding {finding_id} not found."
-    
+
+    ctx.report_reviewed = False
     if approved:
         finding.status = FindingStatus.VALIDATED
         finding.validated_by = "quality_control"
         finding.validated_at = datetime.now()
         finding.validation_notes = notes
-        
-        ctx.log_activity("quality_control", "finding_validated", 
+
+        ctx.log_activity("quality_control", "finding_validated",
                         f"Validated: {finding.title}")
-        
+
         return f"""✅ FINDING VALIDATED
 
 ID: {finding_id}
@@ -1006,10 +998,10 @@ This finding will be included in the final report.
         finding.validated_by = "quality_control"
         finding.validated_at = datetime.now()
         finding.validation_notes = notes
-        
-        ctx.log_activity("quality_control", "finding_rejected", 
+
+        ctx.log_activity("quality_control", "finding_rejected",
                         f"Rejected as false positive: {finding.title}")
-        
+
         return f"""❌ FINDING REJECTED
 
 ID: {finding_id}
@@ -1024,33 +1016,34 @@ This finding will NOT be included in the final report.
 @tool
 def mark_finding_exploited(finding_id: str, exploitation_proof: str) -> str:
     """Mark a finding as successfully exploited (Exploitation agent only).
-    
+
     Args:
         finding_id: ID of the finding that was exploited.
         exploitation_proof: Description or evidence of successful exploitation.
-        
+
     Returns:
         Confirmation of exploitation status.
     """
     ctx = get_shared_context()
-    
+
     finding = None
     for f in ctx.findings:
         if f.id == finding_id:
             finding = f
             break
-    
+
     if not finding:
         return f"Finding {finding_id} not found."
-    
+
+    ctx.report_reviewed = False
     finding.exploited = True
     finding.exploitation_proof = exploitation_proof
     finding.exploited_by = "exploitation"
     finding.status = FindingStatus.EXPLOITED
-    
-    ctx.log_activity("exploitation", "finding_exploited", 
+
+    ctx.log_activity("exploitation", "finding_exploited",
                     f"Exploited: {finding.title}")
-    
+
     return f"""💥 EXPLOITATION CONFIRMED
 
 ID: {finding_id}
@@ -1065,29 +1058,29 @@ This strengthens the finding's severity and report impact.
 @tool
 def mark_phase_complete(phase: str) -> str:
     """Mark a testing phase as complete.
-    
+
     Args:
         phase: Phase name - reconnaissance, vulnerability_scanning, manual_testing,
                exploitation, quality_control_review, reporting, final_review.
-               
+
     Returns:
         Confirmation of phase completion.
     """
     ctx = get_shared_context()
-    
+
     valid_phases = list(ctx.phases_completed.keys())
     if phase not in valid_phases:
         return f"Invalid phase. Valid phases: {', '.join(valid_phases)}"
-    
+
     ctx.mark_phase_complete(phase, "agent")
-    
+
     # Check what's next
-    phase_order = ["reconnaissance", "vulnerability_scanning", "manual_testing", 
+    phase_order = ["reconnaissance", "vulnerability_scanning", "manual_testing",
                    "exploitation", "quality_control_review", "reporting", "final_review"]
-    
+
     current_idx = phase_order.index(phase)
     next_phase = phase_order[current_idx + 1] if current_idx < len(phase_order) - 1 else None
-    
+
     return f"""✅ PHASE COMPLETE: {phase.replace('_', ' ').title()}
 
 Progress: {sum(ctx.phases_completed.values())}/{len(ctx.phases_completed)} phases complete
@@ -1099,24 +1092,24 @@ Progress: {sum(ctx.phases_completed.values())}/{len(ctx.phases_completed)} phase
 @tool
 def get_validated_findings_for_report() -> str:
     """Get all validated findings ready to be included in the report.
-    
+
     Used by Reporting agent to compile the final report.
-    
+
     Returns:
         All validated and exploited findings with full details.
     """
     ctx = get_shared_context()
     validated = ctx.get_validated_findings()
-    
+
     if not validated:
         return "No validated findings ready for reporting."
-    
+
     output = [f"=== VALIDATED FINDINGS FOR REPORT ({len(validated)}) ===\n"]
-    
+
     # Sort by severity
     severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Info": 4}
     validated.sort(key=lambda f: severity_order.get(f.severity, 5))
-    
+
     for f in validated:
         exploited_tag = " [EXPLOITED]" if f.exploited else ""
         output.append(f"""
@@ -1146,64 +1139,75 @@ REFERENCES:
 Validated by: {f.validated_by}
 Validation notes: {f.validation_notes}
 """)
-    
+
     output.append("\n===========================================")
     return "\n".join(output)
+
+
+def _finding_completeness_issues(finding: SharedFinding) -> List[str]:
+    """Return objective field gaps that make a finding unsuitable for reporting."""
+    issues = []
+    for field_name in ("title", "description", "affected_component", "evidence", "remediation"):
+        if not str(getattr(finding, field_name, "") or "").strip():
+            issues.append(f"{finding.id}: missing {field_name.replace('_', ' ')}")
+    if finding.severity not in {"Critical", "High", "Medium", "Low", "Info"}:
+        issues.append(f"{finding.id}: invalid severity '{finding.severity}'")
+    return issues
 
 
 @tool
 def compile_final_report() -> str:
     """Compile the final report from all validated findings (Reporting agent).
-    
+
     This generates the HTML report using the existing report system.
-    
+
     Returns:
         Confirmation and path to generated report.
     """
     ctx = get_shared_context()
 
-    # Prevent premature reporting: require QC review completion and zero pending findings.
+    # Require QC review and disposition of all submitted findings, but do not require
+    # exhaustive phases, exploitation, screenshots, or scans irrelevant to the objective.
     if not ctx.phases_completed.get("quality_control_review"):
-        pending_count = len(ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION))
         return (
             "Cannot generate report: Quality Control review phase not complete. "
-            "Run dispatch_qc_agent_review() (or mark_phase_complete(\"quality_control_review\")) first. "
-            f"Pending findings: {pending_count}"
+            "Complete and record the QC review first."
         )
 
-    pending = ctx.get_findings_by_status(FindingStatus.PENDING_VALIDATION)
-    if pending:
-        ids = ", ".join([f.id for f in pending[:20]])
-        more = f" (+{len(pending) - 20} more)" if len(pending) > 20 else ""
+    unreviewed = [
+        finding for finding in ctx.findings
+        if finding.status in {FindingStatus.DISCOVERED, FindingStatus.PENDING_VALIDATION}
+    ]
+    if unreviewed:
+        ids = ", ".join([f.id for f in unreviewed[:20]])
+        more = f" (+{len(unreviewed) - 20} more)" if len(unreviewed) > 20 else ""
         return (
-            "Cannot generate report: there are findings still pending validation. "
-            f"Pending IDs: {ids}{more}. Use get_pending_findings() and validate_finding()."
+            "Cannot generate report: submitted findings still need QC disposition. "
+            f"Finding IDs: {ids}{more}. Review each and record a justified decision."
         )
 
-    required_phases = ["reconnaissance", "vulnerability_scanning"]
-    incomplete = [p for p in required_phases if not ctx.phases_completed.get(p)]
-    if incomplete:
-        return (
-            "Cannot generate report: required testing phases are not complete: "
-            f"{', '.join(incomplete)}. Ensure coverage before reporting."
-        )
     validated = ctx.get_validated_findings()
-    
-    if not validated:
-        return "Cannot generate report: No validated findings."
-    
+
+    incomplete_findings = [issue for finding in validated for issue in _finding_completeness_issues(finding)]
+    if incomplete_findings:
+        return (
+            "Cannot generate report: validated findings need required report fields. "
+            "Complete title, description, affected component, evidence, remediation, and a valid severity; "
+            "exploitation and screenshots are not required.\n- " + "\n- ".join(incomplete_findings)
+        )
+
     try:
         # Use existing report tools
         from app.tools.report_tools import (
-            enable_report_mode, add_finding_to_report, 
+            enable_report_mode, add_finding_to_report,
             set_executive_summary, set_conclusion,
-            add_tool_output_to_report, generate_html_report,
+            generate_html_report,
             add_recon_data as report_add_recon_data
         )
-        
+
         # Enable report mode
         enable_report_mode(ctx.project_title, ctx.target)
-        
+
         # Add all validated findings with ALL fields for high-quality reports
         for f in validated:
             add_finding_to_report(
@@ -1215,8 +1219,8 @@ def compile_final_report() -> str:
                 remediation=f.remediation,
                 owasp_category=f.owasp_category,
                 cwe_id=f.cwe_id,
-                # CRITICAL: Use actual tool_used field, not discovered_by
-                tool_used=f.tool_used if f.tool_used else f.discovered_by,
+                # Keep tool provenance factual; an agent role is not a tool name.
+                tool_used=f.tool_used,
                 command_used=f.command_used,
                 steps_to_reproduce=f.steps_to_reproduce,
                 evidence=f.evidence,
@@ -1224,57 +1228,51 @@ def compile_final_report() -> str:
                 affected_component=f.affected_component,
                 references=",".join(f.references) if f.references else "",
             )
-        
+
         # Add recon data
         for data_type, items in ctx.recon_data.items():
             if items:
                 report_add_recon_data(data_type, "\n".join(items), "osint_recon")
-        
+
         # Generate executive summary
         severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
         for f in validated:
             if f.severity in severity_counts:
                 severity_counts[f.severity] += 1
-        
-        exec_summary = f"""A comprehensive security assessment was conducted against {ctx.target}. 
 
-The assessment identified {len(validated)} validated security findings:
+        exec_summary = f"""This report summarizes the authorized assessment work recorded for {ctx.target}.
+
+The review approved {len(validated)} findings for inclusion:
 - {severity_counts['Critical']} Critical severity
-- {severity_counts['High']} High severity  
+- {severity_counts['High']} High severity
 - {severity_counts['Medium']} Medium severity
 - {severity_counts['Low']} Low severity
 - {severity_counts['Info']} Informational
 
-{'CRITICAL ISSUES IDENTIFIED: Immediate action required.' if severity_counts['Critical'] > 0 else ''}
-{'HIGH SEVERITY ISSUES: Address within 1-2 weeks.' if severity_counts['High'] > 0 else ''}
+This is not a claim of exhaustive coverage or proof that untested areas are secure. Review the agreed scope, work actually performed, and stated limitations before relying on these results.
+{'Critical or High findings warrant prompt review under the organization’s incident and remediation process.' if severity_counts['Critical'] + severity_counts['High'] > 0 else ''}
 """
         set_executive_summary(exec_summary)
-        
-        # Generate conclusion
-        conclusion = f"""This assessment of {ctx.target} revealed several security concerns requiring attention.
 
-Prioritized Remediation:
-1. Address all Critical findings immediately
-2. Remediate High severity issues within 2 weeks
-3. Plan Medium severity fixes for next quarter
-4. Include Low/Info items in ongoing hardening
+        # Generate conclusion
+        conclusion = f"""For {ctx.target}, prioritize the findings included in this report according to verified severity, business context, and remediation feasibility.
+
+No finding recorded does not establish the absence of vulnerabilities. Consider untested, blocked, and out-of-scope areas when planning follow-up work.
 
 The validated findings in this report have been reviewed by Quality Control.
 """
         set_conclusion(conclusion)
-        
-        # Add raw tool outputs
-        for tool_name, output in list(ctx.tool_outputs.items())[:10]:  # Limit
-            add_tool_output_to_report(tool_name.split('_')[0], output[:5000], "txt")
-        
+
         # Generate report
         report_result = generate_html_report()
-        
+
         ctx.report_generated = True
+        ctx.report_reviewed = False
+        ctx.report_finding_ids = [finding.id for finding in validated]
         ctx.report_path = "security-report.html"
         ctx.mark_phase_complete("reporting", "reporting")
         ctx.log_activity("reporting", "report_generated", "Final report compiled")
-        
+
         return f"""✅ FINAL REPORT COMPILED
 
 Title: {ctx.project_title}
@@ -1286,7 +1284,7 @@ Status: Ready for QC final review
 
 Next: Quality Control should review with review_final_report()
 """
-    
+
     except Exception as e:
         return f"Error generating report: {str(e)}"
 
@@ -1294,38 +1292,39 @@ Next: Quality Control should review with review_final_report()
 @tool
 def review_final_report() -> str:
     """Review the final report for completeness (QC agent final review).
-    
+
     Checks that all validated findings are included and report is complete.
-    
+
     Returns:
         Review results with any issues found.
     """
     ctx = get_shared_context()
-    
+
     if not ctx.report_generated:
         return "No report generated yet. Cannot review."
-    
+
     validated = ctx.get_validated_findings()
     issues = []
-    
-    # Check all findings included
-    # (In a real implementation, would parse the report and verify)
-    if not validated:
-        issues.append("No validated findings in report")
-    
+
+    included_ids = set(ctx.report_finding_ids)
+    expected_ids = {finding.id for finding in validated}
+    missing_ids = sorted(expected_ids - included_ids)
+    stale_ids = sorted(included_ids - expected_ids)
+    if missing_ids:
+        issues.append("Validated findings missing from report: " + ", ".join(missing_ids))
+    if stale_ids:
+        issues.append("Report includes findings no longer validated: " + ", ".join(stale_ids))
+    for finding in validated:
+        issues.extend(_finding_completeness_issues(finding))
+
     # Check phases
     required_phases = ["reconnaissance", "vulnerability_scanning", "quality_control_review"]
     for phase in required_phases:
         if not ctx.phases_completed.get(phase):
             issues.append(f"Phase not completed: {phase}")
-    
-    # Check for critical/high findings exploitation
-    critical_high = [f for f in validated if f.severity in ("Critical", "High")]
-    unexploited = [f for f in critical_high if not f.exploited]
-    if unexploited:
-        issues.append(f"{len(unexploited)} Critical/High findings not exploited")
-    
+
     if issues:
+        ctx.report_reviewed = False
         return f"""⚠️ FINAL REPORT REVIEW: ISSUES FOUND
 
 Issues:
@@ -1334,14 +1333,14 @@ Issues:
 Please address these issues before approving the report.
 """
     else:
+        ctx.report_reviewed = True
         return f"""✅ FINAL REPORT REVIEW: PASSED
 
 Report Quality Check:
 ✓ All {len(validated)} validated findings included
 ✓ All required phases completed
-✓ Critical/High findings exploited
-✓ Evidence attached
-✓ Remediation guidance provided
+✓ Required evidence and remediation fields present
+✓ No exploitation or screenshot prerequisite
 
 Report is ready for delivery.
 Use approve_final_report() to complete.
@@ -1351,21 +1350,31 @@ Use approve_final_report() to complete.
 @tool
 def approve_final_report() -> str:
     """Approve the final report for delivery (QC agent).
-    
+
     This marks the report as reviewed and ready for the Project Manager to deliver.
-    
+
     Returns:
         Confirmation that report is approved.
     """
     ctx = get_shared_context()
-    
+
     if not ctx.report_generated:
         return "No report to approve. Generate report first."
-    
+    if not ctx.report_reviewed:
+        return "Cannot approve report: a successful review_final_report() is required first. Resolve review issues and rerun the review."
+    current_ids = {finding.id for finding in ctx.get_validated_findings()}
+    if current_ids != set(ctx.report_finding_ids):
+        ctx.report_reviewed = False
+        return "Cannot approve report: the validated findings changed after the report was generated. Regenerate and review the report again."
+    incomplete = [issue for finding in ctx.get_validated_findings() for issue in _finding_completeness_issues(finding)]
+    if incomplete:
+        ctx.report_reviewed = False
+        return "Cannot approve report: finding completeness checks failed.\n- " + "\n- ".join(incomplete)
+
     ctx.report_reviewed = True
     ctx.mark_phase_complete("final_review", "quality_control")
     ctx.log_activity("quality_control", "report_approved", "Final report approved for delivery")
-    
+
     return f"""✅ FINAL REPORT APPROVED
 
 Project: {ctx.project_title}
@@ -1387,22 +1396,22 @@ Report Path: {ctx.report_path}
 @tool
 def get_agent_activity_log() -> str:
     """Get the full activity log of all agent actions.
-    
+
     Returns:
         Chronological log of all agent activities.
     """
     ctx = get_shared_context()
-    
+
     if not ctx.agent_logs:
         return "No agent activity recorded yet."
-    
+
     output = ["=== AGENT ACTIVITY LOG ===\n"]
-    
+
     for log in ctx.agent_logs:
         output.append(f"[{log['timestamp']}] [{log['agent']}] {log['action']}")
         output.append(f"    {log['details']}")
         output.append("")
-    
+
     output.append("==========================")
     return "\n".join(output)
 
@@ -1410,33 +1419,33 @@ def get_agent_activity_log() -> str:
 @tool
 def add_qc_note(note: str) -> str:
     """Add a Quality Control note or observation.
-    
+
     Args:
         note: The note or observation to record.
-        
+
     Returns:
         Confirmation.
     """
     ctx = get_shared_context()
     ctx.add_qc_note(note, "quality_control")
-    
+
     return f"✅ QC Note added: {note[:100]}..."
 
 
 @tool
 def save_tool_output(tool_name: str, output: str) -> str:
     """Save raw tool output to shared context for evidence.
-    
+
     Args:
         tool_name: Name of the tool (e.g., "nmap", "nikto").
         output: Raw output from the tool.
-        
+
     Returns:
         Confirmation.
     """
     ctx = get_shared_context()
     ctx.add_tool_output(tool_name, output, "operational_agent")
-    
+
     return f"✅ Saved {tool_name} output ({len(output)} chars) to shared context."
 
 
@@ -1446,7 +1455,7 @@ def save_tool_output(tool_name: str, output: str) -> str:
 
 def get_agent_tools(role: AgentRole) -> list:
     """Get the appropriate tools for an agent role."""
-    
+
     # Common context tools for all agents
     context_tools = [
         get_project_status,
@@ -1455,19 +1464,19 @@ def get_agent_tools(role: AgentRole) -> list:
         get_agent_activity_log,
         save_tool_output,
     ]
-    
+
     if role == AgentRole.PROJECT_MANAGER:
         return context_tools + [
             initialize_pentest_project,
             mark_phase_complete,
             get_validated_findings_for_report,
         ]
-    
+
     elif role == AgentRole.OSINT_RECON:
         from app.tools.osint_tools import dns_lookup, whois_lookup, crt_sh_search
         from app.tools.pentest_tools import subfinder_scan, whatweb_scan, httpx_probe
         from app.tools.nmap_tool import nmap_scan
-        
+
         return context_tools + [
             submit_recon_data,
             submit_finding,
@@ -1476,14 +1485,14 @@ def get_agent_tools(role: AgentRole) -> list:
             subfinder_scan, whatweb_scan, httpx_probe,
             nmap_scan,
         ]
-    
+
     elif role == AgentRole.VULNERABILITY_SCANNER:
         from app.tools.pentest_tools import (
-            nikto_scan, nuclei_scan, gobuster_scan, 
+            nikto_scan, nuclei_scan, gobuster_scan,
             sslyze_scan, sqlmap_scan, wpscan_full
         )
         from app.tools.zap_tools import zap_spider_scan, zap_active_scan, zap_get_alerts
-        
+
         return context_tools + [
             submit_finding,
             mark_phase_complete,
@@ -1491,19 +1500,19 @@ def get_agent_tools(role: AgentRole) -> list:
             sslyze_scan, sqlmap_scan, wpscan_full,
             zap_spider_scan, zap_active_scan, zap_get_alerts,
         ]
-    
+
     elif role == AgentRole.MANUAL_TESTER:
         from app.tools.pentest_tools import sqlmap_scan, xsser_scan, ffuf_scan
         from app.tools.curl_tool import curl_request
         from app.tools.playwright_tool import browse_page, get_page_forms, take_screenshot
-        
+
         return context_tools + [
             submit_finding,
             mark_phase_complete,
             sqlmap_scan, xsser_scan, ffuf_scan,
             curl_request, browse_page, get_page_forms, take_screenshot,
         ]
-    
+
     elif role == AgentRole.EXPLOITATION:
         from app.tools.pentest_tools import (
             sqlmap_scan, sqlmap_dump, searchsploit_search,
@@ -1511,7 +1520,7 @@ def get_agent_tools(role: AgentRole) -> list:
         )
         from app.tools.curl_tool import curl_request
         from app.tools.playwright_tool import take_screenshot
-        
+
         return context_tools + [
             get_pending_findings,
             mark_finding_exploited,
@@ -1520,7 +1529,7 @@ def get_agent_tools(role: AgentRole) -> list:
             run_exploit, msfconsole_command,
             curl_request, take_screenshot,
         ]
-    
+
     elif role == AgentRole.QUALITY_CONTROL:
         return context_tools + [
             get_pending_findings,
@@ -1530,14 +1539,14 @@ def get_agent_tools(role: AgentRole) -> list:
             review_final_report,
             approve_final_report,
         ]
-    
+
     elif role == AgentRole.REPORTING:
         from app.tools.report_tools import (
             enable_report_mode, add_finding_to_report,
             set_executive_summary, set_conclusion,
             generate_html_report, add_tool_output_to_report
         )
-        
+
         return context_tools + [
             get_validated_findings_for_report,
             compile_final_report,
@@ -1546,26 +1555,26 @@ def get_agent_tools(role: AgentRole) -> list:
             set_executive_summary, set_conclusion,
             generate_html_report, add_tool_output_to_report,
         ]
-    
+
     return context_tools
 
 
 def build_specialized_agent(role: AgentRole, max_steps: int = 50) -> CodeAgent:
     """Build a specialized agent for a specific role.
-    
+
     Args:
         role: The agent's role in the multi-agent system.
         max_steps: Maximum steps allowed for this agent.
-        
+
     Returns:
         Configured CodeAgent instance.
     """
     from app.agents.owasp_agent import build_model
-    
+
     model = build_model()
     tools = get_agent_tools(role)
     prompt = AGENT_PROMPTS.get(role, "You are a security testing agent.")
-    
+
     agent = CodeAgent(
         tools=tools,
         model=model,
@@ -1573,23 +1582,23 @@ def build_specialized_agent(role: AgentRole, max_steps: int = 50) -> CodeAgent:
         max_print_outputs_length=15000,
         max_steps=max_steps,
     )
-    
+
     return agent
 
 
 def run_agent(role: AgentRole, task: str, max_steps: int = 50) -> str:
     """Run a specialized agent with a specific task.
-    
+
     Args:
         role: Agent role to use.
         task: Task description for the agent.
         max_steps: Maximum steps allowed.
-        
+
     Returns:
         Agent's result.
     """
     agent = build_specialized_agent(role, max_steps)
-    
+
     try:
         result = agent.run(task)
         return str(result)
@@ -1604,17 +1613,17 @@ def run_agent(role: AgentRole, task: str, max_steps: int = 50) -> str:
 @tool
 def dispatch_recon_agent(target: str) -> str:
     """Dispatch the OSINT/Recon agent to gather intelligence on the target.
-    
+
     Args:
         target: Target domain or URL to investigate.
-        
+
     Returns:
         Reconnaissance results from the specialized agent.
     """
     task = f"""Perform comprehensive reconnaissance on: {target}
 
 1. Run subdomain enumeration with subfinder_scan
-2. Check certificate transparency with crt_sh_search  
+2. Check certificate transparency with crt_sh_search
 3. Perform DNS lookups
 4. Run WHOIS lookup
 5. Fingerprint technologies with whatweb_scan
@@ -1626,17 +1635,17 @@ For each discovery:
 
 When complete, call mark_phase_complete("reconnaissance")
 """
-    
+
     return run_agent(AgentRole.OSINT_RECON, task, max_steps=40)
 
 
 @tool
 def dispatch_vuln_scanner_agent(target: str) -> str:
     """Dispatch the Vulnerability Scanner agent.
-    
+
     Args:
         target: Target URL to scan.
-        
+
     Returns:
         Vulnerability scanning results.
     """
@@ -1658,17 +1667,17 @@ For EACH finding:
 
 When complete, call mark_phase_complete("vulnerability_scanning")
 """
-    
+
     return run_agent(AgentRole.VULNERABILITY_SCANNER, task, max_steps=60)
 
 
 @tool
 def dispatch_manual_tester_agent(target: str) -> str:
     """Dispatch the Manual Tester agent for hands-on testing.
-    
+
     Args:
         target: Target URL to test.
-        
+
     Returns:
         Manual testing results.
     """
@@ -1686,14 +1695,14 @@ Focus on:
 Submit findings with detailed reproduction steps.
 When complete, call mark_phase_complete("manual_testing")
 """
-    
+
     return run_agent(AgentRole.MANUAL_TESTER, task, max_steps=50)
 
 
 @tool
 def dispatch_exploitation_agent() -> str:
     """Dispatch the Exploitation agent to validate and exploit findings.
-    
+
     Returns:
         Exploitation results.
     """
@@ -1710,14 +1719,14 @@ def dispatch_exploitation_agent() -> str:
 
 When complete, call mark_phase_complete("exploitation")
 """
-    
+
     return run_agent(AgentRole.EXPLOITATION, task, max_steps=40)
 
 
 @tool
 def dispatch_qc_agent_review() -> str:
     """Dispatch Quality Control agent to review pending findings.
-    
+
     Returns:
         QC review results.
     """
@@ -1734,14 +1743,14 @@ def dispatch_qc_agent_review() -> str:
 
 When complete, call mark_phase_complete("quality_control_review")
 """
-    
+
     return run_agent(AgentRole.QUALITY_CONTROL, task, max_steps=40)
 
 
 @tool
 def dispatch_reporting_agent() -> str:
     """Dispatch the Reporting agent to compile the final report.
-    
+
     Returns:
         Report generation results.
     """
@@ -1774,14 +1783,14 @@ def dispatch_reporting_agent() -> str:
 
 The report will then go to QC for final review.
 """
-    
+
     return run_agent(AgentRole.REPORTING, task, max_steps=40)
 
 
 @tool
 def dispatch_qc_final_review() -> str:
     """Dispatch QC agent for final report review.
-    
+
     Returns:
         Final review results.
     """
@@ -1795,14 +1804,14 @@ def dispatch_qc_final_review() -> str:
 If everything is correct, call approve_final_report()
 If issues found, document them for correction.
 """
-    
+
     return run_agent(AgentRole.QUALITY_CONTROL, task, max_steps=30)
 
 
 @tool
 def run_full_pentest_orchestration(target: str, title: str = "") -> str:
     """Run a complete multi-agent penetration test with full orchestration.
-    
+
     This executes the complete workflow:
     1. Initialize project
     2. Recon Agent gathers intelligence
@@ -1813,73 +1822,73 @@ def run_full_pentest_orchestration(target: str, title: str = "") -> str:
     7. Reporting Agent compiles report
     8. QC does final review
     9. Project Manager delivers
-    
+
     Args:
         target: Target URL or domain to test.
         title: Project title (optional).
-        
+
     Returns:
         Final status and report location.
     """
     project_title = title or f"Security Assessment - {target}"
-    
+
     results = []
     results.append("=" * 60)
     results.append("🚀 MULTI-AGENT PENTEST ORCHESTRATION STARTED")
     results.append("=" * 60)
-    
+
     # Step 1: Initialize
     results.append("\n📋 PHASE 1: Initializing project...")
     init_result = initialize_pentest_project(project_title, target)
     results.append(init_result)
-    
+
     # Step 2: Reconnaissance
     results.append("\n🔍 PHASE 2: Dispatching OSINT/Recon Agent...")
     recon_result = dispatch_recon_agent(target)
     results.append(f"Recon complete. Result length: {len(recon_result)} chars")
-    
+
     # Step 3: Vulnerability Scanning
     results.append("\n🛡️ PHASE 3: Dispatching Vulnerability Scanner Agent...")
     vuln_result = dispatch_vuln_scanner_agent(target)
     results.append(f"Vuln scan complete. Result length: {len(vuln_result)} chars")
-    
+
     # Step 4: QC Review of initial findings
     results.append("\n✅ PHASE 4: Dispatching QC Agent for finding review...")
     qc_result = dispatch_qc_agent_review()
     results.append(f"QC review complete. Result length: {len(qc_result)} chars")
-    
+
     # Step 5: Manual Testing
     results.append("\n🔧 PHASE 5: Dispatching Manual Tester Agent...")
     manual_result = dispatch_manual_tester_agent(target)
     results.append(f"Manual testing complete. Result length: {len(manual_result)} chars")
-    
+
     # Step 6: Exploitation
     results.append("\n💥 PHASE 6: Dispatching Exploitation Agent...")
     exploit_result = dispatch_exploitation_agent()
     results.append(f"Exploitation complete. Result length: {len(exploit_result)} chars")
-    
+
     # Step 7: QC Review again
     results.append("\n✅ PHASE 7: QC reviewing exploitation results...")
     qc_result2 = dispatch_qc_agent_review()
     results.append(f"QC review complete.")
-    
+
     # Step 8: Report Generation
     results.append("\n📄 PHASE 8: Dispatching Reporting Agent...")
     report_result = dispatch_reporting_agent()
     results.append(f"Report generated.")
-    
+
     # Step 9: Final QC Review
     results.append("\n🔍 PHASE 9: QC Final Report Review...")
     final_review = dispatch_qc_final_review()
     results.append(final_review)
-    
+
     # Step 10: Get final status
     results.append("\n📊 FINAL STATUS:")
     status = get_project_status()
     results.append(status)
-    
+
     results.append("\n" + "=" * 60)
     results.append("✅ MULTI-AGENT PENTEST COMPLETE")
     results.append("=" * 60)
-    
+
     return "\n".join(results)

@@ -7042,14 +7042,16 @@ h1 {
   display: none;
   border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   background: rgba(0,0,0,0.2);
 }
 #sidebar.expanded .sidebar-tabs {
   display: flex;
 }
 .sidebar-tab {
-  flex: 1;
+  flex: 1 0 58px;
   min-width: 60px;
   padding: 0.6rem 0.5rem;
   background: transparent;
@@ -7077,6 +7079,12 @@ h1 {
 .sidebar-tab:hover {
   background: rgba(99, 102, 241, 0.1);
   color: var(--gray-200);
+}
+.sidebar-tab:focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: -3px;
+  color: var(--gray-100);
+  z-index: 1;
 }
 .sidebar-tab.active {
   background: rgba(99, 102, 241, 0.15);
@@ -13923,14 +13931,15 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
     --sidebar-min-width: 260px;
   }
   .sidebar-tabs {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
   }
   .sidebar-tab {
-    min-width: 50px;
-    padding: 0.5rem 0.4rem;
+    min-width: 58px;
+    padding: 0.5rem 0.35rem;
   }
   .sidebar-tab .tab-label {
-    font-size: 0.6rem;
+    font-size: 0.65rem;
   }
 }
 @media (max-width: 768px) {
@@ -14000,7 +14009,7 @@ body.light-theme .md-link { color: var(--primary); border-bottom-color: var(--pr
     </button>
     
     <!-- Sidebar Tabs -->
-    <div class="sidebar-tabs">
+    <div class="sidebar-tabs" role="tablist" aria-label="Sidebar sections">
       <button class="sidebar-tab" data-tab="chats">
         <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
         <span class="tab-label">Chats</span>
@@ -20764,7 +20773,8 @@ async function exportVulnsToNotes() {
     
     // Optionally switch to Notes tab
     if (confirm('Findings exported! Would you like to view them in Notes?')) {
-      switchTab('notes-tab');
+      switchTab('tools');
+      switchToolsSubtab('notes');
       loadNotesList();
     }
   } catch (error) {
@@ -22246,13 +22256,8 @@ function runNoteTaskInstantly() {
   messageInput.value = content.substring(0, 4000);
   autoResizeTextarea(messageInput);
   
-  // Switch to chat tab
-  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    const chatTab = document.querySelector('[data-tab="chat"]');
-    if (chatTab) chatTab.classList.add('active');
-  document.querySelectorAll('.sidebar-content').forEach(c => c.classList.remove('active'));
-    const sidebarChat = document.getElementById('sidebar-chat');
-    if (sidebarChat) sidebarChat.classList.add('active');
+  // Switch to the real Chats panel so standard loading and accessibility state run.
+  switchTab('chats');
   
   // Send the message
   sendMessage();
@@ -26035,15 +26040,53 @@ function clearTabHighlight(tabName) {
 
 // Update sidebar tab handling
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
+  const tabId = tab.getAttribute('data-tab');
+  const panel = document.getElementById('tab-' + tabId);
+  tab.id = 'sidebar-tab-' + tabId;
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-controls', 'tab-' + tabId);
+  tab.setAttribute('aria-selected', tab.classList.contains('active') ? 'true' : 'false');
+  tab.tabIndex = tab.classList.contains('active') ? 0 : -1;
+  if (panel) {
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', tab.id);
+    panel.tabIndex = 0;
+    panel.hidden = !tab.classList.contains('active');
+  }
+  tab.addEventListener('keydown', event => {
+    const tabs = Array.from(document.querySelectorAll('.sidebar-tab'));
+    const index = tabs.indexOf(tab);
+    let nextIndex = index;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    tabs[nextIndex].click();
+  });
   tab.onclick = () => {
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.sidebar-tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+      t.tabIndex = -1;
+    });
+    document.querySelectorAll('.tab-content').forEach(c => {
+      c.classList.remove('active');
+      c.hidden = true;
+    });
     
     tab.classList.add('active');
     // Clear highlight when tab is clicked
     tab.classList.remove('has-activity');
     const tabId = tab.getAttribute('data-tab');
-    document.getElementById('tab-' + tabId).classList.add('active');
+    tab.setAttribute('aria-selected', 'true');
+    tab.tabIndex = 0;
+    const activePanel = document.getElementById('tab-' + tabId);
+    if (!activePanel) return;
+    activePanel.classList.add('active');
+    activePanel.hidden = false;
     
     // Load data based on tab
     if (tabId === 'tasks') startTaskPolling();
