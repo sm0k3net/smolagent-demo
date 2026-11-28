@@ -176,18 +176,25 @@ def test_report_tool_output_redacts_common_credentials() -> None:
 
     output = (
         "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret\n"
+        "Authorization: Basic dXNlcjpwYXNz\n"
         "api_key=sk_test_supersecret\n"
-        "https://user:password@example.test/path"
+        "https://user:password@example.test/path\n"
+        'Cookie: session_id=supersecret; csrf=othersecret\n'
+        '{"password": "json-secret", "access_token":"token-secret"}'
     )
     redacted = redact_sensitive_output(output)
     assert "eyJhbGciOiJIUzI1NiJ9.secret" not in redacted
+    assert "dXNlcjpwYXNz" not in redacted
     assert "sk_test_supersecret" not in redacted
     assert "user:password" not in redacted
-    assert redacted.count("[REDACTED]") >= 3
+    assert "supersecret" not in redacted
+    assert "json-secret" not in redacted
+    assert "token-secret" not in redacted
+    assert redacted.count("[REDACTED]") >= 7
 
 
 def test_report_generation_failure_does_not_mark_report_ready(monkeypatch, tmp_path) -> None:
-    ctx = mas.SharedContext(target="https://example.test", phases_completed={"quality_control_review": True}, findings=[_valid_finding()])
+    ctx = mas.SharedContext(target="https://example.test", phases_completed={"quality_control_review": True, "reporting": True}, findings=[_valid_finding()], report_generated=True, report_reviewed=True, report_path="old-report.html", report_finding_ids=["FIND-OLD"])
     monkeypatch.setattr(mas, "get_shared_context", lambda: ctx)
     monkeypatch.chdir(tmp_path)
     report_module = types.ModuleType("app.tools.report_tools")
@@ -203,3 +210,5 @@ def test_report_generation_failure_does_not_mark_report_ready(monkeypatch, tmp_p
     assert ctx.report_generated is False
     assert ctx.report_reviewed is False
     assert ctx.report_path == ""
+    assert ctx.report_finding_ids == []
+    assert ctx.phases_completed["reporting"] is False
